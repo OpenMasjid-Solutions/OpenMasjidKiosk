@@ -93,3 +93,21 @@ jobs:
         run: |
           echo "Pin this in docker-compose.yml:"
           echo "  image: ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:${{ steps.meta.outputs.version }}@${{ steps.build.outputs.digest }}"
+
+      # Tell the OpenMasjidAPPS catalog to rebuild so the App Store picks up this release.
+      # Uses the shared CATALOG_PUSH_TOKEN (a token allowed to dispatch on the catalog repo,
+      # per that repo's README "Maintainers — catalog auto-publish" note). Runs only on a
+      # version tag (when docker-compose.yml already pins this release's @sha256 digest and
+      # the registry tracks the tag), and never fails the build if the token is absent.
+      - name: Notify catalog to rebuild
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CATALOG_PUSH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "CATALOG_PUSH_TOKEN not set — skipping catalog dispatch (add it as an org/repo secret to auto-publish)."
+            exit 0
+          fi
+          gh api repos/OpenMasjid-Solutions/OpenMasjidAPPS/dispatches -f event_type=rebuild-catalog
+          echo "Requested an OpenMasjidAPPS catalog rebuild."
