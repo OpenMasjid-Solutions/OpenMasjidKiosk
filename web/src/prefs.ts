@@ -11,7 +11,8 @@
  * theme/wallpaper/accent from it, never anything security-relevant. Live appearance sync
  * (polling /api/public/appearance) is added with the Fabric in a later slice.
  */
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
+import { withBase } from './base';
 
 export interface Prefs {
   theme: 'system' | 'dark' | 'light';
@@ -171,4 +172,37 @@ export const prefsStore = {
 
 export function usePrefs(): Prefs {
   return useSyncExternalStore(prefsStore.subscribe, prefsStore.get, prefsStore.get);
+}
+
+/** One-shot pull of OpenMasjidOS's current appearance via our OWN same-origin relay
+ *  (GET /api/public/appearance) — our page is HTTPS but the platform's appearance endpoint
+ *  is HTTP, so a direct cross-origin fetch would be mixed-content blocked; the server
+ *  fetches the platform side. Only theme + wallpaper + accent are applied. */
+export async function fetchOmosAppearance(): Promise<void> {
+  try {
+    const res = await fetch(withBase('/api/public/appearance'), { credentials: 'omit' });
+    if (!res.ok) return;
+    if (!prefsStore.get().followOmos) return;
+    prefsStore.patch(appearancePatch((await res.json()) as OmosAppearance));
+  } catch {
+    /* platform offline — keep the current look (the #omos fragment already themed us) */
+  }
+}
+
+/** While embedded under OpenMasjidOS and "follow" is on, keep theme + wallpaper + accent in
+ *  sync with the dashboard (poll periodically and whenever the page regains focus). The
+ *  one-shot #omos fragment is the primary hand-off; this is live sync. */
+export function useOmosAppearanceSync(embedded: boolean | undefined): void {
+  const { followOmos } = usePrefs();
+  useEffect(() => {
+    if (!embedded || !followOmos) return;
+    void fetchOmosAppearance();
+    const iv = window.setInterval(() => void fetchOmosAppearance(), 45_000);
+    const onFocus = () => void fetchOmosAppearance();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(iv);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [embedded, followOmos]);
 }

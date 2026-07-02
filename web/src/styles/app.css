@@ -150,6 +150,34 @@ h1, h2, h3, p, ul { margin: 0; }
 .on-scene { color: var(--ink-scene); text-shadow: var(--text-shadow-scene); }
 .on-scene .muted { color: var(--ink-scene-muted); }
 
+.btn--block { width: 100%; }
+
+/* ── Forms ────────────────────────────────────────────────────────────────── */
+.field { display: flex; flex-direction: column; gap: 0.35rem; margin-block-end: 0.9rem; text-align: start; }
+.label { font-size: 0.82rem; font-weight: 600; color: var(--color-ink-muted); }
+.input {
+  width: 100%; padding: 0.6rem 0.8rem; border-radius: var(--radius-button);
+  color: var(--color-ink); font: inherit;
+  background: var(--glass-bg-inset); border: 1px solid var(--color-border);
+}
+.input::placeholder { color: var(--color-ink-faint); }
+.hint { font-size: 0.82rem; color: var(--color-ink-faint); }
+.form-error { color: var(--color-danger); font-size: 0.85rem; margin-block: 0.25rem 0.7rem; }
+
+/* ── Auth cards (login / setup / SSO prompt) ──────────────────────────────── */
+.auth-card { width: min(24rem, 100%); padding: 2rem; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
+.auth-card .emblem { margin-block-end: 0.6rem; }
+.auth-card form { text-align: start; width: 100%; margin-block-start: 0.6rem; }
+.auth-title { font-family: var(--font-display); font-size: 1.4rem; font-weight: 700; letter-spacing: -0.01em; }
+.auth-sub { margin-block: 0.3rem 0.9rem; font-size: 0.92rem; line-height: 1.5; }
+
+/* ── About key/value list ─────────────────────────────────────────────────── */
+.kv { display: flex; flex-direction: column; }
+.kv-row { display: flex; justify-content: space-between; gap: 0.8rem; padding: 0.6rem 0; border-block-end: 1px solid var(--color-border); }
+.kv-row:last-child { border-block-end: 0; }
+.kv-k { color: var(--color-ink-muted); font-size: 0.9rem; }
+.kv-v { font-weight: 600; text-align: end; }
+
 /* ── Footer ───────────────────────────────────────────────────────────────── */
 .foot { text-align: center; padding: 1.2rem; font-size: 0.8rem; color: var(--ink-scene-muted); text-shadow: var(--text-shadow-scene); }
 .foot a { display: inline-flex; align-items: center; gap: 0.2rem; }
