@@ -17,9 +17,10 @@ One Docker image (multi-stage, multi-arch amd64 + arm64) runs everything:
   OpenMasjidOS **Fabric** (SSO, Stripe account, notifications).
 - **`web/`** — React + Vite + Tailwind (preflight off; **Sakīna Glass** tokens). The
   admin panel + the public `/new` page. Inherits the dashboard's live appearance.
-- **`android/`** — Kotlin + Jetpack Compose kiosk app. Pairs over pinned HTTPS, drives
-  the Stripe Reader M2 (Bluetooth + USB) via the Terminal SDK, runs as a Lock-Task
-  launcher.
+- **`android/`** — Kotlin + Jetpack Compose kiosk app, applicationId/namespace
+  **`org.openmasjidos.kiosk`** (reverse-domain of the maintainer-owned openmasjidos.org).
+  Pairs over pinned HTTPS, drives the Stripe Reader M2 (Bluetooth + USB) via the Terminal
+  SDK, runs as a Lock-Task launcher.
 
 Host port **7878 → container 8080**. `https: true` → the platform terminates TLS on a
 dedicated port with the dashboard cert; our container stays a plain HTTP server.
@@ -33,12 +34,28 @@ reference repos, **those win — and flag it.** Resolutions:
 |---|-------|------------------|-----------------|
 | 1 | **Design accent** | "emerald/gold" | **Cyan `#22D3EE` + amber `#F59E0B`** — the shipped `DESIGN.md` / Donations `tokens.css` are cyan (they "mirror the OpenMasjidOS palette"). Emerald is only a selectable accent. `tokens.css` + `glass.css` are copied verbatim from Donations. |
 | 2 | **Node version** | "Node 20+" | **`node:22-slim`** everywhere — matches every shipped app's Docker build + runtime. |
-| 3 | **Password/PIN hashing** | argon2 (§13/§14) | **DECISION PENDING** — the reference apps use `scrypt` (`node:crypto`, no external dep, Pi-friendly, also verifiable offline on Android). Slice 1 has no auth, so this is deferred to slice 2. Recommend scrypt for consistency + zero native deps unless argon2 is required. |
+| 3 | **Password/PIN hashing** | argon2 (§13/§14) | **scrypt** (chosen by maintainer, 2026-07-02) — `node:crypto` `scryptSync` on the server (mirrors Donations `auth.ts`), and `javax.crypto` `SCRYPT`/PBKDF2 offline on Android for the kiosk PIN. Zero extra native deps, Pi-friendly. Applied in slice 2. |
 | 4 | **Compose hardening** | example omits it | Added `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, `tmpfs: [/tmp]` — matches Donations; the catalog validator permits it; least-privilege is a hard rule. |
 | 5 | **`domain:`** | (Kiosk forbids it) | **Not set** — LAN-only, everything outbound. So we drop the Cloudflare-tunnel / base-path (`fabric/site`) machinery Donations carries. `web/base.ts` is kept but no-ops. |
 | 6 | **Webhooks** | (Kiosk has none) | No raw-body JSON parser; default JSON parsing. Payment truth is confirmed by *retrieving* the PaymentIntent from Stripe, not by webhook. |
 | 7 | **Cookie Secure** | — | `COOKIE_SECURE=1` in the image (we're always behind the platform's TLS). |
 | 8 | **Stripe Terminal** | Mirror Donations | Donations uses **web Elements / `automatic_payment_methods`**, NOT Terminal — so connection tokens, Terminal Locations, `card_present`, and `generated_card`→Subscription are **net-new** here, built from the Stripe Terminal SDK docs (slices 3, 6, 7). Only the Fabric/SSO/DB/CSV patterns are mirrored. |
+
+### Decisions locked by the maintainer (2026-07-02)
+
+- **Hashing = scrypt** (see row 3 above).
+- **Stripe `apiVersion` = pinned explicitly** — the Node Stripe client will be constructed
+  with a fixed `apiVersion` (not the SDK default), because Terminal features are
+  version-sensitive and we want deterministic behaviour. Applied when the Stripe client is
+  written in slice 3.
+- **Android applicationId / namespace = `org.openmasjidos.kiosk`** — reverse-domain of the
+  maintainer-owned openmasjidos.org. Permanent once released (a different id can't update
+  an installed app), so it is fixed now. The `CLAUDE.md` §10 ADB example still shows the
+  old default `com.openmasjid.kiosk` — the real command is
+  `adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver`.
+- **Release signing keystore** — deferred to first release (slice 9); CI debug-signs until
+  then. When ready: `keytool` → `.jks` → 4 GitHub secrets (`SIGNING_KEYSTORE_BASE64`,
+  `SIGNING_KEYSTORE_PASSWORD`, `SIGNING_KEY_ALIAS`, `SIGNING_KEY_PASSWORD`).
 
 ## Fabric wire contract (never rename)
 

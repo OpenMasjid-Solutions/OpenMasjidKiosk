@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 OpenMasjid-Solutions
 
-package com.openmasjid.kiosk.ui
+package org.openmasjidos.kiosk.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -32,17 +32,17 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.openmasjid.kiosk.R
-import com.openmasjid.kiosk.ui.theme.GoldDark
-import com.openmasjid.kiosk.ui.theme.InkDark
-import com.openmasjid.kiosk.ui.theme.InkFaintDark
-import com.openmasjid.kiosk.ui.theme.InkMutedDark
-import com.openmasjid.kiosk.ui.theme.PrimaryDark
-import com.openmasjid.kiosk.ui.theme.PrimaryHoverDark
-import com.openmasjid.kiosk.ui.theme.SakinaTheme
-import com.openmasjid.kiosk.ui.theme.SceneEnd
-import com.openmasjid.kiosk.ui.theme.SceneMid
-import com.openmasjid.kiosk.ui.theme.SceneStart
+import org.openmasjidos.kiosk.R
+import org.openmasjidos.kiosk.ui.theme.GoldDark
+import org.openmasjidos.kiosk.ui.theme.InkDark
+import org.openmasjidos.kiosk.ui.theme.InkFaintDark
+import org.openmasjidos.kiosk.ui.theme.InkMutedDark
+import org.openmasjidos.kiosk.ui.theme.PrimaryDark
+import org.openmasjidos.kiosk.ui.theme.PrimaryHoverDark
+import org.openmasjidos.kiosk.ui.theme.SakinaTheme
+import org.openmasjidos.kiosk.ui.theme.SceneEnd
+import org.openmasjidos.kiosk.ui.theme.SceneMid
+import org.openmasjidos.kiosk.ui.theme.SceneStart
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin

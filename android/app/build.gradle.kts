@@ -30,11 +30,11 @@ fun secret(name: String): String? =
 val keystoreFile: String? = secret("KEYSTORE_FILE")
 
 android {
-    namespace = "com.openmasjid.kiosk"
+    namespace = "org.openmasjidos.kiosk"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.openmasjid.kiosk"
+        applicationId = "org.openmasjidos.kiosk"
         minSdk = 26          // Stripe Terminal SDK floor
         targetSdk = 35
         versionCode = 1

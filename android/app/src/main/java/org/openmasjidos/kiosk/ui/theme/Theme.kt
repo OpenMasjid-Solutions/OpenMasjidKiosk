@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 OpenMasjid-Solutions
 
-package com.openmasjid.kiosk.ui.theme
+package org.openmasjidos.kiosk.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme

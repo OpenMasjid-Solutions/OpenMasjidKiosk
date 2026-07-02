@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 OpenMasjid-Solutions
 
-package com.openmasjid.kiosk
+package org.openmasjidos.kiosk
 
 import android.app.Application
 

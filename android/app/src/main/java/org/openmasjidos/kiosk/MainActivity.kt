@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 OpenMasjid-Solutions
 
-package com.openmasjid.kiosk
+package org.openmasjidos.kiosk
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import com.openmasjid.kiosk.ui.AttractScreen
-import com.openmasjid.kiosk.ui.theme.SakinaTheme
+import org.openmasjidos.kiosk.ui.AttractScreen
+import org.openmasjidos.kiosk.ui.theme.SakinaTheme
 
 /**
  * The single kiosk activity. It also declares itself as the device HOME launcher
