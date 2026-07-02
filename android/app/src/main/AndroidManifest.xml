@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Bring the kiosk up automatically after a reboot (a wall tablet should self-heal). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!--
+      TODO (later slices): permissions arrive with the features that need them.
+        - Reader over Bluetooth (API 31+): BLUETOOTH_SCAN, BLUETOOTH_CONNECT
+        - Reader over Bluetooth (pre-31): ACCESS_FINE_LOCATION
+        - Reader over USB: android.hardware.usb.host feature + USB permission (runtime)
+        - Pairing QR scan: CAMERA
+      Keep them out of the manifest until the corresponding slice lands, and request-and-
+      explain them only inside the PIN-protected settings — never in the donor flow.
+
+      <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+      <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+      <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+      <uses-permission android:name="android.permission.CAMERA" />
+      <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+    -->
+
+    <application
+        android:name=".KioskApp"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.OpenMasjidKiosk">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.OpenMasjidKiosk">
+
+            <!-- Standard launcher entry. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+              Act as the device HOME launcher (§10): the tablet boots straight into the
+              kiosk and Home goes nowhere else. HOME + DEFAULT are what the system needs
+              to offer this activity as a launcher.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Restart the kiosk after a reboot, even when not provisioned as device owner. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          Device admin receiver — required for Lock Task Mode (true kiosk) once the tablet
+          is provisioned as device owner via a one-time ADB step (see docs/TABLET_SETUP.md,
+          later slice). No policies are used yet; the presence of the receiver + device_admin
+          metadata is what device-owner provisioning needs.
+        -->
+        <receiver
+            android:name=".KioskAdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

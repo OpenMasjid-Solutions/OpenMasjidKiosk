@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 OpenMasjid-Solutions
+
+# OpenMasjid Kiosk — one container that runs everything: the admin panel + setup page
+# (/new), the API, the SQLite data store, and the bundled Android APK it serves. One
+# image to install, one to update. It stays least-privilege: no privileged mode, no
+# host networking, no devices, no Docker socket.
+#
+# Nothing to configure at install time: install it, press Open, and it takes you to the
+# admin panel — sign in, choose your Stripe account, design your giving screen, and pair
+# a tablet from Devices. All state is saved to /data.
+services:
+  app:
+    # Tag for humans + @sha256 digest for integrity (the digest is the real pin — a
+    # moved tag can't repoint it to a different image). Bump BOTH on every release.
+    # (digest filled in from the build-image.yml output after the first org build)
+    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.1.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      DATA_DIR: /data
+      # We are always served over HTTPS by the platform (manifest `https: true`), so the
+      # session cookie must be marked Secure or the browser may drop it.
+      COOKIE_SECURE: "1"
+      # OpenMasjidOS Fabric: the platform writes these into the app's .env and runs
+      # compose with --env-file, which only feeds ${VAR} SUBSTITUTION — so they must be
+      # referenced here to actually reach the container (SSO + Stripe + notifications).
+      # Empty defaults keep a standalone `docker compose up` quiet.
+      OPENMASJID_BASE_URL: ${OPENMASJID_BASE_URL:-}
+      OPENMASJID_APP_ID: ${OPENMASJID_APP_ID:-}
+      OPENMASJID_APP_SECRET: ${OPENMASJID_APP_SECRET:-}
+    ports:
+      # host:container. OpenMasjidOS offers "Open" on the lowest published port and picks
+      # a different free host port automatically if 7878 is already taken.
+      - "7878:8080"
+    volumes:
+      - data:/data
+    # Least-privilege hardening (safe alongside the named data volume) — mirrors the
+    # OpenMasjid Donations posture. Drop all Linux capabilities, forbid privilege
+    # escalation, and give /tmp its own ephemeral tmpfs.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
+volumes:
+  data:

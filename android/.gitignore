@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 OpenMasjid-Solutions
+
+# Gradle / build output
+build/
+.gradle/
+.cxx/
+captures/
+
+# Local machine config (SDK path etc.) — must never be committed
+local.properties
+
+# Signing material — never commit keystores
+*.keystore
+*.jks
+
+# IDE
+.idea/
+*.iml

@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) 2026 OpenMasjid-Solutions */
+
+/* Token system first (mirrors OpenMasjidOS), then the glass material, then our base +
+   components, then Tailwind's additive utilities (preflight is disabled in the Tailwind
+   config so it doesn't fight the hand-written base styles). */
+@import './tokens.css';
+@import './glass.css';
+@import './app.css';
+
+@tailwind components;
+@tailwind utilities;

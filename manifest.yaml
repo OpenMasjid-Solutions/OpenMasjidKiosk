@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 OpenMasjid-Solutions
+
+id: kiosk
+name: OpenMasjid Kiosk
+tagline: Tap-to-donate kiosk for a wall-mounted tablet with a Stripe card reader
+category: donations
+version: 0.1.0
+author: OpenMasjid-Solutions
+license: AGPL-3.0-only
+icon: icon.svg
+screenshots:
+  - screenshots/1.svg
+description: |
+  Turn an Android tablet and a **Stripe Reader M2** into a beautiful tap-to-donate
+  station for your masjid. Six one-tap amounts, custom amounts, monthly giving and
+  email receipts — all managed from a simple admin page on your OpenMasjidOS.
+
+  - **Set it up from a web page** — install here, open the admin panel, and browse
+    to the setup page on your tablet to download the kiosk app and pair it with a QR.
+  - **Reader over Bluetooth or USB** — the Stripe Reader M2 takes the card; card
+    numbers go straight to Stripe and never touch this app or the tablet.
+  - **One-time or monthly** — six preset amounts plus a custom amount, with an
+    optional name & email for a receipt.
+  - **Locked-down kiosk** — the tablet runs as a full-screen giving station and can
+    only be exited with a PIN you set in the admin panel.
+
+  **Nothing to fill in here — just install.** When it's running, press **Open** — it
+  signs you in with your OpenMasjidOS login and matches your dashboard's look. Then
+  choose your Stripe account, design your giving screen, and pair a tablet. It runs
+  happily on a Raspberry Pi or mini-PC, on your masjid's own network.
+
+# OpenMasjidOS Fabric — TOP-LEVEL boolean flags (there is no `fabric:` key). Each opts
+# this app into one platform capability. The compose MUST reference the injected
+# OPENMASJID_* vars in `environment:` or these silently no-op.
+
+# Single sign-on: "Open" signs the admin in with their OpenMasjidOS login (identity-
+# bound via the per-app secret). A local admin password is always kept as a fallback,
+# so the panel works standalone and never bricks when the platform is unreachable.
+sso: true
+# This app takes card payments (Stripe Reader M2), which requires a browser secure
+# context and outbound HTTPS — so it MUST be served over HTTPS. The platform serves it
+# on a dedicated HTTPS port (terminating TLS with the dashboard's cert); this container
+# stays a plain HTTP server and does nothing special for TLS.
+https: true
+# Fabric Stripe: the admin configures Stripe ONCE in OpenMasjidOS (Settings → Payments);
+# this app lists those accounts (GET /api/fabric/stripe/accounts, no keys) so the admin
+# picks one in-app, then fetches that account's keys server-to-server per process start.
+# Keys live in memory only — never sent to the tablet/browser, never written to disk.
+stripe: true
+# Best-effort alerts (e.g. "£20 donation received at the foyer kiosk") relayed to the
+# masjid's configured webhook via POST /api/fabric/notify. Fails soft; never blocks.
+notifications: true
+
+# NO `settings:` — install is truly one-click; the Stripe account is chosen in-app and
+# everything else (giving screen, devices, PIN) is configured in the admin panel.
+# NO `domain:` — the kiosk is a LAN device; everything is outbound (tablet + server both
+# reach Stripe directly). Nothing inbound, no public URL, no webhooks.
+
+ports:
+  - container: 8080
+    label: Kiosk admin & setup

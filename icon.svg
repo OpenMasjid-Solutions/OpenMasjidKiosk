@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- Copyright (C) 2026 OpenMasjid-Solutions -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="OpenMasjid Kiosk">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0C3A4D"/>
+      <stop offset="0.5" stop-color="#082230"/>
+      <stop offset="1" stop-color="#020A12"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+
+  <!-- App tile -->
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="1" y="1" width="510" height="510" rx="111" fill="none" stroke="#7DC8E8" stroke-opacity="0.14"/>
+
+  <!-- Gold crescent (masjid motif), sparingly used -->
+  <path d="M372 96a58 58 0 1 0 0 116 46 46 0 1 1 0-116z" fill="#F59E0B"/>
+
+  <!-- Contactless "tap to pay" waves -->
+  <g fill="none" stroke="url(#card)" stroke-width="18" stroke-linecap="round" opacity="0.95">
+    <path d="M300 214a70 70 0 0 1 0 84"/>
+    <path d="M336 194a118 118 0 0 1 0 124"/>
+  </g>
+
+  <!-- Payment card -->
+  <g transform="rotate(-16 214 300)">
+    <rect x="120" y="238" width="196" height="128" rx="22" fill="url(#card)"/>
+    <rect x="120" y="266" width="196" height="26" fill="#02131C" opacity="0.85"/>
+    <rect x="146" y="322" width="70" height="16" rx="8" fill="#02131C" opacity="0.6"/>
+  </g>
+</svg>

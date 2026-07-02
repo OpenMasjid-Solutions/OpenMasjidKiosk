@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+
+  DayNight app theme (light values here; dark in values-night/). This XML theme only
+  governs the brief pre-Compose window (background + system bars); all real theming is
+  done in Compose via SakinaTheme. Parented on the platform Material theme so we pull in
+  no extra support library — Compose supplies Material 3 itself.
+-->
+<resources>
+    <style name="Theme.OpenMasjidKiosk" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/surface_light</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

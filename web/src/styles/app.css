@@ -1,0 +1,155 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Copyright (C) 2026 OpenMasjid-Solutions */
+
+/* Base + components for the OpenMasjid Kiosk admin. Layout uses logical properties so it
+   works LTR and RTL. Mirrors the OpenMasjidOS / Donations look; values come from
+   tokens.css — no raw hex here. Slice 1 covers the shell + the /new setup page; more
+   component styles arrive with each slice. */
+
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background: var(--scene-base);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+#root { min-height: 100vh; min-height: 100dvh; }
+* { box-sizing: border-box; }
+button { font: inherit; color: inherit; cursor: pointer; }
+a { color: var(--color-primary); text-decoration: none; }
+:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 4px; }
+h1, h2, h3, p, ul { margin: 0; }
+
+/* ── Ambient scene ──────────────────────────────────────────────────────── */
+.scene { position: fixed; inset: 0; z-index: -1; background: var(--scene-gradient); overflow: hidden; }
+.scene::before {
+  content: ""; position: absolute; inset: -30%;
+  background:
+    radial-gradient(40% 50% at 20% 25%, var(--aurora-cyan), transparent 70%),
+    radial-gradient(45% 55% at 80% 20%, var(--aurora-navy), transparent 70%),
+    radial-gradient(50% 50% at 60% 85%, var(--aurora-gold), transparent 75%);
+  filter: blur(var(--aurora-blur)); will-change: transform;
+  animation: auroraDrift 32s ease-in-out infinite alternate;
+}
+@keyframes auroraDrift {
+  0% { transform: translate3d(0,0,0) scale(1); }
+  50% { transform: translate3d(2.5%,-2%,0) scale(1.08) rotate(1.2deg); }
+  100% { transform: translate3d(-2%,2.5%,0) scale(1.04) rotate(-1deg); }
+}
+.scene::after {
+  content: ""; position: absolute; inset: 0;
+  background-image: var(--geometric-pattern); opacity: var(--pattern-opacity);
+  box-shadow: inset 0 0 240px 80px var(--scene-vignette);
+}
+@media (prefers-reduced-motion: reduce) { .scene::before { animation: none; } }
+
+/* ── Shell + top bar ──────────────────────────────────────────────────────── */
+.shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.topbar {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; align-items: center; gap: 0.9rem;
+  padding: 0.85rem 1.5rem;
+}
+@media (max-width: 520px) { .topbar { padding-inline: 1rem; } }
+.brand { display: flex; align-items: center; gap: 0.6rem; color: var(--color-primary); font-weight: 700; background: none; border: 0; padding: 0; }
+.brand b { color: var(--color-ink); font-family: var(--font-display); letter-spacing: -0.01em; }
+.spacer { flex: 1; }
+.icon-btn {
+  width: 2.4rem; height: 2.4rem; border-radius: 0.6rem; display: grid; place-items: center;
+  background: transparent; border: 0; color: var(--color-ink-muted);
+  transition: color var(--dur-micro) ease, background-color var(--dur-micro) ease, transform var(--dur-micro) var(--ease-settle);
+}
+.icon-btn:hover { background: var(--color-surface-hover); color: var(--color-ink); }
+.icon-btn:active { transform: scale(0.94); }
+
+/* ── Content column ───────────────────────────────────────────────────────── */
+.main { flex: 1; }
+.wrap {
+  min-height: calc(100vh - 4.2rem); min-height: calc(100dvh - 4.2rem);
+  display: grid; place-items: center; padding: 1.5rem 1.1rem 3rem;
+}
+.enter { animation: enter var(--dur-settle) var(--ease-settle) both; }
+@keyframes enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .enter { animation: none; } }
+
+/* ── Hero / cards ─────────────────────────────────────────────────────────── */
+.hero-card {
+  width: min(38rem, 100%); padding: 2.4rem 2rem;
+  text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.9rem;
+}
+.emblem {
+  width: 4.2rem; height: 4.2rem; border-radius: 50%;
+  display: grid; place-items: center; color: var(--color-on-primary);
+  background: var(--color-primary); box-shadow: var(--glow-primary);
+}
+.hero-title { font-family: var(--font-display); font-size: 1.9rem; font-weight: 700; letter-spacing: -0.02em; }
+.hero-lead { color: var(--color-ink-muted); line-height: 1.6; max-width: 32rem; }
+.pill {
+  display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; font-weight: 600;
+  padding: 0.2rem 0.6rem; border-radius: 999px; color: var(--color-ink-muted);
+  background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
+}
+.pill--ok { color: var(--color-success); }
+.pill--test { color: var(--color-gold); background: var(--color-gold-subtle); box-shadow: inset 0 0 0 1px var(--color-gold); }
+
+/* Next-steps checklist on the dashboard shell */
+.steps-list { text-align: start; width: 100%; max-width: 30rem; margin-inline: auto; display: flex; flex-direction: column; gap: 0.55rem; }
+.steps-list li { display: flex; align-items: flex-start; gap: 0.6rem; color: var(--color-ink); line-height: 1.5; }
+.steps-list li svg { color: var(--color-primary); flex-shrink: 0; margin-block-start: 0.15rem; }
+.steps-list .num {
+  flex-shrink: 0; width: 1.5rem; height: 1.5rem; border-radius: 50%; display: grid; place-items: center;
+  font-size: 0.78rem; font-weight: 700; color: var(--color-primary);
+  background: var(--color-primary-subtle);
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem;
+  padding: 0.6rem 1.05rem; border: 0; border-radius: var(--radius-button); font-weight: 600;
+  background: var(--color-surface-hover); color: var(--color-ink);
+  transition: transform var(--dur-micro) var(--ease-settle), background-color var(--dur-micro) ease, opacity var(--dur-micro) ease;
+}
+.btn:hover { background: var(--color-surface-overlay); }
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn--primary { background: var(--color-btn); color: var(--color-on-primary); box-shadow: var(--glow-primary); }
+.btn--primary:hover { background: var(--color-btn-hover); transform: translateY(-1px); }
+.btn--ghost { background: transparent; box-shadow: inset 0 0 0 1px var(--color-border); }
+.btn--ghost:hover { background: var(--color-surface-hover); }
+.btn--lg { padding: 0.8rem 1.3rem; font-size: 1rem; }
+
+/* ── Helpers ──────────────────────────────────────────────────────────────── */
+.muted { color: var(--color-ink-muted); }
+.faint { color: var(--color-ink-faint); }
+.row { display: flex; align-items: center; gap: 0.6rem; }
+.stack { display: flex; flex-direction: column; gap: 0.9rem; }
+
+/* ── /new setup page ──────────────────────────────────────────────────────── */
+.setup { width: min(40rem, 100%); padding: 2rem 1.9rem; }
+.setup-head { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.6rem; margin-block-end: 1.4rem; }
+.setup-title { font-family: var(--font-display); font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; }
+.setup-steps { display: flex; flex-direction: column; gap: 1rem; }
+.setup-step { display: flex; gap: 0.9rem; align-items: flex-start; }
+.setup-step .num {
+  flex-shrink: 0; width: 1.9rem; height: 1.9rem; border-radius: 50%; display: grid; place-items: center;
+  font-weight: 700; color: var(--color-primary); background: var(--color-primary-subtle);
+}
+.setup-step__body { min-width: 0; }
+.setup-step__title { font-weight: 600; }
+.setup-step__sub { color: var(--color-ink-muted); font-size: 0.9rem; line-height: 1.5; margin-block-start: 0.15rem; }
+.download-row { margin-block: 0.7rem 0.2rem; display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.qr-placeholder {
+  width: 9rem; height: 9rem; border-radius: var(--radius-button); display: grid; place-items: center; text-align: center;
+  color: var(--color-ink-faint); font-size: 0.78rem; padding: 0.6rem;
+  background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+/* ── On-scene text (sits directly on the wallpaper, outside a glass card) ──── */
+.on-scene { color: var(--ink-scene); text-shadow: var(--text-shadow-scene); }
+.on-scene .muted { color: var(--ink-scene-muted); }
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+.foot { text-align: center; padding: 1.2rem; font-size: 0.8rem; color: var(--ink-scene-muted); text-shadow: var(--text-shadow-scene); }
+.foot a { display: inline-flex; align-items: center; gap: 0.2rem; }

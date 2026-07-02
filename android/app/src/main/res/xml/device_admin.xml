@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+
+  Minimal device-admin policy set. Empty <uses-policies/> for now: we only need the
+  receiver to exist so the tablet can be provisioned as device owner for Lock Task Mode
+  (later slice). Specific policies will be added when the kiosk hardening lands.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+    </uses-policies>
+</device-admin>

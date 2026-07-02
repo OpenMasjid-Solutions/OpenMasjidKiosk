@@ -1,0 +1,12 @@
+# The image build context only needs server/ + web/ + apk/. Keep everything else out so
+# the (slow, multi-arch) build stays lean and a docs/compose change can't invalidate it.
+**/node_modules
+**/dist
+**/data
+.git
+.gitignore
+.github
+docs
+screenshots
+android
+**/*.md

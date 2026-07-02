@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+  All user-facing strings live here so the app is translation-ready (i18n + RTL).
+-->
+<resources>
+    <string name="app_name">OpenMasjid Kiosk</string>
+
+    <!-- Attract screen (placeholder for slice 1) -->
+    <string name="attract_tagline">A simple, beautiful way to give at the masjid</string>
+    <string name="attract_cta">Tap to donate</string>
+    <string name="attract_scaffold_note">Setup in progress — this kiosk is not ready to take donations yet.</string>
+</resources>

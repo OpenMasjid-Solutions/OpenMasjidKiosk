@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+  Sakīna tokens needed by XML resources (window/theme + launcher icon). The Compose UI
+  gets its colors from ui/theme/Color.kt; these mirror the same values for non-Compose use.
+-->
+<resources>
+    <!-- Surfaces used for the pre-Compose window background + system bars. -->
+    <color name="surface_dark">#FF030D1A</color>
+    <color name="surface_light">#FFF0F9FF</color>
+
+    <!-- Launcher icon (adaptive). -->
+    <color name="ic_launcher_background">#FF030D1A</color>
+</resources>

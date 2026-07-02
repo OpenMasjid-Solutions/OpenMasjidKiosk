@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- Copyright (C) 2026 OpenMasjid-Solutions -->
+<!-- Representative mock of the kiosk giving screen (landscape). Not a live render. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 800" role="img" aria-label="OpenMasjid Kiosk giving screen">
+  <defs>
+    <linearGradient id="scene" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0C3A4D"/>
+      <stop offset="0.48" stop-color="#082230"/>
+      <stop offset="1" stop-color="#020A12"/>
+    </linearGradient>
+    <radialGradient id="aurora" cx="0.2" cy="0.2" r="0.7">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0F2040" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#0A1828" stop-opacity="0.85"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="800" fill="url(#scene)"/>
+  <rect width="1280" height="800" fill="url(#aurora)"/>
+
+  <!-- Masjid mark + name -->
+  <path d="M640 92a34 34 0 1 0 0 68 27 27 0 1 1 0-68z" fill="#F59E0B"/>
+  <text x="640" y="212" text-anchor="middle" fill="#F4F7FB" font-family="Segoe UI, system-ui, sans-serif" font-size="52" font-weight="700">Support Al-Noor Masjid</text>
+  <text x="640" y="256" text-anchor="middle" fill="#AEBACD" font-family="Segoe UI, system-ui, sans-serif" font-size="26">Choose an amount to give</text>
+
+  <!-- Amount tiles: six presets + Other -->
+  <g font-family="Segoe UI, system-ui, sans-serif" font-weight="700" text-anchor="middle">
+    <g>
+      <rect x="300" y="320" width="200" height="120" rx="20" fill="url(#tile)" stroke="#7DC8E8" stroke-opacity="0.16"/>
+      <text x="400" y="396" fill="#F4F7FB" font-size="44">£5</text>
+    </g>
+    <g>
+      <rect x="540" y="320" width="200" height="120" rx="20" fill="#22D3EE"/>
+      <text x="640" y="396" fill="#00131C" font-size="44">£10</text>
+    </g>
+    <g>
+      <rect x="780" y="320" width="200" height="120" rx="20" fill="url(#tile)" stroke="#7DC8E8" stroke-opacity="0.16"/>
+      <text x="880" y="396" fill="#F4F7FB" font-size="44">£20</text>
+    </g>
+    <g>
+      <rect x="300" y="464" width="200" height="120" rx="20" fill="url(#tile)" stroke="#7DC8E8" stroke-opacity="0.16"/>
+      <text x="400" y="540" fill="#F4F7FB" font-size="44">£50</text>
+    </g>
+    <g>
+      <rect x="540" y="464" width="200" height="120" rx="20" fill="url(#tile)" stroke="#7DC8E8" stroke-opacity="0.16"/>
+      <text x="640" y="540" fill="#F4F7FB" font-size="44">£100</text>
+    </g>
+    <g>
+      <rect x="780" y="464" width="200" height="120" rx="20" fill="url(#tile)" stroke="#7DC8E8" stroke-opacity="0.16"/>
+      <text x="880" y="540" fill="#F4F7FB" font-size="44">£250</text>
+    </g>
+  </g>
+
+  <!-- Custom amount + tap prompt -->
+  <rect x="300" y="612" width="680" height="88" rx="20" fill="#0A1828" stroke="#7DC8E8" stroke-opacity="0.16"/>
+  <text x="640" y="666" text-anchor="middle" fill="#AEBACD" font-family="Segoe UI, system-ui, sans-serif" font-size="30">Other amount</text>
+  <text x="640" y="748" text-anchor="middle" fill="#22D3EE" font-family="Segoe UI, system-ui, sans-serif" font-size="26" font-weight="700">Tap, insert or swipe your card on the reader</text>
+</svg>

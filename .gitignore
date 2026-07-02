@@ -1,0 +1,32 @@
+# Node / build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local data (SQLite DB, uploads) when running the server outside Docker
+server/data/
+data/
+
+# The built/signed APK is produced by CI and copied into the image — never commit it.
+# The apk/ folder itself is kept (see apk/.gitkeep) so the Docker COPY always has a source.
+apk/*.apk
+
+# Android build artifacts (the android/ subtree also has its own .gitignore)
+android/build/
+android/**/build/
+android/.gradle/
+android/.cxx/
+android/local.properties
+*.keystore
+*.jks
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Secrets / env
+.env
+.env.*
+!.env.example
