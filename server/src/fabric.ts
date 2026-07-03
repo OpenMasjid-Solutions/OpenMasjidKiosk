@@ -205,3 +205,128 @@ export async function fetchAppearance(): Promise<Record<string, unknown>> {
     return {};
   }
 }
+
+// ── Stripe via the Fabric (platform-vaulted keys) ───────────────────────────────
+// The admin configures Stripe ONCE in OpenMasjidOS (Settings → Payments); every app shares
+// it and the keys are backed up / migrated with the platform — never pasted per app. We
+// fetch the chosen named account's keys server→server with our per-app secret and keep them
+// IN MEMORY ONLY (never written to our data volume), so they always track the OS vault even
+// across a restore-to-new-machine. The secret key is NEVER sent to the tablet/browser.
+
+/** The shape the platform returns for a vaulted Stripe account. The secret is server-side
+ *  only. (The platform may also send a webhookSecret; the kiosk has no webhooks, so we
+ *  ignore it.) */
+export interface FabricStripeAccount {
+  id: string;
+  label: string;
+  publishableKey: string;
+  secretKey: string;
+}
+
+interface StripeCache {
+  at: number;
+  account: string;
+  value: FabricStripeAccount | null;
+}
+let stripeCache: StripeCache | null = null;
+// The last account we successfully fetched, kept so a transient platform blip doesn't break
+// live payments (we'd rather serve slightly-stale vault keys than fail).
+let stripeLastGood: { at: number; account: string; value: FabricStripeAccount } | null = null;
+const STRIPE_CACHE_MS = 60_000;
+const STRIPE_LASTGOOD_MS = 10 * 60_000;
+
+function parseFabricStripe(j: unknown): FabricStripeAccount | null {
+  if (!j || typeof j !== 'object') return null;
+  const o = j as Record<string, unknown>;
+  const secretKey = typeof o.secretKey === 'string' ? o.secretKey : '';
+  if (!secretKey) return null; // no secret = nothing usable
+  return {
+    id: typeof o.id === 'string' && o.id ? o.id : 'fabric',
+    label: typeof o.label === 'string' && o.label ? o.label.slice(0, 80) : 'OpenMasjidOS account',
+    publishableKey: typeof o.publishableKey === 'string' ? o.publishableKey : '',
+    secretKey,
+  };
+}
+
+/** Fetch a vaulted Stripe account from the platform (server→server). `accountName` is the
+ *  admin-chosen account id; empty = the only/first account. Returns null when the Fabric
+ *  isn't configured, the platform is unreachable (with no recent good copy), or it has no
+ *  such account — callers then fall back to local keys. Caches in memory (~60s); on a
+ *  transient error serves the last good copy (~10min). NEVER throws; NEVER persists. */
+export async function fetchFabricStripe(accountName: string, force = false): Promise<FabricStripeAccount | null> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return null;
+  const now = Date.now();
+  if (!force && stripeCache && stripeCache.account === accountName && now - stripeCache.at < STRIPE_CACHE_MS) {
+    return stripeCache.value;
+  }
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const qs = accountName ? `?account=${encodeURIComponent(accountName)}` : '';
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/stripe${qs}`, {
+      headers: { 'x-openmasjid-app-secret': config.omosAppSecret },
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) {
+      stripeCache = { at: now, account: accountName, value: null };
+      return null;
+    }
+    const value = parseFabricStripe(await res.json().catch(() => null));
+    stripeCache = { at: now, account: accountName, value };
+    if (value) stripeLastGood = { at: now, account: accountName, value };
+    return value;
+  } catch (err) {
+    log.debug(`Fabric stripe fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+    if (stripeLastGood && stripeLastGood.account === accountName && now - stripeLastGood.at < STRIPE_LASTGOOD_MS) {
+      return stripeLastGood.value;
+    }
+    return null;
+  }
+}
+
+/** The last fetched Fabric Stripe account WITHOUT a network call (may be stale/null). */
+export function cachedFabricStripe(): FabricStripeAccount | null {
+  return stripeCache?.value ?? stripeLastGood?.value ?? null;
+}
+
+/** Drop the in-memory Stripe-keys cache so the next fetch re-reads the OS vault (called when
+ *  the admin changes the chosen account in-app). */
+export function clearFabricStripeCache(): void {
+  stripeCache = null;
+  stripeLastGood = null;
+}
+
+export interface FabricStripeAccountRef {
+  id: string;
+  label: string;
+}
+
+/** List the masjid's Stripe accounts from the OS vault (id + label only, NEVER keys) so the
+ *  admin can pick one on the Payments screen — keeps install one-click. Server→server,
+ *  fail-soft → [] when the Fabric isn't configured / unreachable. Never throws. */
+export async function fetchFabricStripeAccounts(): Promise<FabricStripeAccountRef[]> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return [];
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/stripe/accounts`, {
+      headers: { 'x-openmasjid-app-secret': config.omosAppSecret },
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) return [];
+    const j = (await res.json().catch(() => null)) as { accounts?: unknown } | null;
+    const list = Array.isArray(j?.accounts) ? j!.accounts : [];
+    return list
+      .filter((a): a is Record<string, unknown> => !!a && typeof a === 'object' && typeof (a as { id?: unknown }).id === 'string')
+      .map((a) => ({ id: String(a.id), label: typeof a.label === 'string' && a.label ? a.label.slice(0, 80) : String(a.id) }));
+  } catch (err) {
+    log.debug(`Fabric stripe accounts list failed: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+}

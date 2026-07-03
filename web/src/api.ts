@@ -66,3 +66,131 @@ export const login = (password: string) =>
 export const logout = () => request<{ ok: true }>('/api/logout', { method: 'POST' });
 
 export const sendTestNotification = () => request<NotifyTestResult>('/api/admin/notify-test', { method: 'POST' });
+
+// ── Payments (in-app Stripe setup) ────────────────────────────────────────────
+// The Stripe SECRET key never reaches the browser: the server holds it in memory (fetched
+// from the OpenMasjidOS Fabric per process start) and only ever tells us *about* it
+// (mode, whether it is set). These types mirror that server-side shape.
+
+/** A masjid postal address (used to name/address the reader's Stripe Terminal Location). */
+export interface MasjidAddress {
+  line1: string;
+  line2: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+}
+
+/** The masjid details the platform injects no profile for — this app collects them itself. */
+export interface Masjid {
+  name: string;
+  address: MasjidAddress;
+}
+
+/** Non-secret facts about a set of Stripe keys. `publishableKey` is safe to expose; the
+ *  secret is represented only by `hasSecretKey`. `keysMismatch` flags a pk/sk from
+ *  different accounts. */
+export interface StripePublicStatus {
+  publishableKey: string;
+  hasSecretKey: boolean;
+  mode: 'test' | 'live' | 'unknown';
+  configured: boolean;
+  keysMismatch: boolean;
+}
+
+/** A named Stripe account offered by the OpenMasjidOS Fabric (no keys, just id + label). */
+export interface StripeAccountRef {
+  id: string;
+  label: string;
+}
+
+/** The keys actually in effect, plus where they came from. */
+export interface ResolvedStripe extends StripePublicStatus {
+  source: 'fabric' | 'local';
+  label: string;
+}
+
+/** The Terminal Location currently registered for the readers. */
+export interface TerminalLocationRef {
+  id: string;
+  name: string;
+}
+
+/** A Terminal Location as returned when listing/creating (fuller than the in-use ref). */
+export interface TerminalLocation {
+  id: string;
+  displayName: string;
+  address: string;
+}
+
+/** The address shape accepted when creating a Terminal Location. */
+export interface CreateLocationAddress {
+  line1: string;
+  line2?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country: string;
+}
+
+/** The full picture the Payments screen renders from. */
+export interface PaymentsStatus {
+  /** Running embedded under OpenMasjidOS (so the Fabric account picker is available). */
+  embedded: boolean;
+  fabric: {
+    available: boolean;
+    accounts: StripeAccountRef[];
+    chosenId: string;
+    status: StripePublicStatus | null;
+  };
+  local: StripePublicStatus;
+  resolved: ResolvedStripe | null;
+  currency: string;
+  location: TerminalLocationRef | null;
+  masjid: Masjid;
+  /** True whenever the keys in effect are test keys — surfaces the TEST MODE badge. */
+  testMode: boolean;
+}
+
+/** Outcome of a live key check (returned by saving keys and by the test button). */
+export interface VerifyResult {
+  ok: boolean;
+  mode?: string;
+  message?: string;
+}
+
+/** Saving local keys returns the fresh status plus a verification of what was entered. */
+export type SetLocalKeysResult = PaymentsStatus & { verify?: VerifyResult };
+
+/** Outcome of the "test connection" probe (mints a Terminal connection token server-side). */
+export interface TestPaymentsResult {
+  ok: boolean;
+  mode?: string;
+  source?: string;
+  message?: string;
+}
+
+export const getPayments = () => request<PaymentsStatus>('/api/admin/payments');
+
+export const setStripeAccount = (accountId: string) =>
+  request<PaymentsStatus>('/api/admin/payments/account', { method: 'PUT', body: JSON.stringify({ accountId }) });
+
+export const setLocalKeys = (body: { publishableKey?: string; secretKey?: string }) =>
+  request<SetLocalKeysResult>('/api/admin/payments/local', { method: 'PUT', body: JSON.stringify(body) });
+
+export const setCurrency = (currency: string) =>
+  request<PaymentsStatus>('/api/admin/payments/currency', { method: 'PUT', body: JSON.stringify({ currency }) });
+
+export const saveMasjid = (body: { name?: string; address?: Partial<MasjidAddress> }) =>
+  request<Masjid>('/api/admin/masjid', { method: 'PUT', body: JSON.stringify(body) });
+
+export const listLocations = () => request<{ locations: TerminalLocation[] }>('/api/admin/payments/locations');
+
+export const createLocation = (body: { displayName?: string; address: CreateLocationAddress }) =>
+  request<{ location: TerminalLocation }>('/api/admin/payments/location', { method: 'POST', body: JSON.stringify(body) });
+
+export const chooseLocation = (id: string) =>
+  request<{ location: TerminalLocation }>('/api/admin/payments/location', { method: 'PUT', body: JSON.stringify({ id }) });
+
+export const testPayments = () => request<TestPaymentsResult>('/api/admin/payments/test', { method: 'POST' });

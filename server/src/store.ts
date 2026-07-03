@@ -21,9 +21,42 @@ import type { Cred } from './auth';
 
 const log = makeLog('store');
 
+/** Drop undefined values so a partial update never overwrites a field with nothing. */
+function clean<T extends object>(obj: T): Partial<T> {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
 export interface Admin extends Cred {
   name?: string;
   createdAt: string;
+}
+
+/** Standalone-fallback Stripe keys (used only when the Fabric is absent). The secret key is
+ *  server-side only. */
+export interface LocalStripe {
+  publishableKey: string;
+  secretKey: string;
+}
+
+/** The chosen Terminal Location (readers connect with its id). */
+export interface TerminalLocationRef {
+  id: string;
+  name: string;
+}
+
+export interface MasjidAddress {
+  line1: string;
+  line2: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  /** ISO 3166-1 alpha-2 (e.g. "US", "GB"). */
+  country: string;
+}
+
+export interface MasjidInfo {
+  name: string;
+  address: MasjidAddress;
 }
 
 /** Short, URL-safe id with a kind prefix, e.g. "dev_a1b2c3d4". */
@@ -97,6 +130,83 @@ export class Store {
   setAdmin(cred: Cred, name?: string): void {
     const admin: Admin = { ...cred, name: name || undefined, createdAt: new Date().toISOString() };
     this.setRaw('admin', JSON.stringify(admin));
+  }
+
+  private getJson<T>(key: string, fallback: T): T {
+    const raw = this.getRaw(key);
+    if (!raw) return fallback;
+    try {
+      return { ...fallback, ...(JSON.parse(raw) as Partial<T>) };
+    } catch {
+      return fallback;
+    }
+  }
+
+  // ── Payments config (all non-secret except localStripe.secretKey) ──────────────
+  /** The admin-chosen OpenMasjidOS-vault Stripe account id (picked in-app from
+   *  GET /api/fabric/stripe/accounts). '' = the only/first vault account. Storing the id is
+   *  fine (NOT a secret); the keys are always fetched fresh from the Fabric. */
+  getFabricStripeChoice(): string {
+    return this.getRaw('fabric_stripe_account') ?? '';
+  }
+  setFabricStripeChoice(id: string): void {
+    this.setRaw('fabric_stripe_account', id);
+  }
+
+  /** Standalone fallback keys, entered in-app only when the platform/Fabric is absent. The
+   *  secret key is server-side only (never returned to the browser/tablet). */
+  getLocalStripe(): LocalStripe {
+    return this.getJson<LocalStripe>('local_stripe', { publishableKey: '', secretKey: '' });
+  }
+  /** Partial update; an omitted key is left untouched (so the admin can update one field
+   *  without resending the secret). A provided '' clears it. */
+  setLocalStripe(patch: Partial<LocalStripe>): LocalStripe {
+    const merged: LocalStripe = { ...this.getLocalStripe(), ...clean(patch) };
+    this.setRaw('local_stripe', JSON.stringify(merged));
+    return merged;
+  }
+
+  getCurrency(): string {
+    return (this.getRaw('currency') || 'USD').toUpperCase();
+  }
+  setCurrency(currency: string): string {
+    const c = currency.trim().toUpperCase().slice(0, 8) || 'USD';
+    this.setRaw('currency', c);
+    return c;
+  }
+
+  /** The chosen Terminal Location (readers must connect with a locationId). */
+  getLocation(): TerminalLocationRef | null {
+    const raw = this.getRaw('terminal_location');
+    if (!raw) return null;
+    try {
+      const o = JSON.parse(raw) as TerminalLocationRef;
+      return o.id ? o : null;
+    } catch {
+      return null;
+    }
+  }
+  setLocation(loc: TerminalLocationRef | null): void {
+    if (!loc) this.setRaw('terminal_location', '');
+    else this.setRaw('terminal_location', JSON.stringify({ id: loc.id, name: loc.name }));
+  }
+
+  /** Masjid name + address — used to name/address the Terminal Location and on receipts. The
+   *  platform injects no profile, so the admin enters these in-app. */
+  getMasjid(): MasjidInfo {
+    return this.getJson<MasjidInfo>('masjid', {
+      name: '',
+      address: { line1: '', line2: '', city: '', state: '', postalCode: '', country: '' },
+    });
+  }
+  setMasjid(patch: { name?: string; address?: Partial<MasjidAddress> }): MasjidInfo {
+    const cur = this.getMasjid();
+    const merged: MasjidInfo = {
+      name: patch.name ?? cur.name,
+      address: { ...cur.address, ...clean(patch.address ?? {}) },
+    };
+    this.setRaw('masjid', JSON.stringify(merged));
+    return merged;
   }
 
   close(): void {

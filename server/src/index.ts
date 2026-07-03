@@ -19,8 +19,21 @@ import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
 import { Store } from './store';
 import { COOKIE, cookieOptions, hashPassword, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance } from './fabric';
+import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache } from './fabric';
 import { LoginLimiter } from './rateLimit';
+import {
+  createConnectionToken,
+  createLocation,
+  listLocations,
+  looksLikePublishable,
+  looksLikeSecret,
+  publicStripeStatus,
+  retrieveLocation,
+  stripeConfigured,
+  stripeMode,
+  verifySecretKey,
+  type StripeKeys,
+} from './stripe';
 
 const log = makeLog('main');
 
@@ -163,6 +176,146 @@ async function main(): Promise<void> {
     return {
       data: { baseUrlSet: !!base, hasSecret, baseUrlLoopback: LOOPBACK_RE.test(base), appId: config.omosAppId, ...result },
     };
+  });
+
+  // ── Payments (Stripe via the Fabric, with a standalone key fallback) ─────────
+  // Resolve the effective Stripe account: the OpenMasjidOS-vaulted Fabric account when it's
+  // actually configured (real pk+sk), else the locally-entered keys. The secret key stays in
+  // memory only — never sent to the browser/tablet, never persisted.
+  const resolveAccount = async (): Promise<{ keys: StripeKeys; source: 'fabric' | 'local'; id: string; label: string } | null> => {
+    if (ssoConfigured()) {
+      const fab = await fetchFabricStripe(store.getFabricStripeChoice());
+      if (fab && stripeConfigured(fab)) {
+        return { keys: { publishableKey: fab.publishableKey, secretKey: fab.secretKey }, source: 'fabric', id: fab.id, label: fab.label };
+      }
+    }
+    const local = store.getLocalStripe();
+    if (stripeConfigured(local)) return { keys: local, source: 'local', id: 'local', label: 'Locally-entered keys' };
+    return null;
+  };
+
+  /** Non-secret Payments status for the admin screen (publishable keys + booleans only). */
+  const paymentsStatus = async () => {
+    const embedded = ssoConfigured();
+    const accounts = embedded ? await fetchFabricStripeAccounts() : [];
+    const chosenId = store.getFabricStripeChoice();
+    const chosen = embedded ? await fetchFabricStripe(chosenId) : null;
+    const resolved = await resolveAccount();
+    return {
+      embedded,
+      fabric: { available: accounts.length > 0, accounts, chosenId, status: chosen ? publicStripeStatus(chosen) : null },
+      local: publicStripeStatus(store.getLocalStripe()),
+      resolved: resolved ? { source: resolved.source, label: resolved.label, ...publicStripeStatus(resolved.keys) } : null,
+      currency: store.getCurrency(),
+      location: store.getLocation(),
+      masjid: store.getMasjid(),
+      testMode: resolved ? stripeMode(resolved.keys) === 'test' : false,
+    };
+  };
+
+  app.get('/api/admin/payments', { preHandler: requireAdmin }, async () => ({ data: await paymentsStatus() }));
+
+  // Pick which OpenMasjidOS-vault account to use (in-app picker; keeps install one-click).
+  app.put('/api/admin/payments/account', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ accountId: z.string().max(120) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please choose an account.' });
+    store.setFabricStripeChoice(parsed.data.accountId.trim());
+    clearFabricStripeCache(); // apply immediately — next fetch re-reads the OS vault
+    return { data: await paymentsStatus() };
+  });
+
+  // Standalone fallback: manually-entered keys (used only when the Fabric is absent).
+  app.put('/api/admin/payments/local', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ publishableKey: z.string().max(255).optional(), secretKey: z.string().max(255).optional() }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check the keys.' });
+    const p = parsed.data;
+    if (p.publishableKey && !looksLikePublishable(p.publishableKey)) return reply.code(400).send({ error: 'The publishable key should start with pk_.' });
+    if (p.secretKey && !looksLikeSecret(p.secretKey)) return reply.code(400).send({ error: 'The secret key should start with sk_.' });
+    store.setLocalStripe(p);
+    const verify = p.secretKey ? await verifySecretKey(p.secretKey) : undefined;
+    return { data: { ...(await paymentsStatus()), verify } };
+  });
+
+  app.put('/api/admin/payments/currency', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ currency: z.string().min(3).max(8) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please choose a currency.' });
+    store.setCurrency(parsed.data.currency);
+    return { data: await paymentsStatus() };
+  });
+
+  // Masjid name + address — used to name/address the Terminal Location (platform injects none).
+  const AddressBody = z.object({
+    line1: z.string().max(200).optional(),
+    line2: z.string().max(200).optional(),
+    city: z.string().max(120).optional(),
+    state: z.string().max(120).optional(),
+    postalCode: z.string().max(40).optional(),
+    country: z.string().max(2).optional(),
+  });
+  app.put('/api/admin/masjid', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ name: z.string().max(160).optional(), address: AddressBody.optional() }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check the details.' });
+    return { data: store.setMasjid(parsed.data) };
+  });
+
+  // ── Terminal Locations (a reader must connect with a locationId) ─────────────
+  app.get('/api/admin/payments/locations', { preHandler: requireAdmin }, async (_req, reply) => {
+    const acct = await resolveAccount();
+    if (!acct) return reply.code(400).send({ error: 'Choose or enter a Stripe account first.' });
+    try {
+      return { data: { locations: await listLocations(acct.keys.secretKey) } };
+    } catch {
+      return reply.code(502).send({ error: 'Couldn’t reach Stripe to list locations. Please try again.' });
+    }
+  });
+
+  app.post('/api/admin/payments/location', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ displayName: z.string().max(160).optional(), address: AddressBody }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please add the masjid address.' });
+    const a = parsed.data.address;
+    if (!a.line1 || !a.country) return reply.code(400).send({ error: 'A street address and 2-letter country code are required.' });
+    const acct = await resolveAccount();
+    if (!acct) return reply.code(400).send({ error: 'Choose or enter a Stripe account first.' });
+    const displayName = (parsed.data.displayName || store.getMasjid().name || 'Masjid kiosk').slice(0, 160);
+    try {
+      const loc = await createLocation(acct.keys.secretKey, displayName, {
+        line1: a.line1, line2: a.line2, city: a.city, state: a.state, postalCode: a.postalCode, country: a.country,
+      });
+      store.setLocation({ id: loc.id, name: loc.displayName });
+      return { data: { location: loc } };
+    } catch (e) {
+      log.warn('create location failed: ' + (e instanceof Error ? e.message : String(e)));
+      return reply.code(502).send({ error: 'Stripe couldn’t create that location. Check the address (country must be a 2-letter code).' });
+    }
+  });
+
+  app.put('/api/admin/payments/location', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ id: z.string().max(120) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please choose a location.' });
+    const acct = await resolveAccount();
+    if (!acct) return reply.code(400).send({ error: 'Choose or enter a Stripe account first.' });
+    const loc = await retrieveLocation(acct.keys.secretKey, parsed.data.id);
+    if (!loc) return reply.code(404).send({ error: 'That location no longer exists on this Stripe account.' });
+    store.setLocation({ id: loc.id, name: loc.displayName });
+    return { data: { location: loc } };
+  });
+
+  // Verify Stripe + Terminal end-to-end by minting a connection token (the same short-lived
+  // credential the tablet gets). The token itself is never returned to the browser.
+  app.post('/api/admin/payments/test', { preHandler: requireAdmin }, async () => {
+    const acct = await resolveAccount();
+    if (!acct) return { data: { ok: false, message: 'No Stripe account is set up yet.' } };
+    try {
+      await createConnectionToken(acct.keys.secretKey, store.getLocation()?.id);
+      return { data: { ok: true, mode: stripeMode(acct.keys), source: acct.source } };
+    } catch (e) {
+      const err = e as { type?: string };
+      const message =
+        err.type === 'StripeAuthenticationError'
+          ? 'Stripe didn’t accept the secret key.'
+          : 'Couldn’t reach Stripe Terminal. Check the account and your connection.';
+      return { data: { ok: false, message } };
+    }
   });
 
   // ── Download the bundled kiosk APK (served by /new) ─────────────────────────

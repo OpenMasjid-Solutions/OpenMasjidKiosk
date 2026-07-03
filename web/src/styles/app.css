@@ -307,6 +307,24 @@ h1, h2, h3, p, ul { margin: 0; }
 .pair-hint--block { display: block; margin-block-start: 0.85rem; text-align: start; line-height: 1.55; }
 .devices-note { margin-block-start: 1rem; text-align: center; }
 
+/* ── Payments (Settings → in-app Stripe setup) ──────────────────────────────── */
+/* Sub-sections within the single Payments card, split by a subtle divider. */
+.pay-group { margin-block-start: 1.1rem; padding-block-start: 1.1rem; border-block-start: 1px solid var(--color-border); }
+.pay-group-title { display: flex; align-items: center; gap: 0.4rem; font-weight: 600; font-size: 0.95rem; margin-block-end: 0.7rem; }
+.pay-group-title svg { color: var(--color-primary); flex-shrink: 0; }
+/* Two-up field rows (address city/state, postcode/country); collapses when narrow. */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 0.7rem; }
+.grid2 .field { min-width: 0; }
+@media (max-width: 460px) { .grid2 { grid-template-columns: 1fr; } }
+/* Manual-key entry panel (the standalone fallback). */
+.pay-manual { margin-block-start: 0.7rem; padding: 0.9rem; }
+.pay-disclose { margin-block-start: 0.2rem; }
+.pay-chev { transition: transform var(--dur-micro) ease; }
+.pay-chev--open { transform: rotate(180deg); }
+/* Busy spinner on buttons (reduced-motion is handled globally in tokens.css). */
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ── Readability: text sitting directly on the wallpaper (outside a glass card) ─ */
 /* On-scene text uses the scene ink (light on the dark presets, in BOTH themes; flips for
    a light custom wallpaper image via data-scene). Glass-card text keeps --color-ink. */

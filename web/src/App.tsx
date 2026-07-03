@@ -28,6 +28,7 @@ import {
 import { getAppInfo, getSession, login, sendTestNotification, setupAdmin, type AppInfo, type NotifyTestResult, type Session } from './api';
 import { withBase, stripBase } from './base';
 import { useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
+import { PaymentsSection } from './payments';
 import { Brand, Clock, Crescent, ProfileMenu, Scene } from './ui';
 
 const SOURCE_URL = 'https://github.com/OpenMasjid-Solutions/OpenMasjidKiosk';
@@ -350,6 +351,8 @@ function SettingsTab({ app, session, embedded }: { app: AppInfo | null; session:
 
   return (
     <>
+      <PaymentsSection />
+
       <section className="glass panel">
         <div className="card-head">
           <ShieldCheck size={18} className="panel-ico" aria-hidden="true" />
