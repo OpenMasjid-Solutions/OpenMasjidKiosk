@@ -6,7 +6,7 @@
 
 ## 1. What we are building (one paragraph)
 
-**OpenMasjidKiosk** turns a wall-mounted Android tablet with a **Stripe Reader M2** into a beautiful tap-to-donate station for a masjid. It has **two parts in one repo**: (1) a **server** — a normal OpenMasjidOS app (one Docker container: Fastify API + admin web UI + SQLite) that holds all configuration, records donations, and talks to Stripe with the secret key it fetches from the **OpenMasjidOS Fabric**; and (2) an **Android app** — a Kotlin kiosk/launcher that a volunteer installs by browsing to the server's setup page (e.g. `http://192.168.1.x:7878/new`), downloading the APK, and scanning a pairing QR. The tablet shows a GiveALittle-style giving screen — **six preset amounts + a custom amount**, one-time or **monthly** — takes the card on the M2 reader (**Bluetooth or USB**), and shows a custom thank-you. The app is locked in kiosk mode and can only be exited with a **PIN set in the admin web UI**. Everything matches the OpenMasjidOS design language, is served over **HTTPS**, and is **AGPL-3.0-only**.
+**OpenMasjidKiosk** turns a wall-mounted Android tablet with a **Stripe Reader M2** into a beautiful tap-to-donate station for a masjid. It has **two parts in one repo**: (1) a **server** — a normal OpenMasjidOS app (one Docker container: Fastify API + admin web UI + SQLite) that holds all configuration, records donations, and talks to Stripe with the secret key it fetches from the **OpenMasjidOS Fabric**; and (2) an **Android app** — a Kotlin kiosk/launcher that a volunteer installs by browsing to the server's setup page (e.g. `http://192.168.1.x:7878/new`), downloading the APK, and entering a short **6-digit pairing code** (no camera needed — most kiosk tablets don't have one). The tablet shows a GiveALittle-style giving screen — **six preset amounts + a custom amount**, one-time or **monthly** — takes the card on the M2 reader (**Bluetooth or USB**), and shows a custom thank-you. The app is locked in kiosk mode and can only be exited with a **PIN set in the admin web UI**. Everything matches the OpenMasjidOS design language, is served over **HTTPS**, and is **AGPL-3.0-only**.
 
 ---
 
@@ -59,13 +59,13 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
 - One-click install (**no install settings** — everything is configured in-app, like Display).
 - **Fabric:** `sso: true` (admin panel shares the dashboard login, with local-password fallback), `stripe: true` (**in-app Stripe account picker**), `https: true` (required for Stripe apps), `notifications: true` (best-effort "New donation" alerts — fail soft).
 - **Admin panel:** Devices (kiosks), Giving-screen designer, Payments, Donations log, About.
-- **`/new` onboarding page:** downloads the bundled APK + shows setup instructions and the pairing QR flow.
-- **Device pairing & fleet management:** pairing codes/QR, per-device tokens, rename/revoke, heartbeats (online, battery, charging, reader status, app version), per-device logs, remote config push.
+- **`/new` onboarding page:** downloads the bundled APK + shows setup instructions and the **6-digit pairing** flow.
+- **Device pairing & fleet management:** **6-digit pairing codes** (typed on the tablet — no camera/QR), per-device tokens, rename/revoke, heartbeats (online, battery, charging, reader status, app version), per-device logs, remote config push.
 - **Payments engine:** Terminal **connection tokens**, Terminal **Location** management, PaymentIntent creation (card_present), server-side verification + capture, **monthly subscriptions** created from the reader's `generated_card`, Stripe email **receipts**, donations recorded in SQLite with totals + **CSV export**.
 - Test-mode badge whenever a test key is in use.
 
 **Android app (the kiosk)**
-- Distributed via `/new` (sideload APK); on first run asks for / scans the **server address + pairing code** (QR carries URL, HTTPS cert fingerprint, and code).
+- Distributed via `/new` (sideload APK); on first run the volunteer **types the server address + a 6-digit pairing code** (no camera/QR — kiosk tablets often have none). The app pins the server's HTTPS certificate on that first successful pair (**trust-on-first-use**), since the fingerprint can no longer travel in a QR.
 - **Stripe Reader M2 over Bluetooth AND USB** — discovery, connect, battery level, required-update handling, auto-reconnect — all set up inside the app's (PIN-protected) settings.
 - **GiveALittle-simple giving flow:** attract screen → 6 preset amounts + "Other" number pad → one-time / monthly → (optional) name & email, **both required for monthly** → tap/insert card → processing → **custom thank-you message** → auto-reset.
 - **Kiosk mode:** the app is a HOME launcher, uses **Lock Task Mode** when provisioned as device owner (documented one-time ADB step), falls back to screen pinning; screen kept awake; auto-starts on boot; exit only via hidden gesture + **PIN set in the admin web UI**.
@@ -124,10 +124,10 @@ Follow BUILDING_AN_APP.md §7 exactly; Donations is the working example.
 
 ## 7. Devices: `/new`, pairing, and transport security
 
-- **`/new`** (public route on the app's port): a friendly one-page setup guide — big "Download the kiosk app" button serving the **APK bundled into the server image at build time** (so the app version always matches the server), sideload instructions ("allow installs from your browser"), and "then scan the pairing code from **Admin → Devices**."
-- **Pairing:** Admin → Devices → **Add kiosk** generates a **single-use pairing code (TTL 10 min)** and shows a **QR** whose payload is `{ v, httpsUrl, certSha256, code }` — the platform-served **HTTPS** URL and the SHA-256 fingerprint of its certificate. The app scans it (or the volunteer types the address + code), calls `POST /api/kiosk/pair` over HTTPS, and receives a long-lived **device token** (random 256-bit, hashed at rest server-side, shown never again).
-- **Transport:** the tablet **only ever talks HTTPS** to the server, with the certificate **pinned to the fingerprint from pairing** (custom trust evaluation accepting exactly that cert/public key — correct for the platform's self-signed LAN certificate; never fall back to plain HTTP; re-pair if the fingerprint changes, with a clear admin-facing explanation). All kiosk API calls carry the device token; the server scopes every route to that device and rate-limits.
-- **Fleet management:** heartbeat every ~45 s (`battery`, `charging`, `readerStatus`, `readerSerial`, `readerBattery`, `appVersion`, `configVersion`) → Devices page shows live status, flags "not charging" (a wall kiosk should always be on power) and "offline". Actions: rename, **revoke** (kills the token; kiosk returns to pairing), show QR again, *identify* (kiosk flashes), push config now. Structured device **logs** (payments, reader events, errors) viewable per device.
+- **`/new`** (public route on the app's port): a friendly one-page setup guide — big "Download the kiosk app" button serving the **APK bundled into the server image at build time** (so the app version always matches the server), sideload instructions ("allow installs from your browser"), and "then enter the **6-digit pairing code** from **Admin → Devices**."
+- **Pairing (6-digit code, no camera):** Admin → Devices → **Add kiosk** generates a **single-use 6-digit pairing code (TTL 10 min)** and shows it next to the server's **HTTPS address** and its certificate fingerprint (for optional out-of-band verification). On the tablet the volunteer **types the server address and the 6-digit code**; the app calls `POST /api/kiosk/pair` over HTTPS and receives a long-lived **device token** (random 256-bit, hashed at rest server-side, shown never again). Because the fingerprint can't ride in a QR, the app **pins the certificate it sees on that first successful pair (trust-on-first-use)**. The code is single-use, short-lived and attempt-limited so a 6-digit space can't be brute-forced.
+- **Transport:** the tablet **only ever talks HTTPS** to the server, with the certificate **pinned on the first successful pair (trust-on-first-use)** (custom trust evaluation thereafter accepting exactly that cert/public key — correct for the platform's self-signed LAN certificate; never fall back to plain HTTP; re-pair if the fingerprint changes, with a clear admin-facing explanation). All kiosk API calls carry the device token; the server scopes every route to that device and rate-limits.
+- **Fleet management:** heartbeat every ~45 s (`battery`, `charging`, `readerStatus`, `readerSerial`, `readerBattery`, `appVersion`, `configVersion`) → Devices page shows live status, flags "not charging" (a wall kiosk should always be on power) and "offline". Actions: rename, **revoke** (kills the token; kiosk returns to pairing), show a fresh pairing code, *identify* (kiosk flashes), push config now. Structured device **logs** (payments, reader events, errors) viewable per device.
 - **Config:** one versioned JSON (amounts, currency symbol, monthly on/off, name/email prompt policy, thank-you message, wallpaper, accent, theme, **kiosk-PIN hash**). Kiosks fetch on heartbeat when the version bumps; applied live with a gentle transition.
 
 ---
@@ -241,7 +241,7 @@ Least-privilege exactly per the contract: no labels, no `privileged`, no host na
 
 - **server/** — Node 20+, TypeScript strict, **Fastify**, **better-sqlite3**, **stripe** SDK, **argon2** (fallback admin password + PIN hashes), **zod** at every boundary. No WebSocket needed in v1 (heartbeat polling is enough); add SSE for the Devices page if live feel demands it.
 - **web/** — React + Vite + TypeScript + Tailwind, shadcn/ui, **Motion**, lucide-react; tokens + recipes from **DESIGN.md** (Sakīna Glass); inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
-- **android/** — **Kotlin + Jetpack Compose**, minSdk 26 (Terminal SDK floor), **Stripe Terminal Android SDK** (Bluetooth + USB discovery/connect for the M2), CameraX/ML Kit for QR scanning, DataStore for device config, WorkManager for heartbeats. Recreate the design language natively: same palette tokens, spring motion (`animate*AsState`/`AnimatedContent`), dark default, RTL, reduced-motion.
+- **android/** — **Kotlin + Jetpack Compose**, minSdk 26 (Terminal SDK floor), **Stripe Terminal Android SDK** (Bluetooth + USB discovery/connect for the M2), DataStore for device config, WorkManager for heartbeats. **No camera/QR** — pairing is a typed 6-digit code (kiosk tablets often have no camera). Recreate the design language natively: same palette tokens, spring motion (`animate*AsState`/`AnimatedContent`), dark default, RTL, reduced-motion.
 - **One container** serves API + admin + `/new` + the bundled APK. Multi-stage Dockerfile; CI: `build-apk.yml` builds + signs the APK (keystore in GH secrets, versionName from `VERSION`), `build-image.yml` builds web+server, **copies the freshly built APK into the image**, pushes multi-arch to GHCR, prints the digest to pin.
 
 ---
@@ -249,11 +249,11 @@ Least-privilege exactly per the contract: no labels, no `privileged`, no host na
 ## 14. Security checklist (all mandatory)
 
 - Secret key: Fabric → memory only; never to tablet/browser/logs/volume. Publishable key + connection tokens + PI client secrets are the only Stripe material the tablet sees.
-- Tablet↔server: **HTTPS only, certificate pinned** from the pairing QR; never downgrade; re-pair on fingerprint change. Device tokens hashed at rest, revocable, scoped, rate-limited.
+- Tablet↔server: **HTTPS only, certificate pinned** on the first successful pair (trust-on-first-use); never downgrade; re-pair on fingerprint change. Device tokens hashed at rest, revocable, scoped, rate-limited.
 - Amounts validated server-side (presets/min/max, integer minor units); idempotency keys on all Stripe creates; donation recorded only after server-side Stripe verification (+ capture when `requires_capture`).
 - Admin: Fabric SSO as identity assertion only (never call the platform as the admin); fail-closed session check; local-password fallback; signed HTTP-only SameSite cookies; restore-resilience rules (§6) observed to the letter.
 - Kiosk PIN: argon2 hash in synced config; offline verify; exponential backoff on attempts; PIN rotation from admin invalidates old immediately on next heartbeat.
-- Uploads (wallpapers) validated and size-capped; rich text sanitised; every kiosk route authenticated; `/new` and pairing endpoints rate-limited (pairing codes single-use, 10-min TTL).
+- Uploads (wallpapers) validated and size-capped; rich text sanitised; every kiosk route authenticated; `/new` and pairing endpoints rate-limited (6-digit pairing codes single-use, 10-min TTL, attempt-limited so the 1M-code space can't be brute-forced).
 - PCI posture: card data reader→Stripe only (P2PE-style); our code never sees a PAN — state this in the README.
 
 ---
@@ -287,7 +287,7 @@ Builds via the commands above and `docker compose up -d`; `tsc`/lint/ktlint clea
   1. Repo scaffold (all three parts) + Dockerfile + manifest/compose per §12; container boots, serves a themed admin shell, `/healthz`, and a stub `/new`.
   2. **Fabric:** SSO with local fallback + appearance inheritance + restore-resilience.
   3. **Payments setup:** Stripe account picker via Fabric, Location management, test-mode badge, connection-token endpoint.
-  4. **Android shell:** Compose app, pairing (QR + cert pinning + device token), kiosk/launcher + PIN unlock + maintenance screen, heartbeats/logs → Devices page live.
+  4. **Android shell:** Compose app, pairing (typed server address + **6-digit code**, **trust-on-first-use** cert pinning, device token), kiosk/launcher + PIN unlock + maintenance screen, heartbeats/logs → Devices page live.
   5. **Reader:** M2 discovery/connect over **Bluetooth and USB**, update handling, simulated-reader mode.
   6. **One-time donations** end-to-end (PI create → collect → confirm → server verify/capture → record → thank-you → notification), with the giving UI (6 presets + custom).
   7. **Monthly** (name/email gate, generated_card → Customer → Subscription, graceful non-reusable-card path) + receipts.

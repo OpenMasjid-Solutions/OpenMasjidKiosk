@@ -13,14 +13,13 @@
         - Reader over Bluetooth (API 31+): BLUETOOTH_SCAN, BLUETOOTH_CONNECT
         - Reader over Bluetooth (pre-31): ACCESS_FINE_LOCATION
         - Reader over USB: android.hardware.usb.host feature + USB permission (runtime)
-        - Pairing QR scan: CAMERA
-      Keep them out of the manifest until the corresponding slice lands, and request-and-
+      Pairing is a typed 6-digit code (no camera/QR), so no CAMERA permission is needed.
+      Keep these out of the manifest until the corresponding slice lands, and request-and-
       explain them only inside the PIN-protected settings — never in the donor flow.
 
       <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
       <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
       <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-      <uses-permission android:name="android.permission.CAMERA" />
       <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     -->
 

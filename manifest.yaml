@@ -17,7 +17,7 @@ description: |
   email receipts — all managed from a simple admin page on your OpenMasjidOS.
 
   - **Set it up from a web page** — install here, open the admin panel, and browse
-    to the setup page on your tablet to download the kiosk app and pair it with a QR.
+    to the setup page on your tablet to download the kiosk app and pair it with a 6-digit code.
   - **Reader over Bluetooth or USB** — the Stripe Reader M2 takes the card; card
     numbers go straight to Stripe and never touch this app or the tablet.
   - **One-time or monthly** — six preset amounts plus a custom amount, with an

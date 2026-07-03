@@ -309,7 +309,7 @@ function Dashboard({ session }: { session: Session }) {
           <li>
             <Smartphone size={18} />
             <span>
-              <b>Pair a tablet</b> — download the kiosk app and scan a pairing code.
+              <b>Pair a tablet</b> — download the kiosk app and enter a 6-digit pairing code.
             </span>
           </li>
         </ul>
@@ -454,11 +454,11 @@ function NewPage({ app }: { app: AppInfo | null }) {
             <div className="setup-step__body">
               <div className="setup-step__title">Pair it with this server</div>
               <p className="setup-step__sub">
-                In the admin panel, go to <b>Devices → Add kiosk</b> to get a pairing code, then scan it with the tablet
-                app. Pairing arrives in the next update.
+                In the admin panel, go to <b>Devices → Add kiosk</b> to get a 6-digit pairing code, then type it into the
+                tablet app (no camera needed). Pairing arrives in the next update.
               </p>
               <div className="download-row">
-                <div className="qr-placeholder">Your pairing QR will appear in Devices</div>
+                <div className="pair-hint">Your 6-digit pairing code will appear in <b>Devices</b></div>
               </div>
             </div>
           </li>

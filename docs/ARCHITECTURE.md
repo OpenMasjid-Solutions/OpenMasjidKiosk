@@ -56,6 +56,13 @@ reference repos, **those win — and flag it.** Resolutions:
 - **Release signing keystore** — deferred to first release (slice 9); CI debug-signs until
   then. When ready: `keytool` → `.jks` → 4 GitHub secrets (`SIGNING_KEYSTORE_BASE64`,
   `SIGNING_KEYSTORE_PASSWORD`, `SIGNING_KEY_ALIAS`, `SIGNING_KEY_PASSWORD`).
+- **Pairing = typed 6-digit code, no QR/camera** (maintainer, 2026-07-02) — kiosk tablets
+  usually have no camera, so the original QR-carried `{httpsUrl, certSha256, code}` is
+  replaced by: the volunteer types the server address + a single-use **6-digit** code
+  (10-min TTL, attempt-limited to resist brute-forcing the 1M space). The app **pins the
+  server's HTTPS cert on the first successful pair (trust-on-first-use)** since the
+  fingerprint can no longer travel in a QR; re-pair if it changes. No CameraX/ML Kit dep;
+  `qrcode.react` dropped from the web. (Built in slice 4.)
 
 ## Fabric wire contract (never rename)
 

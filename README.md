@@ -10,7 +10,7 @@ beautiful tap-to-donate station for your masjid.** An app for
 Six one-tap amounts, custom amounts, monthly giving and email receipts — a passer-by
 donates in under ten seconds. Everything is managed from a simple admin page on your
 OpenMasjidOS: choose your Stripe account, design the giving screen, and pair a tablet by
-scanning a QR code. The tablet locks into a full-screen giving station that can only be
+typing a 6-digit code (no camera needed). The tablet locks into a full-screen giving station that can only be
 exited with a PIN you set.
 
 > **Status: v0.1.0 — in active development.** This repo is being built in vertical
