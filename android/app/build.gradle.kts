@@ -96,6 +96,7 @@ kotlin {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
 
     // Compose BOM keeps all Compose artifacts on a mutually compatible set of versions.
@@ -104,6 +105,13 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+
+    // --- Slice 4: pairing, pinned-HTTPS networking, kiosk lockdown, heartbeats ---
+    implementation(libs.androidx.datastore.preferences)  // device token / config / pinned cert at rest
+    implementation(libs.androidx.work.runtime.ktx)        // backstop heartbeat when backgrounded
+    implementation(libs.okhttp)                           // pinned-HTTPS client (self-signed LAN cert)
+    implementation(libs.kotlinx.coroutines.android)       // IO dispatcher for blocking OkHttp calls
+    implementation(libs.bouncycastle)                     // offline SCrypt PIN verification
 
     // Compose tooling (previews) — debug only.
     debugImplementation(libs.androidx.ui.tooling)

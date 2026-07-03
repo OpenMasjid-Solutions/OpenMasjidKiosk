@@ -7,8 +7,75 @@
 <resources>
     <string name="app_name">OpenMasjid Kiosk</string>
 
-    <!-- Attract screen (placeholder for slice 1) -->
+    <!-- Attract screen (placeholder until the giving flow lands in a later slice) -->
     <string name="attract_tagline">A simple, beautiful way to give at the masjid</string>
     <string name="attract_cta">Tap to donate</string>
     <string name="attract_scaffold_note">Setup in progress — this kiosk is not ready to take donations yet.</string>
+
+    <!-- Loading -->
+    <string name="loading">Getting things ready…</string>
+
+    <!-- Pairing screen -->
+    <string name="pairing_title">Set up this kiosk</string>
+    <string name="pairing_subtitle">Enter your masjid server address and the 6-digit code shown in Admin → Devices.</string>
+    <string name="pairing_server_label">Server address</string>
+    <string name="pairing_code_label">Pairing code</string>
+    <string name="pairing_name_label">Name this kiosk</string>
+    <string name="pairing_button">Pair kiosk</string>
+    <string name="pairing_busy">Pairing…</string>
+    <string name="pairing_error_url">Enter the full https:// address shown in Admin → Devices.</string>
+    <string name="pairing_error_code">The pairing code is 6 digits.</string>
+    <string name="pairing_error_rejected">That code didn\'t work. Generate a fresh code in Admin → Devices and try again.</string>
+    <string name="pairing_error_unreachable">Couldn\'t reach the server. Check the address, and that this tablet and the server are on the same Wi-Fi.</string>
+    <string name="pairing_error_cert">Couldn\'t secure the connection to the server. Ask an admin to check the setup.</string>
+    <string name="pairing_error_generic">Something went wrong. Please try again.</string>
+
+    <!-- Re-pair (fail-closed lockout) -->
+    <string name="repair_title">Re-pairing needed</string>
+    <string name="repair_reason_cert">The server\'s security certificate changed, so this kiosk locked itself for safety. Pair it again to reconnect.</string>
+    <string name="repair_button">Re-pair this kiosk</string>
+
+    <!-- PIN pad -->
+    <string name="pin_title">Enter kiosk PIN</string>
+    <string name="pin_subtitle">Ask a masjid admin if you don\'t have it.</string>
+    <string name="pin_unlock">Unlock</string>
+    <string name="pin_delete">Delete</string>
+    <string name="pin_cancel">Cancel</string>
+    <string name="pin_error_wrong">That PIN wasn\'t right. Try again.</string>
+    <string name="pin_error_locked">Too many attempts. Try again in %1$d seconds.</string>
+
+    <!-- Maintenance screen -->
+    <string name="maintenance_title">Kiosk maintenance</string>
+    <string name="maintenance_no_pin">No exit PIN is set yet. Set one in Admin → Devices to protect this kiosk.</string>
+    <string name="maintenance_reader_title">Card reader</string>
+    <string name="maintenance_reader_soon">Reader setup arrives in the next update.</string>
+    <string name="maintenance_server_title">Server &amp; pairing</string>
+    <string name="maintenance_diagnostics_title">Diagnostics</string>
+    <string name="maintenance_repair">Re-pair this kiosk</string>
+    <string name="maintenance_exit">Exit kiosk</string>
+    <string name="maintenance_return">Return to kiosk</string>
+
+    <!-- Diagnostics labels -->
+    <string name="diag_battery">Battery</string>
+    <string name="diag_power">Power</string>
+    <string name="diag_power_plugged">Plugged in</string>
+    <string name="diag_power_battery">On battery — check the cable</string>
+    <string name="diag_reader">Card reader</string>
+    <string name="diag_connection">Server connection</string>
+    <string name="diag_online">Connected</string>
+    <string name="diag_offline">Offline</string>
+    <string name="diag_app_version">App version</string>
+    <string name="diag_certificate">Server certificate</string>
+    <string name="diag_device_id">Device ID</string>
+    <string name="diag_server">Server</string>
+    <string name="diag_last_checkin">Last check-in</string>
+    <string name="diag_unknown">Unknown</string>
+    <string name="diag_never">Never</string>
+    <string name="diag_just_now">Just now</string>
+    <string name="diag_seconds_ago">%1$d seconds ago</string>
+    <string name="diag_minutes_ago">%1$d minutes ago</string>
+    <string name="reader_status_not_connected">Not connected</string>
+
+    <!-- Kiosk mode banner -->
+    <string name="kiosk_pinning_hint">This tablet isn\'t set up as a dedicated kiosk yet, so it can still be exited. Follow docs/TABLET_SETUP.md to lock it down fully.</string>
 </resources>

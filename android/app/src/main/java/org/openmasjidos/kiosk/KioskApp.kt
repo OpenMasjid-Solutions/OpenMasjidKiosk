@@ -4,9 +4,17 @@
 package org.openmasjidos.kiosk
 
 import android.app.Application
+import org.openmasjidos.kiosk.net.KioskRepository
 
 /**
- * Application entry point. Empty for now; later slices will use it to initialise
- * app-wide state (device config store, heartbeat scheduling, the Stripe Terminal SDK).
+ * Application entry point.
+ *
+ * Owns the single [KioskRepository] instance so both the UI (ViewModel) and the background
+ * [org.openmasjidos.kiosk.work.HeartbeatWorker] share one store, one log buffer and one pinned
+ * HTTP client cache. The Stripe Terminal SDK will also be initialised here in a later slice.
  */
-class KioskApp : Application()
+class KioskApp : Application() {
+
+    /** Lazily built so it exists for both the foreground loop and the WorkManager backstop. */
+    val repository: KioskRepository by lazy { KioskRepository(this) }
+}

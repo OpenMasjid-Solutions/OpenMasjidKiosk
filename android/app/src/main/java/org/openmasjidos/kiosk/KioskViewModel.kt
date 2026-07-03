@@ -1,0 +1,277 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 OpenMasjid-Solutions
+
+package org.openmasjidos.kiosk
+
+import android.app.Application
+import android.os.Build
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import org.openmasjidos.kiosk.local.Diagnostics
+import org.openmasjidos.kiosk.local.KioskConfig
+import org.openmasjidos.kiosk.local.PairingRecord
+import org.openmasjidos.kiosk.kiosk.DeviceStatus
+import org.openmasjidos.kiosk.net.HeartbeatOutcome
+import org.openmasjidos.kiosk.net.PairResult
+import org.openmasjidos.kiosk.work.HeartbeatWorker
+
+/** Top-level screen the kiosk is showing. */
+enum class Phase { Loading, Unpaired, Paired }
+
+/** Overlay shown on top of the attract screen in the Paired phase. */
+enum class Overlay { None, Pin, Maintenance }
+
+/**
+ * Why the kiosk is demanding a re-pair (a fail-closed lockout that blocks everything).
+ * Currently only a changed server certificate triggers this; a *revoke* instead wipes the
+ * pairing and drops straight back to the pairing screen (no lockout needed).
+ */
+enum class RePairReason { CertChanged }
+
+/** The pairing form the volunteer fills in (URL + 6-digit code + a friendly name). */
+data class PairingForm(
+    val url: String = "https://",
+    val code: String = "",
+    val name: String = "",
+    val busy: Boolean = false,
+    val error: PairResult.Reason? = null,
+)
+
+/** Transient PIN-pad state (attempts + exponential backoff live in memory for slice 4). */
+data class PinState(
+    val verifying: Boolean = false,
+    val wrong: Boolean = false,
+    val attempts: Int = 0,
+    val lockedUntilMs: Long = 0L,
+)
+
+/** The single immutable snapshot the UI renders. */
+data class UiState(
+    val phase: Phase = Phase.Loading,
+    val config: KioskConfig? = null,
+    val form: PairingForm = PairingForm(),
+    val overlay: Overlay = Overlay.None,
+    val rePair: RePairReason? = null,
+    val pin: PinState = PinState(),
+    val identify: Boolean = false,
+    val diagnostics: Diagnostics = Diagnostics(),
+)
+
+/**
+ * Drives the whole kiosk state machine: Loading → (Unpaired ⇄ pairing) → Paired, plus the
+ * PIN/maintenance overlays and the re-pair lockout. Persistent truth (pairing + config) is
+ * observed reactively from the store; ephemeral UI (form, overlay, pin backoff, identify pulse,
+ * live diagnostics) lives in [local]. The two are combined into one [UiState].
+ */
+class KioskViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val repo = (app as KioskApp).repository
+    private val appContext = app.applicationContext
+
+    /** Ephemeral, in-memory UI that never needs persisting. */
+    private data class Local(
+        val form: PairingForm,
+        val overlay: Overlay = Overlay.None,
+        val rePair: RePairReason? = null,
+        val pin: PinState = PinState(),
+        val identify: Boolean = false,
+        val battery: Int? = null,
+        val charging: Boolean? = null,
+        val lastHeartbeatMs: Long? = null,
+        val online: Boolean = false,
+    )
+
+    private val local = MutableStateFlow(Local(form = PairingForm(name = Build.MODEL ?: "Kiosk")))
+
+    val ui: StateFlow<UiState> = combine(repo.pairing, repo.config, local) { pairing, config, l ->
+        UiState(
+            phase = if (pairing == null) Phase.Unpaired else Phase.Paired,
+            config = config,
+            form = l.form,
+            overlay = l.overlay,
+            rePair = l.rePair,
+            pin = l.pin,
+            identify = l.identify,
+            diagnostics = buildDiagnostics(pairing, l),
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), UiState())
+
+    private var heartbeatLoop: Job? = null
+
+    /** Called once from the activity: schedule the backstop and run the loop while paired. */
+    fun start() {
+        HeartbeatWorker.schedule(appContext)
+        viewModelScope.launch {
+            repo.pairing.collect { pairing ->
+                if (pairing != null) startHeartbeatLoop() else stopHeartbeatLoop()
+            }
+        }
+    }
+
+    // ---- Pairing form actions ----------------------------------------------------------
+
+    fun onUrlChange(value: String) = local.update { it.copy(form = it.form.copy(url = value, error = null)) }
+
+    fun onCodeChange(value: String) {
+        val digits = value.filter(Char::isDigit).take(6)
+        local.update { it.copy(form = it.form.copy(code = digits, error = null)) }
+    }
+
+    fun onNameChange(value: String) = local.update { it.copy(form = it.form.copy(name = value)) }
+
+    fun pair() {
+        val form = local.value.form
+        if (form.busy) return
+        viewModelScope.launch {
+            local.update { it.copy(form = it.form.copy(busy = true, error = null)) }
+            when (val result = repo.pair(form.url, form.code, form.name)) {
+                is PairResult.Success ->
+                    local.update { it.copy(form = it.form.copy(busy = false)) }
+                is PairResult.Failed ->
+                    local.update { it.copy(form = it.form.copy(busy = false, error = result.reason)) }
+            }
+        }
+    }
+
+    // ---- Hidden gesture / PIN ----------------------------------------------------------
+
+    private val cornerTaps = ArrayDeque<Long>()
+
+    /** Records a tap in the hidden top-start corner; 5 within 3s reveals the unlock path. */
+    fun onSecretCornerTap() {
+        val now = System.currentTimeMillis()
+        cornerTaps.addLast(now)
+        while (cornerTaps.isNotEmpty() && now - cornerTaps.first() > SECRET_WINDOW_MS) cornerTaps.removeFirst()
+        if (cornerTaps.size >= SECRET_TAPS) {
+            cornerTaps.clear()
+            // If no exit PIN has been set yet, don't lock the volunteer out of maintenance.
+            val hasPin = ui.value.config?.pinHash?.isNotBlank() == true
+            local.update { it.copy(overlay = if (hasPin) Overlay.Pin else Overlay.Maintenance) }
+        }
+    }
+
+    fun submitPin(pin: String) {
+        val state = local.value
+        val now = System.currentTimeMillis()
+        if (state.pin.verifying || now < state.pin.lockedUntilMs) return
+        val hash = ui.value.config?.pinHash.orEmpty()
+        viewModelScope.launch {
+            local.update { it.copy(pin = it.pin.copy(verifying = true, wrong = false)) }
+            val ok = hash.isNotBlank() && repo.verifyPin(pin, hash)
+            if (ok) {
+                repo.log("info", "kiosk_unlocked")
+                local.update { it.copy(overlay = Overlay.Maintenance, pin = PinState()) }
+            } else {
+                local.update {
+                    val attempts = it.pin.attempts + 1
+                    it.copy(pin = it.pin.copy(verifying = false, wrong = true, attempts = attempts, lockedUntilMs = backoffUntil(attempts)))
+                }
+                repo.log("warn", "pin_failed")
+            }
+        }
+    }
+
+    fun closeOverlay() = local.update { it.copy(overlay = Overlay.None, pin = it.pin.copy(wrong = false)) }
+
+    /** Wipe the local pairing and return to the pairing screen (re-pair / after revoke). */
+    fun rePair() {
+        viewModelScope.launch {
+            repo.clearPairing()
+            local.update {
+                it.copy(
+                    overlay = Overlay.None,
+                    rePair = null,
+                    pin = PinState(),
+                    form = PairingForm(name = Build.MODEL ?: "Kiosk"),
+                )
+            }
+        }
+    }
+
+    // ---- Heartbeat loop ----------------------------------------------------------------
+
+    private fun startHeartbeatLoop() {
+        if (heartbeatLoop?.isActive == true) return
+        heartbeatLoop = viewModelScope.launch {
+            while (isActive) {
+                val battery = DeviceStatus.battery(appContext)
+                local.update { it.copy(battery = battery.level, charging = battery.charging) }
+                when (val outcome = repo.heartbeat(battery.level, battery.charging, readerStatus = "not_connected")) {
+                    is HeartbeatOutcome.Ok -> {
+                        local.update { it.copy(lastHeartbeatMs = System.currentTimeMillis(), online = true) }
+                        if (outcome.identify) flashIdentify()
+                    }
+                    HeartbeatOutcome.Revoked ->
+                        // repo already wiped the pairing → the pairing flow flips us to Unpaired,
+                        // returning the volunteer to the pairing screen (no lockout for a revoke).
+                        local.update { it.copy(online = false) }
+                    HeartbeatOutcome.CertMismatch ->
+                        local.update { it.copy(rePair = RePairReason.CertChanged, online = false) }
+                    HeartbeatOutcome.NetworkError ->
+                        local.update { it.copy(online = false) }
+                    HeartbeatOutcome.NotPaired -> return@launch
+                }
+                repo.flushLogs()
+                delay(HEARTBEAT_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun stopHeartbeatLoop() {
+        heartbeatLoop?.cancel()
+        heartbeatLoop = null
+    }
+
+    private var identifyJob: Job? = null
+
+    private fun flashIdentify() {
+        identifyJob?.cancel()
+        identifyJob = viewModelScope.launch {
+            local.update { it.copy(identify = true) }
+            delay(IDENTIFY_MS)
+            local.update { it.copy(identify = false) }
+        }
+    }
+
+    // ---- Helpers -----------------------------------------------------------------------
+
+    private fun buildDiagnostics(pairing: PairingRecord?, l: Local) = Diagnostics(
+        battery = l.battery,
+        charging = l.charging,
+        readerStatus = "not_connected",
+        appVersion = DeviceStatus.appVersion(appContext),
+        pinnedCertSha256 = pairing?.certSha256,
+        deviceId = pairing?.deviceId,
+        serverUrl = pairing?.serverUrl,
+        lastHeartbeatMs = l.lastHeartbeatMs,
+        online = l.online,
+    )
+
+    /** Exponential backoff after repeated wrong PINs; no lockout for the first few attempts. */
+    private fun backoffUntil(attempts: Int): Long {
+        if (attempts < FREE_ATTEMPTS) return 0L
+        val steps = attempts - FREE_ATTEMPTS
+        val seconds = (BACKOFF_BASE_SECONDS shl steps).coerceAtMost(MAX_BACKOFF_SECONDS)
+        return System.currentTimeMillis() + seconds * 1000L
+    }
+
+    private companion object {
+        const val HEARTBEAT_INTERVAL_MS = 45_000L
+        const val IDENTIFY_MS = 4_000L
+        const val SECRET_TAPS = 5
+        const val SECRET_WINDOW_MS = 3_000L
+        const val FREE_ATTEMPTS = 3
+        const val BACKOFF_BASE_SECONDS = 5L
+        const val MAX_BACKOFF_SECONDS = 300L
+    }
+}

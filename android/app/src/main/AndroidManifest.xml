@@ -9,6 +9,15 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
+      Slice 4 networking: the tablet talks HTTPS to the LAN server (pairing, heartbeats,
+      config, logs) and — in later slices — to Stripe. ACCESS_NETWORK_STATE lets WorkManager's
+      CONNECTED constraint and our "internet down" messaging read connectivity. Everything is
+      OUTBOUND only; nothing is exposed inbound.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
       TODO (later slices): permissions arrive with the features that need them.
         - Reader over Bluetooth (API 31+): BLUETOOTH_SCAN, BLUETOOTH_CONNECT
         - Reader over Bluetooth (pre-31): ACCESS_FINE_LOCATION

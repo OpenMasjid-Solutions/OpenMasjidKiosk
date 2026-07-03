@@ -29,6 +29,7 @@ import { getAppInfo, getSession, login, sendTestNotification, setupAdmin, type A
 import { withBase, stripBase } from './base';
 import { useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
 import { PaymentsSection } from './payments';
+import { DevicesSection } from './devices';
 import { Brand, Clock, Crescent, ProfileMenu, Scene } from './ui';
 
 const SOURCE_URL = 'https://github.com/OpenMasjid-Solutions/OpenMasjidKiosk';
@@ -257,34 +258,9 @@ function DashboardTab({ session, embedded }: { session: Session; embedded: boole
 
 // ── Devices tab ───────────────────────────────────────────────────────────────
 function DevicesTab() {
-  const [showInfo, setShowInfo] = useState(false);
   return (
-    <section className="glass panel">
-      <div className="card-head">
-        <MonitorSmartphone size={18} className="panel-ico" aria-hidden="true" />
-        <div className="card-head__main">
-          <h2 className="section-title-inline">Kiosks</h2>
-          <p className="muted">Pair and manage the tablets running your giving screen.</p>
-        </div>
-      </div>
-
-      <div className="empty-state">
-        <div className="empty-emblem" aria-hidden="true">
-          <MonitorSmartphone size={26} />
-        </div>
-        <p className="empty-title">No kiosks paired yet</p>
-        <p className="muted">When you pair a tablet it will show up here with its status, battery and reader.</p>
-        <button className="btn btn--primary" onClick={() => setShowInfo((v) => !v)}>
-          <Plus size={16} /> Add kiosk
-        </button>
-        {showInfo && (
-          <div className="pair-hint pair-hint--block">
-            Adding a kiosk generates a single-use <b>6-digit pairing code</b> that you type into the tablet app to link it
-            securely — no camera or QR needed. Full pairing lands in the next update.
-          </div>
-        )}
-      </div>
-
+    <>
+      <DevicesSection />
       <p className="hint devices-note">
         First time?{' '}
         <a href={withBase('/new')} onClick={(e) => { e.preventDefault(); navigate('/new'); }}>
@@ -292,7 +268,7 @@ function DevicesTab() {
         </a>{' '}
         on your tablet.
       </p>
-    </section>
+    </>
   );
 }
 

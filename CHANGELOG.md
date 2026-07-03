@@ -3,6 +3,20 @@
 
 # Changelog
 
+## 0.3.0
+- **Pair a tablet & manage your kiosks** (Admin → Devices): generate a single-use **6-digit
+  pairing code** (no camera/QR) and type it into the kiosk app; then see each kiosk's live
+  status (online, battery + a "not charging" warning, reader, app version), rename, identify
+  (flash it), view its logs, and revoke it. Set the kiosk **exit PIN** here — staff type it
+  to leave the giving screen; it's verified on the tablet even offline.
+- **Android kiosk app:** pairs over **pinned HTTPS** with trust-on-first-use certificate
+  pinning + a device token; runs as a Lock-Task launcher (device-owner) with a screen-
+  pinning fallback and keep-awake; a hidden 5-tap corner gesture opens the PIN-protected
+  maintenance screen (diagnostics, re-pair, exit); WorkManager + a foreground loop send
+  heartbeats. (The card reader + the giving flow are the next updates.)
+- Security: device tokens are HMAC-hashed at rest and revocable; pairing codes are single-
+  use, 10-minute, and rate-limited; the exit PIN is a portable scrypt hash.
+
 ## 0.2.1
 - **Fix: the OpenMasjidOS wallpaper now shows in the kiosk.** Custom wallpaper *images* are
   proxied through the app's own HTTPS origin (`/api/public/wallpaper`) — the platform serves

@@ -413,17 +413,20 @@ async function main(): Promise<void> {
   });
 
   // ── Kiosk (device-token) routes ─────────────────────────────────────────────
-  /** Resolve the calling device from its token header; sends 401 + returns null if unknown
-   *  or revoked (the tablet treats 401 as "unpaired" → back to the pairing screen). */
-  const authDevice = (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply): Device | null => {
+  /** The device for the request's token, INCLUDING a revoked one (or null if the token is
+   *  malformed/unknown). Callers decide how to treat `.revoked`. */
+  const resolveDevice = (req: import('fastify').FastifyRequest): Device | null => {
     const bearer = typeof req.headers.authorization === 'string' ? req.headers.authorization.replace(/^Bearer\s+/i, '') : '';
     const raw = (req.headers['x-device-token'] as string | undefined) || bearer || '';
-    if (!/^[a-f0-9]{64}$/i.test(raw)) {
-      reply.code(401).send({ error: 'This kiosk isn’t paired.' });
-      return null;
-    }
-    const d = store.getDeviceByTokenHash(store.hashDeviceToken(raw));
-    if (!d) {
+    if (!/^[a-f0-9]{64}$/i.test(raw)) return null;
+    return store.getDeviceByTokenHash(store.hashDeviceToken(raw));
+  };
+
+  /** Require a live (non-revoked) device; 401 otherwise. Used by config/logs/connection-token
+   *  (heartbeat handles revoked specially, returning `revoked:true` so the tablet re-pairs). */
+  const authDevice = (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply): Device | null => {
+    const d = resolveDevice(req);
+    if (!d || d.revoked) {
       reply.code(401).send({ error: 'This kiosk isn’t paired.' });
       return null;
     }
@@ -462,8 +465,10 @@ async function main(): Promise<void> {
     configVersion: z.number().int().optional(),
   });
   app.post('/api/kiosk/heartbeat', async (req, reply) => {
-    const d = authDevice(req, reply);
-    if (!d) return;
+    const d = resolveDevice(req);
+    if (!d) return reply.code(401).send({ error: 'This kiosk isn’t paired.' });
+    // A revoked device gets a clean signal (not a 401) so the tablet wipes + re-pairs.
+    if (d.revoked) return { data: { configVersion: store.getConfigVersion(), identify: false, revoked: true } };
     const parsed = HeartbeatBody.safeParse(req.body ?? {});
     if (parsed.success) store.updateHeartbeat(d.id, parsed.data);
     return { data: { configVersion: store.getConfigVersion(), identify: store.consumeIdentify(d.id), revoked: false } };

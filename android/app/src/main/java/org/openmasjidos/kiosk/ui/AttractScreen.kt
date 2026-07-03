@@ -48,21 +48,29 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * The attract screen — a themed placeholder for slice 1.
+ * The attract screen — still a placeholder until the giving flow lands (a later slice), but now
+ * personalised from the synced config: it shows the masjid's name and attract title once paired.
  *
- * It shows the ambient Sakīna scene, a geometric crescent-and-star accent, the app name,
- * and a large "Tap to donate" call-to-action. The button is intentionally non-functional:
- * pairing, the reader, and the real giving flow arrive in later slices.
+ * @param masjidName the masjid's name from config, or null before the first config sync.
+ * @param attractTitle an admin-set headline, or null to fall back to the default tagline.
+ * @param identify when true, briefly brightens the screen so an admin pressing "identify" in
+ *   Admin → Devices can spot this exact tablet on the wall.
  *
  * Design notes:
  *  - The scene is dark in BOTH themes (per DESIGN.md §4), so on-scene text uses the fixed
  *    light "on-scene" inks rather than the theme's onBackground (which would flip to dark
  *    in light mode and vanish here).
- *  - No animation yet — static by design, which also satisfies prefers-reduced-motion.
+ *  - The identify highlight is a static opacity overlay (no motion), which also satisfies
+ *    prefers-reduced-motion.
  *  - RTL is handled automatically by Compose; nothing here forces a layout direction.
  */
 @Composable
-fun AttractScreen(modifier: Modifier = Modifier) {
+fun AttractScreen(
+    modifier: Modifier = Modifier,
+    masjidName: String? = null,
+    attractTitle: String? = null,
+    identify: Boolean = false,
+) {
     val scene = Brush.linearGradient(
         colors = listOf(SceneStart, SceneMid, SceneEnd),
         start = Offset(0f, 0f),
@@ -85,7 +93,7 @@ fun AttractScreen(modifier: Modifier = Modifier) {
             Spacer(Modifier.height(28.dp))
 
             Text(
-                text = stringResource(R.string.app_name),
+                text = masjidName?.takeIf { it.isNotBlank() } ?: stringResource(R.string.app_name),
                 style = MaterialTheme.typography.displayMedium,
                 color = InkDark,
                 textAlign = TextAlign.Center,
@@ -94,7 +102,7 @@ fun AttractScreen(modifier: Modifier = Modifier) {
             Spacer(Modifier.height(10.dp))
 
             Text(
-                text = stringResource(R.string.attract_tagline),
+                text = attractTitle?.takeIf { it.isNotBlank() } ?: stringResource(R.string.attract_tagline),
                 style = MaterialTheme.typography.bodyLarge,
                 color = InkMutedDark,
                 textAlign = TextAlign.Center,
@@ -103,7 +111,7 @@ fun AttractScreen(modifier: Modifier = Modifier) {
             Spacer(Modifier.height(44.dp))
 
             Button(
-                onClick = { /* Non-functional in slice 1 — giving flow comes later. */ },
+                onClick = { /* Non-functional until the giving flow slice. */ },
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -128,6 +136,15 @@ fun AttractScreen(modifier: Modifier = Modifier) {
                 .align(Alignment.BottomCenter)
                 .padding(24.dp),
         )
+
+        // Identify: a static, high-opacity gold wash so the admin can pick out this tablet.
+        if (identify) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(GoldDark.copy(alpha = 0.28f)),
+            )
+        }
     }
 }
 

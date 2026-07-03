@@ -325,6 +325,76 @@ h1, h2, h3, p, ul { margin: 0; }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ── Devices (fleet management) ──────────────────────────────────────────────── */
+/* Big single-use pairing code the volunteer types into the tablet. */
+.pair-box {
+  display: flex; flex-direction: column; align-items: center; gap: 0.5rem; text-align: center;
+  padding: 1.1rem 1rem; border-radius: var(--radius-button);
+  background: var(--color-primary-subtle); box-shadow: inset 0 0 0 1px var(--color-border);
+}
+.pair-code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: clamp(2.2rem, 9vw, 3.2rem); font-weight: 700; line-height: 1.1;
+  letter-spacing: 0.35em; padding-inline-start: 0.35em; /* re-centre against trailing spacing */
+  color: var(--color-primary); font-variant-numeric: tabular-nums;
+}
+.pair-instr { max-width: 22rem; line-height: 1.5; }
+.pair-clock { font-weight: 700; color: var(--color-ink); font-variant-numeric: tabular-nums; }
+
+/* One kiosk in the fleet list. */
+.device-row { padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.7rem; }
+.device-row__head { display: flex; align-items: flex-start; gap: 0.6rem; }
+.device-row__head .status-dot { margin-block-start: 0.5rem; }
+.device-row__id { min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.device-name {
+  display: inline-flex; align-items: center; gap: 0.35rem; align-self: flex-start;
+  background: none; border: 0; padding: 0; text-align: start;
+  font-family: var(--font-display); font-size: 1.02rem; font-weight: 700; color: var(--color-ink);
+}
+.device-name svg { color: var(--color-ink-faint); transition: color var(--dur-micro) ease; }
+.device-name:hover svg { color: var(--color-primary); }
+.device-sub { font-size: 0.8rem; }
+.device-name-input { max-width: 12rem; padding-block: 0.4rem; }
+.device-meta { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.device-warn { color: var(--color-warning); }
+.device-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.device-remove-btn:hover { color: var(--color-danger); }
+.device-danger { background: var(--color-danger); color: var(--color-on-primary); }
+.device-danger:hover { background: var(--color-danger); filter: brightness(1.06); }
+
+/* Per-device activity log modal. */
+.modal-scrim {
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+  padding: 1rem; background: var(--scene-vignette);
+  animation: enter var(--dur-micro) var(--ease-settle) both;
+}
+.modal {
+  width: min(34rem, 100%); max-height: min(80vh, 40rem);
+  display: flex; flex-direction: column; padding: 1.1rem 1.2rem;
+}
+.modal-head { display: flex; align-items: flex-start; gap: 0.6rem; margin-block-end: 0.8rem; }
+.modal-head .card-head__main { flex: 1; }
+.modal-body { overflow-y: auto; min-height: 0; }
+.log-list { display: flex; flex-direction: column; list-style: none; padding: 0; }
+.log-item { display: flex; gap: 0.6rem; padding: 0.55rem 0.1rem; border-block-end: 1px solid var(--color-border); }
+.log-item:last-child { border-block-end: 0; }
+.log-dot {
+  flex-shrink: 0; width: 0.5rem; height: 0.5rem; border-radius: 50%;
+  margin-block-start: 0.35rem; background: var(--color-ink-faint);
+}
+.log-item--info .log-dot { background: var(--color-primary); }
+.log-item--warn .log-dot { background: var(--color-warning); }
+.log-item--error .log-dot { background: var(--color-danger); }
+.log-body { min-width: 0; flex: 1; }
+.log-top { display: flex; justify-content: space-between; gap: 0.6rem; align-items: baseline; }
+.log-event { font-weight: 600; font-size: 0.9rem; }
+.log-item--warn .log-event { color: var(--color-warning); }
+.log-item--error .log-event { color: var(--color-danger); }
+.log-time { font-size: 0.75rem; flex-shrink: 0; }
+.log-detail { font-size: 0.82rem; line-height: 1.5; margin-block-start: 0.15rem; word-break: break-word; }
+
+.pin-input { max-width: 12rem; letter-spacing: 0.25em; font-variant-numeric: tabular-nums; }
+
 /* ── Readability: text sitting directly on the wallpaper (outside a glass card) ─ */
 /* On-scene text uses the scene ink (light on the dark presets, in BOTH themes; flips for
    a light custom wallpaper image via data-scene). Glass-card text keeps --color-ink. */

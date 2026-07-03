@@ -357,9 +357,10 @@ export class Store {
     return r ? this.rowToDevice(r) : null;
   }
 
-  /** Look up a device by its token hash — the auth path. Returns null if revoked/unknown. */
+  /** Look up a device by its token hash (INCLUDING revoked ones — callers check `.revoked`).
+   *  Heartbeat returns `revoked:true` so the tablet can re-pair cleanly; other routes 401. */
   getDeviceByTokenHash(hash: string): Device | null {
-    const r = this.db.prepare('SELECT * FROM devices WHERE token_hash = ? AND revoked = 0').get(hash) as Record<string, unknown> | undefined;
+    const r = this.db.prepare('SELECT * FROM devices WHERE token_hash = ?').get(hash) as Record<string, unknown> | undefined;
     return r ? this.rowToDevice(r) : null;
   }
 

@@ -194,3 +194,67 @@ export const chooseLocation = (id: string) =>
   request<{ location: TerminalLocation }>('/api/admin/payments/location', { method: 'PUT', body: JSON.stringify({ id }) });
 
 export const testPayments = () => request<TestPaymentsResult>('/api/admin/payments/test', { method: 'POST' });
+
+// ── Devices (fleet management) ─────────────────────────────────────────────────
+// The Devices page pairs, renames, and manages the tablets running the giving screen.
+// The server owns the truth (heartbeats, revocation, PIN hash); the browser just renders.
+
+/** A paired kiosk tablet as the Devices page renders it. `createdAt`/`lastSeen` are ISO
+ *  strings; `battery`/`readerBattery` are 0–100 (or -1 when unknown). `online` is derived
+ *  server-side from the last heartbeat. */
+export interface Device {
+  id: string;
+  name: string;
+  platform: string;
+  createdAt: string;
+  lastSeen: string;
+  /** 0–100, or -1 when the tablet hasn't reported a battery level. */
+  battery: number;
+  charging: boolean;
+  readerStatus: string;
+  readerSerial: string;
+  readerBattery: number;
+  appVersion: string;
+  configVersion: number;
+  /** True while the kiosk has been asked to flash (identify). */
+  identify: boolean;
+  revoked: boolean;
+  online: boolean;
+}
+
+/** One structured log line from a kiosk (payments, reader events, errors). */
+export interface DeviceLog {
+  ts: string;
+  level: 'info' | 'warn' | 'error';
+  event: string;
+  detail: string;
+}
+
+/** A single-use pairing code the volunteer types into the tablet app (TTL ~10 min). */
+export interface PairCode {
+  /** Six digits. */
+  code: string;
+  /** Epoch milliseconds when the code stops working. */
+  expiresAt: number;
+}
+
+export const getDevices = () => request<{ devices: Device[] }>('/api/admin/devices');
+
+export const createPairCode = () => request<PairCode>('/api/admin/devices/pair-code', { method: 'POST' });
+
+export const renameDevice = (id: string, name: string) =>
+  request<Device>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ name }) });
+
+export const revokeDevice = (id: string) =>
+  request<{ ok: true }>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+export const identifyDevice = (id: string) =>
+  request<{ ok: true }>(`/api/admin/devices/${encodeURIComponent(id)}/identify`, { method: 'POST' });
+
+export const getDeviceLogs = (id: string) =>
+  request<{ logs: DeviceLog[] }>(`/api/admin/devices/${encodeURIComponent(id)}/logs`);
+
+/** Set (4–8 digits) or clear (empty string) the kiosk exit PIN. The server hashes it and
+ *  syncs it to every kiosk; a non-empty, non-4–8-digit value 400s. */
+export const setKioskPin = (pin: string) =>
+  request<{ set: boolean }>('/api/admin/pin', { method: 'PUT', body: JSON.stringify({ pin }) });
