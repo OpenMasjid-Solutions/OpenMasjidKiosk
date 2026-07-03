@@ -17,8 +17,8 @@ import fastifyCookie from '@fastify/cookie';
 import { z } from 'zod';
 import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
-import { Store } from './store';
-import { COOKIE, cookieOptions, hashPassword, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
+import { Store, type Device } from './store';
+import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache } from './fabric';
 import { LoginLimiter } from './rateLimit';
 import {
@@ -355,6 +355,149 @@ async function main(): Promise<void> {
           ? 'Stripe didn’t accept the secret key.'
           : 'Couldn’t reach Stripe Terminal. Check the account and your connection.';
       return { data: { ok: false, message } };
+    }
+  });
+
+  // ── Devices: pairing, fleet management, kiosk PIN ───────────────────────────
+  const pairLimiter = new LoginLimiter(); // brute-force guard for 6-digit pairing codes
+
+  const ONLINE_MS = 120_000;
+  const deviceView = (d: Device) => ({
+    ...d,
+    online: !!d.lastSeen && Date.now() - Date.parse(d.lastSeen) < ONLINE_MS,
+  });
+
+  // Admin: list the fleet.
+  app.get('/api/admin/devices', { preHandler: requireAdmin }, async () => ({ data: { devices: store.listDevices().map(deviceView) } }));
+
+  // Admin: mint a single-use 6-digit pairing code (TTL 10 min) to type into a tablet.
+  app.post('/api/admin/devices/pair-code', { preHandler: requireAdmin }, async () => ({ data: store.createPairingCode(makePairingCode()) }));
+
+  app.put('/api/admin/devices/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ name: z.string().max(80) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please enter a name.' });
+    const d = store.renameDevice((req.params as { id: string }).id, parsed.data.name.trim());
+    if (!d) return reply.code(404).send({ error: 'Kiosk not found.' });
+    return { data: deviceView(d) };
+  });
+
+  app.delete('/api/admin/devices/:id', { preHandler: requireAdmin }, async (req) => {
+    store.revokeDevice((req.params as { id: string }).id);
+    return { data: { ok: true } };
+  });
+
+  app.post('/api/admin/devices/:id/identify', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!store.getDevice(id)) return reply.code(404).send({ error: 'Kiosk not found.' });
+    store.setIdentify(id);
+    return { data: { ok: true } };
+  });
+
+  app.get('/api/admin/devices/:id/logs', { preHandler: requireAdmin }, async (req) => ({
+    data: { logs: store.listLogs((req.params as { id: string }).id) },
+  }));
+
+  // Admin: set/clear the kiosk exit PIN (4–8 digits). Stored as a scrypt hash + synced to
+  // kiosks in the config; the tablet verifies it OFFLINE. Bumps the config version.
+  app.put('/api/admin/pin', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ pin: z.string() }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please enter a PIN.' });
+    const pin = parsed.data.pin.trim();
+    if (pin === '') {
+      store.setPinHash('');
+      return { data: { set: false } };
+    }
+    if (!/^\d{4,8}$/.test(pin)) return reply.code(400).send({ error: 'The PIN must be 4 to 8 digits.' });
+    store.setPinHash(hashPin(pin));
+    return { data: { set: true } };
+  });
+
+  // ── Kiosk (device-token) routes ─────────────────────────────────────────────
+  /** Resolve the calling device from its token header; sends 401 + returns null if unknown
+   *  or revoked (the tablet treats 401 as "unpaired" → back to the pairing screen). */
+  const authDevice = (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply): Device | null => {
+    const bearer = typeof req.headers.authorization === 'string' ? req.headers.authorization.replace(/^Bearer\s+/i, '') : '';
+    const raw = (req.headers['x-device-token'] as string | undefined) || bearer || '';
+    if (!/^[a-f0-9]{64}$/i.test(raw)) {
+      reply.code(401).send({ error: 'This kiosk isn’t paired.' });
+      return null;
+    }
+    const d = store.getDeviceByTokenHash(store.hashDeviceToken(raw));
+    if (!d) {
+      reply.code(401).send({ error: 'This kiosk isn’t paired.' });
+      return null;
+    }
+    return d;
+  };
+
+  // Pair a tablet with a single-use 6-digit code (typed by the volunteer). Rate-limited on
+  // the real TCP peer so the 1e6 code space can't be brute-forced.
+  const PairBody = z.object({ code: z.string().max(12), name: z.string().max(80).optional(), platform: z.string().max(40).optional() });
+  app.post('/api/kiosk/pair', async (req, reply) => {
+    const peer = req.socket.remoteAddress ?? 'unknown';
+    const wait = pairLimiter.retryAfterMs(peer);
+    if (wait > 0) return reply.code(429).send({ error: `Too many attempts. Try again in ${Math.ceil(wait / 1000)}s.` });
+    const parsed = PairBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Enter the 6-digit pairing code from Admin → Devices.' });
+    const code = parsed.data.code.trim();
+    if (!store.consumePairingCode(code)) {
+      pairLimiter.fail(peer);
+      return reply.code(400).send({ error: 'That pairing code is invalid or has expired. Generate a fresh one in Admin → Devices.' });
+    }
+    pairLimiter.succeed(peer);
+    const token = makeDeviceToken();
+    const device = store.createDevice({ name: parsed.data.name?.trim() || 'Kiosk', platform: parsed.data.platform?.trim() || '', tokenHash: store.hashDeviceToken(token) });
+    store.addLogs(device.id, [{ level: 'info', event: 'paired', detail: `platform=${device.platform}` }]);
+    log.info(`kiosk paired: ${device.id}`);
+    return { data: { deviceToken: token, deviceId: device.id, configVersion: store.getConfigVersion() } };
+  });
+
+  const HeartbeatBody = z.object({
+    battery: z.number().min(0).max(100).optional(),
+    charging: z.boolean().optional(),
+    readerStatus: z.string().max(40).optional(),
+    readerSerial: z.string().max(80).optional(),
+    readerBattery: z.number().min(0).max(100).optional(),
+    appVersion: z.string().max(40).optional(),
+    configVersion: z.number().int().optional(),
+  });
+  app.post('/api/kiosk/heartbeat', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const parsed = HeartbeatBody.safeParse(req.body ?? {});
+    if (parsed.success) store.updateHeartbeat(d.id, parsed.data);
+    return { data: { configVersion: store.getConfigVersion(), identify: store.consumeIdentify(d.id), revoked: false } };
+  });
+
+  app.get('/api/kiosk/config', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    return { data: store.getKioskConfig() };
+  });
+
+  const LogsBody = z.object({
+    entries: z.array(z.object({ level: z.string().optional(), event: z.string().optional(), detail: z.string().optional(), ts: z.number().optional() })).max(200),
+  });
+  app.post('/api/kiosk/logs', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const parsed = LogsBody.safeParse(req.body);
+    if (parsed.success) store.addLogs(d.id, parsed.data.entries);
+    return { data: { ok: true } };
+  });
+
+  // The tablet's ConnectionTokenProvider calls this — the only Stripe credential the tablet
+  // ever gets (short-lived). Minted server-side from the resolved account + Location.
+  app.post('/api/kiosk/connection-token', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const acct = await resolveAccount();
+    if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
+    try {
+      const secret = await createConnectionToken(acct.keys.secretKey, store.getLocation()?.id);
+      return { data: { secret } };
+    } catch {
+      return reply.code(502).send({ error: 'Couldn’t reach Stripe Terminal. Please try again.' });
     }
   });
 

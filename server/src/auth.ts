@@ -83,6 +83,49 @@ export function verifyToken(secret: Buffer, token: string | undefined, aud: Audi
   }
 }
 
+// ── Kiosk exit PIN ──────────────────────────────────────────────────────────
+// The PIN is set in the admin UI and synced to the tablet in the device config, where the
+// app verifies it OFFLINE. So it's hashed in a single self-describing string both sides can
+// parse: `scrypt$<N>$<r>$<p>$<saltB64>$<hashB64>`. N is modest (2^14) — a PIN is short and
+// rate-limited, and this must be fast on a tablet and a Raspberry Pi.
+const PIN_N = 2 ** 14;
+const PIN_R = 8;
+const PIN_P = 1;
+
+export function hashPin(pin: string): string {
+  const salt = crypto.randomBytes(16);
+  const dk = crypto.scryptSync(pin, salt, 32, { N: PIN_N, r: PIN_R, p: PIN_P, maxmem: 64 * 1024 * 1024 });
+  return `scrypt$${PIN_N}$${PIN_R}$${PIN_P}$${salt.toString('base64')}$${dk.toString('base64')}`;
+}
+
+export function verifyPin(pin: string, stored: string): boolean {
+  try {
+    const parts = stored.split('$');
+    if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+    const N = Number(parts[1]);
+    const r = Number(parts[2]);
+    const p = Number(parts[3]);
+    const salt = Buffer.from(parts[4], 'base64');
+    const expected = Buffer.from(parts[5], 'base64');
+    const dk = crypto.scryptSync(pin, salt, expected.length, { N, r, p, maxmem: 64 * 1024 * 1024 });
+    return dk.length === expected.length && crypto.timingSafeEqual(dk, expected);
+  } catch {
+    return false;
+  }
+}
+
+/** A long-lived device (tablet) token: a random 256-bit secret. Only its HMAC is stored
+ *  server-side (see store.hashDeviceToken); the raw token is shown to the tablet once. */
+export function makeDeviceToken(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+/** A single-use, human-typeable 6-digit pairing code. Rate-limited + short TTL server-side,
+ *  so the 1e6 space can't be brute-forced. */
+export function makePairingCode(): string {
+  return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+}
+
 // Set COOKIE_SECURE=1 for HTTPS deployments (we set it in the image, since the platform
 // serves us over HTTPS) so the session cookie is only sent over HTTPS. Default OFF so a
 // plain-HTTP standalone `docker compose up` on a LAN still signs in.

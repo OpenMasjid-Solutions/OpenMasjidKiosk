@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { hashSecret, verifySecret, makeToken, verifyToken } from './auth';
+import { hashSecret, verifySecret, makeToken, verifyToken, hashPin, verifyPin, makePairingCode, makeDeviceToken } from './auth';
 
 test('scrypt hash verifies the right secret and rejects the wrong one', () => {
   const cred = hashSecret('correct horse battery staple');
@@ -42,4 +42,17 @@ test('session token round-trips and enforces signature, expiry and audience', ()
   // Expired.
   const expired = makeToken(secret, -1);
   assert.equal(verifyToken(secret, expired, 'admin'), false);
+});
+
+test('kiosk PIN hash (portable scrypt$ string) verifies, rejects wrong/garbage', () => {
+  const h = hashPin('1379');
+  assert.match(h, /^scrypt\$\d+\$\d+\$\d+\$[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+$/);
+  assert.equal(verifyPin('1379', h), true);
+  assert.equal(verifyPin('0000', h), false);
+  assert.equal(verifyPin('1379', 'garbage'), false);
+});
+
+test('pairing code is 6 digits; device token is 256-bit hex', () => {
+  assert.match(makePairingCode(), /^\d{6}$/);
+  assert.match(makeDeviceToken(), /^[a-f0-9]{64}$/);
 });
