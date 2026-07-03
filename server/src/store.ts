@@ -364,8 +364,10 @@ export class Store {
     return r ? this.rowToDevice(r) : null;
   }
 
+  /** The admin fleet list — excludes revoked devices so "Remove" makes a kiosk disappear.
+   *  (The revoked row is kept for its token so heartbeat can still answer `revoked:true`.) */
   listDevices(): Device[] {
-    return (this.db.prepare('SELECT * FROM devices ORDER BY created_at').all() as Record<string, unknown>[]).map((r) => this.rowToDevice(r));
+    return (this.db.prepare('SELECT * FROM devices WHERE revoked = 0 ORDER BY created_at').all() as Record<string, unknown>[]).map((r) => this.rowToDevice(r));
   }
 
   renameDevice(id: string, name: string): Device | null {

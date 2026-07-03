@@ -57,6 +57,29 @@ async function main(): Promise<void> {
 
   await app.register(fastifyCookie);
 
+  // ── Gently upgrade insecure browser hits to HTTPS ────────────────────────────
+  // The platform terminates TLS and serves us over HTTPS on a dedicated port (setting
+  // x-forwarded-proto=https), but it doesn't tell the container that port. So we LEARN our
+  // external HTTPS host from proxied secure requests, then 308-redirect insecure browser
+  // navigations there — only to the SAME hostname (never an attacker-supplied one), and
+  // never for API/health/download calls. Stripe's card field also needs a secure context.
+  let lastHttpsHost = '';
+  const hostOnly = (h: string) => h.split(':')[0].toLowerCase();
+  app.addHook('onRequest', async (req, reply) => {
+    const proto = String(req.headers['x-forwarded-proto'] ?? '');
+    const fwdHost = String(req.headers['x-forwarded-host'] ?? '');
+    if (proto === 'https') {
+      if (/^[a-z0-9.-]+(:\d+)?$/i.test(fwdHost)) lastHttpsHost = fwdHost;
+      return; // already secure
+    }
+    if (req.method !== 'GET' || !lastHttpsHost) return;
+    const reqHost = String(req.headers.host ?? '');
+    if (reqHost && hostOnly(reqHost) !== hostOnly(lastHttpsHost)) return; // never cross-host
+    const url = req.raw.url ?? '/';
+    if (url.startsWith('/api') || url.startsWith('/healthz') || url.startsWith('/download')) return;
+    return reply.redirect(`https://${lastHttpsHost}${url}`, 308);
+  });
+
   /** A request is authenticated if it carries a valid local session cookie — minted by
    *  first-run setup, password login, or a confirmed OpenMasjidOS SSO check. */
   const isAuthed = (cookie: string | undefined): boolean => verifyToken(store.secret, cookie, 'admin');

@@ -3,6 +3,18 @@
 
 # Changelog
 
+## 0.3.1
+- **Fix — pairing now works.** The tablet was reading responses at the top level but the
+  server wraps them in a `{ data }` envelope, so pairing (and every kiosk call) failed with
+  "something went wrong" even though the server had already created the device. The kiosk
+  app now unwraps the envelope.
+- **Fix — "Remove" hides a kiosk.** Revoked devices are excluded from the Devices list, so
+  removing a kiosk makes it disappear (its token still dies, so the tablet returns to
+  pairing on its next heartbeat).
+- **HTTP → HTTPS.** Insecure browser visits are upgraded to HTTPS automatically (the app
+  learns its HTTPS address from the platform proxy) so no one lands on a non-secure page.
+  (The tablet already refuses anything but pinned HTTPS.)
+
 ## 0.3.0
 - **Pair a tablet & manage your kiosks** (Admin → Devices): generate a single-use **6-digit
   pairing code** (no camera/QR) and type it into the kiosk app; then see each kiosk's live

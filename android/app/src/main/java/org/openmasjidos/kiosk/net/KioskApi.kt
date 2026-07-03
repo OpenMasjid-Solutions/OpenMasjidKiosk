@@ -134,7 +134,11 @@ class KioskApi(private val client: OkHttpClient) {
             if (!resp.isSuccessful) {
                 throw ApiException(resp.code, extractError(raw) ?: "HTTP ${resp.code}")
             }
-            return if (raw.isBlank()) JSONObject() else JSONObject(raw)
+            val obj = if (raw.isBlank()) JSONObject() else JSONObject(raw)
+            // The server wraps every success response in a { "data": … } envelope; the fields
+            // we want (deviceToken, config, …) live inside it. Unwrap it (fall back to the raw
+            // object for any endpoint that ever replies unwrapped).
+            return obj.optJSONObject("data") ?: obj
         }
     }
 
