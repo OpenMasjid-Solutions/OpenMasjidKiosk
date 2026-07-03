@@ -2,30 +2,37 @@
 // Copyright (C) 2026 OpenMasjid-Solutions
 
 /** The admin panel shell + the public /new setup page, with a tiny hand-rolled router.
- *  Slice 2 adds the auth gate: first-run setup or password login, single sign-on via
- *  OpenMasjidOS (with a local-password fallback so the panel never bricks), live appearance
- *  inheritance, and an About page with a Fabric notification test. Devices / Payments /
- *  Giving-screen / Donations sections arrive in later slices. */
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+ *  The shell mirrors the OpenMasjidOS dashboard: an ambient scene with a custom-wallpaper
+ *  inheritance, a top bar (brand + clock + profile menu) and a bottom dock for the four
+ *  sections (Dashboard, Devices, Analytics, Settings). Auth (first-run setup / password
+ *  login / SSO with a local-password fallback) gates everything but the public /new page.
+ *  Devices/Payments/Donations gain real data in later slices. */
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import {
   ArrowRight,
   Bell,
-  CreditCard,
+  CalendarDays,
+  Coins,
   Download,
   ExternalLink,
-  Info,
-  LogOut,
+  LayoutDashboard,
+  MonitorSmartphone,
   Palette,
+  Plus,
+  ReceiptText,
+  Settings,
   ShieldCheck,
   Smartphone,
+  TrendingUp,
 } from 'lucide-react';
-import { getAppInfo, getSession, login, logout, sendTestNotification, setupAdmin, type AppInfo, type NotifyTestResult, type Session } from './api';
+import { getAppInfo, getSession, login, sendTestNotification, setupAdmin, type AppInfo, type NotifyTestResult, type Session } from './api';
 import { withBase, stripBase } from './base';
-import { useOmosAppearanceSync } from './prefs';
-import { Crescent, ThemeToggle } from './ui';
+import { useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
+import { Brand, Clock, Crescent, ProfileMenu, Scene } from './ui';
 
 const SOURCE_URL = 'https://github.com/OpenMasjid-Solutions/OpenMasjidKiosk';
 
+/** Client-side navigation for pathname routes (the public /new page). */
 function navigate(to: string) {
   history.pushState(null, '', withBase(to));
   window.dispatchEvent(new PopStateEvent('popstate'));
@@ -36,6 +43,7 @@ export function App() {
   const [app, setApp] = useState<AppInfo | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const prefs = usePrefs();
 
   const reloadSession = useCallback(async () => {
     try {
@@ -58,72 +66,358 @@ export function App() {
   // Follow the dashboard's theme/wallpaper/accent live when opened from OpenMasjidOS.
   useOmosAppearanceSync(app?.embedded);
 
-  const isAdminArea = path !== '/new';
+  // On-scene text colour follows the WALLPAPER, not the light/dark toggle: preset
+  // wallpapers are dark → light on-scene text in both themes; a light custom wallpaper
+  // image flips data-scene to "light" so on-scene text goes dark and stays readable.
+  const sceneTone = useReadableTheme(prefs.wallpaperImage.trim() || undefined, 'dark');
+  useEffect(() => {
+    const html = document.documentElement;
+    if (sceneTone === 'light') html.setAttribute('data-scene', 'light');
+    else html.removeAttribute('data-scene');
+  }, [sceneTone]);
 
   return (
     <>
-      <div className="scene" aria-hidden="true" />
-      <div className="shell">
-        <header className="topbar">
-          <button className="brand" onClick={() => navigate('/')}>
-            <Crescent />
-            <span className="on-scene">
-              OpenMasjid <b>Kiosk</b>
-            </span>
-          </button>
-          <div className="spacer" />
-          {session?.authed && (
-            <button className="icon-btn" title="About" aria-label="About" onClick={() => navigate('/about')}>
-              <Info size={19} />
-            </button>
-          )}
-          <ThemeToggle />
-          {session?.authed && (
-            <button
-              className="icon-btn"
-              title="Sign out"
-              aria-label="Sign out"
-              onClick={async () => {
-                await logout().catch(() => {});
-                await reloadSession();
-                navigate('/');
-              }}
-            >
-              <LogOut size={19} />
-            </button>
-          )}
-        </header>
-
-        <main className="main">
-          {!loaded ? (
-            <div className="wrap">
-              <div className="glass-raised hero-card enter" aria-busy="true">
-                <div className="emblem">
-                  <Crescent size={30} />
-                </div>
-                <p className="muted">Loading…</p>
-              </div>
-            </div>
-          ) : path === '/new' ? (
+      <Scene />
+      {path === '/new' ? (
+        // Public tablet-setup page — no auth, no dock/profile.
+        <div className="shell">
+          <main className="main">
             <NewPage app={app} />
-          ) : !session?.authed ? (
+          </main>
+        </div>
+      ) : !loaded ? (
+        <div className="shell">
+          <main className="main">
+            <LoadingCard />
+          </main>
+        </div>
+      ) : !session?.authed ? (
+        // Not signed in → show only the auth card (no shell chrome).
+        <div className="shell">
+          <main className="main">
             <Auth session={session} onDone={reloadSession} />
-          ) : path === '/about' ? (
-            <About app={app} session={session} />
-          ) : (
-            <Dashboard session={session} />
-          )}
-        </main>
+          </main>
+        </div>
+      ) : (
+        <AdminShell app={app} session={session} />
+      )}
+    </>
+  );
+}
 
-        <footer className="foot">
-          <a href={SOURCE_URL} target="_blank" rel="noreferrer">
-            Source code <ExternalLink size={13} />
-          </a>
-          <span aria-hidden="true"> · </span>
-          AGPL-3.0 · v{app?.version ?? __APP_VERSION__}
-          {isAdminArea ? null : ''}
-        </footer>
+function LoadingCard() {
+  return (
+    <div className="wrap">
+      <div className="glass-raised hero-card enter" aria-busy="true">
+        <div className="emblem">
+          <Crescent size={30} />
+        </div>
+        <p className="muted">Loading…</p>
       </div>
+    </div>
+  );
+}
+
+// ── Admin shell: top bar + hash-routed tabs + bottom dock ─────────────────────
+type Tab = 'dashboard' | 'devices' | 'analytics' | 'settings';
+const TABS: { id: Tab; label: string; Icon: typeof LayoutDashboard }[] = [
+  { id: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard },
+  { id: 'devices', label: 'Devices', Icon: MonitorSmartphone },
+  { id: 'analytics', label: 'Analytics', Icon: TrendingUp },
+  { id: 'settings', label: 'Settings', Icon: Settings },
+];
+
+/** Which tab a URL hash like "#settings" selects (defaults to dashboard). */
+function tabFromHash(): Tab {
+  const h = typeof location !== 'undefined' ? location.hash.replace(/^#/, '') : '';
+  return TABS.some((t) => t.id === h) ? (h as Tab) : 'dashboard';
+}
+
+function Dock({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
+  return (
+    <div className="dock-wrap">
+      <nav className="dock glass-raised" aria-label="Sections">
+        {TABS.map(({ id, label, Icon }) => (
+          <button
+            key={id}
+            className={`nav-item${tab === id ? ' is-active' : ''}`}
+            onClick={() => setTab(id)}
+            aria-current={tab === id ? 'page' : undefined}
+            aria-label={label}
+            title={label}
+          >
+            <Icon size={20} />
+            <span className="nav-label">{label}</span>
+          </button>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+function AdminShell({ app, session }: { app: AppInfo | null; session: Session }) {
+  const embedded = !!app?.embedded;
+  // Tab is reflected in the URL hash so the profile menu's "Settings" (→ #settings), the
+  // brand mark (→ #dashboard) and refresh/back all land on the right section.
+  const [tab, setTabState] = useState<Tab>(() => tabFromHash());
+  useEffect(() => {
+    const onHash = () => setTabState(tabFromHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const setTab = (t: Tab) => {
+    if (typeof location !== 'undefined') history.replaceState(null, '', `${location.pathname}#${t}`);
+    setTabState(t);
+  };
+
+  const meta: Record<Tab, { title: string; sub: string }> = {
+    dashboard: { title: 'Dashboard', sub: `${session.sso.username ? `Signed in as ${session.sso.username}` : 'Signed in'}${embedded ? ' · via OpenMasjidOS' : ''}` },
+    devices: { title: 'Devices', sub: 'The tablets running your giving screen.' },
+    analytics: { title: 'Analytics', sub: 'Donations your kiosks have taken.' },
+    settings: { title: 'Settings', sub: 'Your account, platform connection and this app.' },
+  };
+
+  return (
+    <div className="shell">
+      <header className="topbar">
+        <Brand />
+        <div className="spacer" />
+        <Clock />
+        <ProfileMenu info={app} />
+      </header>
+      <main className="admin">
+        <div className="page-head">
+          <h1 className="page-title">{meta[tab].title}</h1>
+          <p className="page-sub">{meta[tab].sub}</p>
+        </div>
+
+        {tab === 'dashboard' && <DashboardTab session={session} embedded={embedded} />}
+        {tab === 'devices' && <DevicesTab />}
+        {tab === 'analytics' && <AnalyticsTab />}
+        {tab === 'settings' && <SettingsTab app={app} session={session} embedded={embedded} />}
+      </main>
+      <Dock tab={tab} setTab={setTab} />
+    </div>
+  );
+}
+
+function StatTile({ icon, label, value, sub, accent }: { icon: ReactNode; label: string; value: string; sub?: string; accent?: boolean }) {
+  return (
+    <div className={`stat-tile${accent ? ' stat-tile--accent' : ''}`}>
+      <span className="stat-tile__icon" aria-hidden="true">{icon}</span>
+      <span className="stat-tile__label">{label}</span>
+      <span className="stat-tile__value">{value}</span>
+      <span className="stat-tile__sub">{sub ?? ' '}</span>
+    </div>
+  );
+}
+
+// ── Dashboard tab ─────────────────────────────────────────────────────────────
+function DashboardTab({ session, embedded }: { session: Session; embedded: boolean }) {
+  const who = session.sso.username
+    ? `Signed in as ${session.sso.username}${embedded ? ' · via OpenMasjidOS' : ''}`
+    : 'Signed in as the local admin';
+  return (
+    <>
+      <section className="glass panel">
+        <div className="card-head">
+          <LayoutDashboard size={18} className="panel-ico" aria-hidden="true" />
+          <div className="card-head__main">
+            <h2 className="section-title-inline">Welcome</h2>
+            <p className="muted">Your tap-to-donate station is up and running.</p>
+          </div>
+        </div>
+        <div className="row" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
+          <span className="status-pill status-pill--ok"><span className="status-dot" /> Running</span>
+          <span className="status-pill">{who}</span>
+        </div>
+        <p className="muted" style={{ marginBlockStart: '0.85rem', lineHeight: 1.6 }}>
+          Set up a tablet with a Stripe card reader, then pair it here to start taking donations. This is an early build —
+          more of the admin panel arrives with each update.
+        </p>
+        <div className="row" style={{ marginBlockStart: '1rem', flexWrap: 'wrap' }}>
+          <button className="btn btn--primary" onClick={() => navigate('/new')}>
+            <Smartphone size={17} /> Set up a tablet <ArrowRight size={16} />
+          </button>
+          <a className="btn btn--ghost" href="#devices">
+            <Plus size={16} /> Add a kiosk
+          </a>
+        </div>
+      </section>
+
+      <div className="stat-grid stat-grid--two">
+        <StatTile icon={<MonitorSmartphone size={17} />} label="Kiosks" value="0" sub="None paired yet" />
+        <StatTile icon={<Coins size={17} />} label="Donations" value="—" sub="Coming soon" />
+      </div>
+    </>
+  );
+}
+
+// ── Devices tab ───────────────────────────────────────────────────────────────
+function DevicesTab() {
+  const [showInfo, setShowInfo] = useState(false);
+  return (
+    <section className="glass panel">
+      <div className="card-head">
+        <MonitorSmartphone size={18} className="panel-ico" aria-hidden="true" />
+        <div className="card-head__main">
+          <h2 className="section-title-inline">Kiosks</h2>
+          <p className="muted">Pair and manage the tablets running your giving screen.</p>
+        </div>
+      </div>
+
+      <div className="empty-state">
+        <div className="empty-emblem" aria-hidden="true">
+          <MonitorSmartphone size={26} />
+        </div>
+        <p className="empty-title">No kiosks paired yet</p>
+        <p className="muted">When you pair a tablet it will show up here with its status, battery and reader.</p>
+        <button className="btn btn--primary" onClick={() => setShowInfo((v) => !v)}>
+          <Plus size={16} /> Add kiosk
+        </button>
+        {showInfo && (
+          <div className="pair-hint pair-hint--block">
+            Adding a kiosk generates a single-use <b>6-digit pairing code</b> that you type into the tablet app to link it
+            securely — no camera or QR needed. Full pairing lands in the next update.
+          </div>
+        )}
+      </div>
+
+      <p className="hint devices-note">
+        First time?{' '}
+        <a href={withBase('/new')} onClick={(e) => { e.preventDefault(); navigate('/new'); }}>
+          Install the kiosk app
+        </a>{' '}
+        on your tablet.
+      </p>
+    </section>
+  );
+}
+
+// ── Analytics tab ─────────────────────────────────────────────────────────────
+function AnalyticsTab() {
+  const tiles: { icon: ReactNode; label: string; value: string; sub?: string; accent?: boolean }[] = [
+    { icon: <Coins size={17} />, label: 'Total raised', value: '—', accent: true },
+    { icon: <CalendarDays size={17} />, label: 'This month', value: '—' },
+    { icon: <ReceiptText size={17} />, label: 'Donations', value: '0' },
+    { icon: <TrendingUp size={17} />, label: 'Average gift', value: '—' },
+  ];
+  return (
+    <section className="metrics">
+      <div className="stat-grid">
+        {tiles.map((t) => (
+          <StatTile key={t.label} icon={t.icon} label={t.label} value={t.value} sub={t.sub} accent={t.accent} />
+        ))}
+      </div>
+      <section className="glass panel">
+        <div className="empty-state">
+          <div className="empty-emblem" aria-hidden="true">
+            <TrendingUp size={26} />
+          </div>
+          <p className="empty-title">No donations yet</p>
+          <p className="muted">They will appear here once the reader is taking payments.</p>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+// ── Settings tab (account + platform + about) ─────────────────────────────────
+function SettingsTab({ app, session, embedded }: { app: AppInfo | null; session: Session; embedded: boolean }) {
+  const [res, setRes] = useState<NotifyTestResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const test = async () => {
+    setErr('');
+    setBusy(true);
+    setRes(null);
+    try {
+      setRes(await sendTestNotification());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Something went wrong.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const platform = session.sso.enabled
+    ? session.sso.reachable
+      ? 'Connected'
+      : 'Configured, but unreachable'
+    : 'Standalone (not embedded)';
+
+  return (
+    <>
+      <section className="glass panel">
+        <div className="card-head">
+          <ShieldCheck size={18} className="panel-ico" aria-hidden="true" />
+          <div className="card-head__main">
+            <h2 className="section-title-inline">Account &amp; platform</h2>
+            <p className="muted">How this kiosk connects to OpenMasjidOS.</p>
+          </div>
+        </div>
+        <div className="kv">
+          <div className="kv-row">
+            <span className="kv-k">Version</span>
+            <span className="kv-v">v{app?.version ?? __APP_VERSION__}</span>
+          </div>
+          <div className="kv-row">
+            <span className="kv-k">OpenMasjidOS</span>
+            <span className="kv-v">{platform}</span>
+          </div>
+          <div className="kv-row">
+            <span className="kv-k">Signed in as</span>
+            <span className="kv-v">{session.sso.username ?? 'Local admin'}</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="glass panel">
+        <div className="card-head">
+          <Bell size={18} className="panel-ico" aria-hidden="true" />
+          <div className="card-head__main">
+            <h2 className="section-title-inline">Notifications</h2>
+            <p className="muted">Send a test alert to check donation notifications reach your dashboard.</p>
+          </div>
+        </div>
+        <button className="btn btn--ghost btn--sm" onClick={test} disabled={busy}>
+          <Bell size={15} /> {busy ? 'Sending…' : 'Send a test alert'}
+        </button>
+        {res && (
+          <p className={res.delivered ? 'status-pill status-pill--ok' : 'hint'} style={{ marginBlockStart: '0.6rem' }}>
+            {res.delivered
+              ? 'Delivered — donation alerts will reach your masjid here.'
+              : res.reason === 'no-fabric'
+                ? 'Not embedded under OpenMasjidOS, so there is nowhere to send alerts (that is fine).'
+                : 'Not delivered — enable notifications in OpenMasjidOS to receive donation alerts.'}
+          </p>
+        )}
+        {err && <p className="form-error">{err}</p>}
+      </section>
+
+      <section className="glass panel">
+        <div className="card-head">
+          <Palette size={18} className="panel-ico" aria-hidden="true" />
+          <div className="card-head__main">
+            <h2 className="section-title-inline">Appearance</h2>
+            <p className="muted">
+              {embedded
+                ? 'The panel follows your OpenMasjidOS theme and wallpaper automatically. Use the account menu to override light/dark on this device.'
+                : 'Running standalone. Use the account menu to switch light/dark on this device.'}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <p className="admin-foot faint">
+        OpenMasjid Kiosk v{app?.version ?? __APP_VERSION__} ·{' '}
+        <a href={SOURCE_URL} target="_blank" rel="noreferrer noopener">
+          Source code <ExternalLink size={12} />
+        </a>{' '}
+        · AGPL-3.0
+      </p>
     </>
   );
 }
@@ -265,135 +559,6 @@ function LoginForm({ sso, onDone }: { sso: Session['sso'] | undefined; onDone: (
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-      </section>
-    </div>
-  );
-}
-
-// ── Dashboard (slice-2 shell) ─────────────────────────────────────────────────
-function Dashboard({ session }: { session: Session }) {
-  const who = session.sso.username ? `Signed in via OpenMasjidOS as ${session.sso.username}` : 'Signed in as the local admin';
-  return (
-    <div className="wrap">
-      <section className="glass-raised hero-card enter">
-        <div className="emblem">
-          <Crescent size={30} />
-        </div>
-        <h1 className="hero-title">OpenMasjid Kiosk</h1>
-        <div className="row">
-          <span className="pill pill--ok">
-            <span className="status-dot" /> Running
-          </span>
-          <span className="pill">{who}</span>
-        </div>
-        <p className="hero-lead">
-          Your tap-to-donate station is up. Finish setting it up in a few steps, then pair a tablet with a Stripe card
-          reader. This is an early build — more of the admin panel arrives with each update.
-        </p>
-
-        <ul className="steps-list">
-          <li>
-            <CreditCard size={18} />
-            <span>
-              <b>Choose your Stripe account</b> — pick the account you set up in OpenMasjidOS (Settings → Payments).{' '}
-              <span className="muted">Coming next.</span>
-            </span>
-          </li>
-          <li>
-            <Palette size={18} />
-            <span>
-              <b>Design your giving screen</b> — six amounts, a custom amount, a thank-you message and your wallpaper.{' '}
-              <span className="muted">Coming soon.</span>
-            </span>
-          </li>
-          <li>
-            <Smartphone size={18} />
-            <span>
-              <b>Pair a tablet</b> — download the kiosk app and enter a 6-digit pairing code.
-            </span>
-          </li>
-        </ul>
-
-        <div className="row" style={{ marginBlockStart: '0.6rem' }}>
-          <button className="btn btn--primary" onClick={() => navigate('/new')}>
-            <Smartphone size={17} /> Set up a tablet <ArrowRight size={16} />
-          </button>
-          <button className="btn btn--ghost" onClick={() => navigate('/about')}>
-            <Info size={16} /> About
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-// ── About (version, Fabric status, notification test, source) ─────────────────
-function About({ app, session }: { app: AppInfo | null; session: Session }) {
-  const [res, setRes] = useState<NotifyTestResult | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-
-  const test = async () => {
-    setErr('');
-    setBusy(true);
-    setRes(null);
-    try {
-      setRes(await sendTestNotification());
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Something went wrong.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="wrap">
-      <section className="glass-raised setup enter">
-        <div className="setup-head">
-          <div className="emblem">
-            <Info size={26} />
-          </div>
-          <h1 className="setup-title">About</h1>
-          <p className="muted">OpenMasjid Kiosk · v{app?.version ?? __APP_VERSION__}</p>
-        </div>
-
-        <div className="kv">
-          <div className="kv-row">
-            <span className="kv-k">OpenMasjidOS</span>
-            <span className="kv-v">
-              {session.sso.enabled ? (session.sso.reachable ? 'Connected' : 'Configured, but unreachable') : 'Standalone (not embedded)'}
-            </span>
-          </div>
-          <div className="kv-row">
-            <span className="kv-k">Signed in as</span>
-            <span className="kv-v">{session.sso.username ?? 'Local admin'}</span>
-          </div>
-        </div>
-
-        <div className="stack" style={{ marginBlockStart: '1rem' }}>
-          <button className="btn btn--ghost" onClick={test} disabled={busy}>
-            <Bell size={16} /> {busy ? 'Sending…' : 'Send a test alert'}
-          </button>
-          {res && (
-            <p className={res.delivered ? 'pill pill--ok' : 'muted'}>
-              {res.delivered
-                ? 'Delivered — donation alerts will reach your masjid here.'
-                : res.reason === 'no-fabric'
-                  ? 'Not embedded under OpenMasjidOS, so there’s nowhere to send alerts (that’s fine).'
-                  : 'Not delivered — enable notifications in OpenMasjidOS to receive donation alerts.'}
-            </p>
-          )}
-          {err && <p className="form-error">{err}</p>}
-        </div>
-
-        <div className="row" style={{ marginBlockStart: '1.2rem', justifyContent: 'space-between' }}>
-          <a className="btn btn--ghost" href={SOURCE_URL} target="_blank" rel="noreferrer">
-            <ShieldCheck size={16} /> Source code (AGPL-3.0)
-          </a>
-          <button className="btn" onClick={() => navigate('/')}>
-            Back
-          </button>
-        </div>
       </section>
     </div>
   );

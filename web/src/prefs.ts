@@ -11,12 +11,14 @@
  * theme/wallpaper/accent from it, never anything security-relevant. Live appearance sync
  * (polling /api/public/appearance) is added with the Fabric in a later slice.
  */
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { withBase } from './base';
 
 export interface Prefs {
   theme: 'system' | 'dark' | 'light';
   wallpaper: string;
+  /** Optional custom wallpaper image URL — overrides the preset when set. */
+  wallpaperImage: string;
   /** Accent colour id — matches the dashboard's accent when embedded. */
   accent: string;
   /** Mirror OpenMasjidOS's theme + wallpaper (on by default under the platform). */
@@ -24,7 +26,7 @@ export interface Prefs {
 }
 
 const KEY = 'omkiosk-prefs';
-const DEFAULTS: Prefs = { theme: 'system', wallpaper: 'aurora', accent: 'cyan', followOmos: true };
+const DEFAULTS: Prefs = { theme: 'system', wallpaper: 'aurora', wallpaperImage: '', accent: 'cyan', followOmos: true };
 
 /** Accent palette — mirrors OpenMasjidOS so the app matches the dashboard's accent.
  *  cyan is the tokens' built-in primary, so selecting it just clears the overrides. */
@@ -91,6 +93,7 @@ function normTheme(v: unknown): Prefs['theme'] {
 interface OmosAppearance {
   theme?: string;
   wallpaper?: string;
+  wallpaperImage?: string;
   accent?: string;
 }
 
@@ -99,6 +102,10 @@ function appearancePatch(p: OmosAppearance): Partial<Prefs> {
   if (p.theme != null) out.theme = normTheme(p.theme);
   if (typeof p.wallpaper === 'string') out.wallpaper = p.wallpaper;
   if (typeof p.accent === 'string') out.accent = p.accent;
+  // wallpaperImage comes from the attacker-craftable #omos fragment (and the public
+  // appearance endpoint). Stored as-is; the Scene sanitises it before rendering it into
+  // a CSS url(...) (accept only http(s)/data:image, reject quotes/backslash/space).
+  if (typeof p.wallpaperImage === 'string') out.wallpaperImage = p.wallpaperImage;
   return out;
 }
 
@@ -187,6 +194,68 @@ export async function fetchOmosAppearance(): Promise<void> {
   } catch {
     /* platform offline — keep the current look (the #omos fragment already themed us) */
   }
+}
+
+// ── Background-aware readability ──────────────────────────────────────────────
+// Sample a background image's average luminance so text on top of it stays readable
+// (dark text on light images, light text on dark). Works for same-origin / CORS-enabled
+// images and data: URLs; if the canvas is tainted (host sent no CORS header) we can't
+// read the pixels, so we fall back to the caller's default theme.
+const lumCache = new Map<string, 'light' | 'dark'>();
+
+function sampleLuminance(url: string): Promise<'light' | 'dark' | null> {
+  const cached = lumCache.get(url);
+  if (cached) return Promise.resolve(cached);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const n = 16;
+        const canvas = document.createElement('canvas');
+        canvas.width = n;
+        canvas.height = n;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return resolve(null);
+        ctx.drawImage(img, 0, 0, n, n);
+        const { data } = ctx.getImageData(0, 0, n, n);
+        let sum = 0;
+        let count = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          sum += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+          count++;
+        }
+        const avg = count ? sum / count : 0; // 0..255
+        const res: 'light' | 'dark' = avg > 140 ? 'light' : 'dark';
+        lumCache.set(url, res);
+        resolve(res);
+      } catch {
+        resolve(null); // tainted canvas — image host sent no CORS header
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+/** The theme ('light'|'dark') that reads best over a background image. Returns
+ *  `fallback` when there's no image or it can't be sampled (cross-origin). */
+export function useReadableTheme(imageUrl: string | undefined, fallback: 'light' | 'dark'): 'light' | 'dark' {
+  const [theme, setTheme] = useState<'light' | 'dark'>(fallback);
+  useEffect(() => {
+    if (!imageUrl) {
+      setTheme(fallback);
+      return;
+    }
+    let live = true;
+    void sampleLuminance(imageUrl).then((r) => {
+      if (live) setTheme(r ?? fallback);
+    });
+    return () => {
+      live = false;
+    };
+  }, [imageUrl, fallback]);
+  return theme;
 }
 
 /** While embedded under OpenMasjidOS and "follow" is on, keep theme + wallpaper + accent in
