@@ -39,6 +39,43 @@ const log = makeLog('main');
 
 const LOOPBACK_RE = /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[?::1)/i;
 
+/** Identify an image from its first bytes (magic numbers) — because many hosts serve images
+ *  with the wrong or no content-type. Covers the formats a wallpaper would ever be. */
+function sniffImageType(buf: Buffer): string {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
+  if (buf.length >= 4 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return 'image/gif';
+  if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  if (buf.length >= 2 && buf[0] === 0x42 && buf[1] === 0x4d) return 'image/bmp';
+  if (buf.length >= 4 && buf[0] === 0x00 && buf[1] === 0x00 && buf[2] === 0x01 && buf[3] === 0x00) return 'image/x-icon';
+  if (buf.length >= 12 && buf.toString('ascii', 4, 8) === 'ftyp') {
+    const brand = buf.toString('ascii', 8, 12).toLowerCase();
+    if (brand.startsWith('avif') || brand === 'avis') return 'image/avif';
+    if (brand.startsWith('heic') || brand.startsWith('heif') || brand.startsWith('mif1') || brand.startsWith('msf1')) return 'image/heic';
+  }
+  // SVG is text; look for the root element in the first chunk.
+  const head = buf.toString('utf8', 0, Math.min(buf.length, 512)).trimStart();
+  if (/^<\?xml/i.test(head) ? /<svg[\s>]/i.test(head) : /^<svg[\s>]/i.test(head)) return 'image/svg+xml';
+  return '';
+}
+
+/** Last-resort image type from a URL's file extension (before any query string). */
+function extImageType(url: string): string {
+  const m = /\.([a-z0-9]+)(?:$|\?|#)/i.exec(url.split(/[?#]/)[0]);
+  switch ((m?.[1] ?? '').toLowerCase()) {
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'png': return 'image/png';
+    case 'gif': return 'image/gif';
+    case 'webp': return 'image/webp';
+    case 'bmp': return 'image/bmp';
+    case 'ico': return 'image/x-icon';
+    case 'svg': return 'image/svg+xml';
+    case 'avif': return 'image/avif';
+    case 'heic': case 'heif': return 'image/heic';
+    default: return '';
+  }
+}
+
 /** The download filename we hand the tablet — versioned so a stale cached copy is obvious.
  *  The URL path stays stable at /download/openmasjidkiosk.apk. */
 const apkFilename = `openmasjidkiosk-${config.version}.apk`;
@@ -114,10 +151,11 @@ async function main(): Promise<void> {
     // the browser would block it as mixed content. Rewrite it to our own same-origin HTTPS
     // proxy (below) so the OS wallpaper actually shows through. Named presets (no image) pass
     // through untouched and render as CSS gradients. Ambient video is a local OS-only setting
-    // and isn't in the appearance payload, so it can't be inherited.
+    // and isn't in the appearance payload, so it can't be inherited. We rewrite ANY non-empty
+    // wallpaperImage (absolute http(s) OR a relative upload path) — the proxy resolves it.
     if (a && typeof a === 'object') {
       const wi = (a as Record<string, unknown>).wallpaperImage;
-      if (typeof wi === 'string' && /^https?:\/\//i.test(wi)) {
+      if (typeof wi === 'string' && wi.trim() && !/^data:/i.test(wi.trim())) {
         (a as Record<string, unknown>).wallpaperImage = '/api/public/wallpaper';
       }
     }
@@ -131,21 +169,40 @@ async function main(): Promise<void> {
   // open proxy. Size- and type-guarded; short public cache.
   app.get('/api/public/wallpaper', async (_req, reply) => {
     const a = await fetchAppearance();
-    const src = a && typeof (a as Record<string, unknown>).wallpaperImage === 'string' ? String((a as Record<string, unknown>).wallpaperImage) : '';
-    if (!/^https?:\/\//i.test(src)) return reply.code(404).send({ error: 'No wallpaper set.' });
+    const raw = a && typeof (a as Record<string, unknown>).wallpaperImage === 'string' ? String((a as Record<string, unknown>).wallpaperImage).trim() : '';
+    if (!raw || /^data:/i.test(raw)) return reply.code(404).send({ error: 'No wallpaper set.' });
+    // The OS may send an absolute URL (admin typed a link) or a relative upload path; resolve
+    // relative ones against the platform base so uploaded wallpapers work too.
+    let src = raw;
+    if (!/^https?:\/\//i.test(raw)) {
+      const base = String(process.env.OPENMASJID_BASE_URL ?? '').trim();
+      if (!/^https?:\/\//i.test(base)) return reply.code(404).send({ error: 'No wallpaper set.' });
+      try { src = new URL(raw, base.endsWith('/') ? base : base + '/').toString(); } catch { return reply.code(404).send({ error: 'No wallpaper set.' }); }
+    }
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 6000);
-      const res = await fetch(src, { signal: ctrl.signal, redirect: 'follow' });
+      const t = setTimeout(() => ctrl.abort(), 12000);
+      // Some hosts 403 requests without a User-Agent; ask for images explicitly.
+      const res = await fetch(src, {
+        signal: ctrl.signal,
+        redirect: 'follow',
+        headers: { 'user-agent': 'OpenMasjidKiosk/wallpaper-proxy', accept: 'image/*,*/*;q=0.8' },
+      });
       clearTimeout(t);
-      const ct = res.headers.get('content-type') ?? '';
       const len = Number(res.headers.get('content-length') ?? '0');
-      if (!res.ok || !/^image\//i.test(ct) || len > 15_000_000) {
+      if (!res.ok || (len && len > 15_000_000)) {
         return reply.code(502).send({ error: 'Wallpaper unavailable.' });
       }
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.byteLength > 15_000_000) return reply.code(502).send({ error: 'Wallpaper too large.' });
-      reply.header('content-type', ct).header('cache-control', 'public, max-age=300');
+      // DON'T trust the upstream content-type — many hosts serve images as
+      // application/octet-stream or with no type at all. Prefer a real image/* header, then
+      // sniff the bytes (covers jpg/png/gif/webp/bmp/ico/svg/avif), then fall back to the URL
+      // extension. Only give up if none of those say "image".
+      const upstream = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+      const type = (/^image\//.test(upstream) ? upstream : '') || sniffImageType(buf) || extImageType(src);
+      if (!type) return reply.code(502).send({ error: 'Wallpaper unavailable.' });
+      reply.header('content-type', type).header('cache-control', 'public, max-age=300');
       return reply.send(buf);
     } catch {
       return reply.code(502).send({ error: 'Wallpaper unavailable.' });

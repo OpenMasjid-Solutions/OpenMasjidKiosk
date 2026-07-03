@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.3.2
+- **Fix — the OpenMasjidOS wallpaper now shows even when the image URL is "unusual".** The
+  proxy that brings your OS wallpaper onto the kiosk's secure page used to require the image
+  host to label the file as an image; many hosts (and uploaded files) serve images as a
+  generic download type, so the wallpaper silently failed. It now identifies the image from
+  its actual contents (and, if needed, the file extension), sends a browser-like request so
+  picky hosts don't refuse it, resolves uploaded/relative image paths against your OS, and
+  waits a little longer for large images.
+
 ## 0.3.1
 - **Fix — pairing now works.** The tablet was reading responses at the top level but the
   server wraps them in a `{ data }` envelope, so pairing (and every kiosk call) failed with
