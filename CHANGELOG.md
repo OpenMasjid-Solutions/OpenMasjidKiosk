@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.2.1
+- **Fix: the OpenMasjidOS wallpaper now shows in the kiosk.** Custom wallpaper *images* are
+  proxied through the app's own HTTPS origin (`/api/public/wallpaper`) — the platform serves
+  them over plain HTTP, which a secure page otherwise blocks as mixed content; this also
+  fixes on-image text readability (canvas luminance). Named preset wallpapers + the accent
+  colour already inherited. Note: the OS **"ambient" video** backdrop is a per-device local
+  setting and is deliberately not shared over the Fabric, so it can't be inherited — pick a
+  preset or a wallpaper image in OpenMasjidOS for the kiosk to match.
+
 All notable changes to **OpenMasjid Kiosk**. The version here, `VERSION`, `manifest.yaml`,
 the `server/`+`web/` `package.json`, and the git tag `vX.Y.Z` all move together — bump them
 on every published build so OpenMasjidOS offers a normal **Update** (no reinstall).

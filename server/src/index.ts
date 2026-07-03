@@ -86,7 +86,47 @@ async function main(): Promise<void> {
   // platform server-to-server. Returns { theme, wallpaper, accent, … } or {} (no secrets).
   app.get('/api/public/appearance', async (_req, reply) => {
     reply.header('cache-control', 'no-store');
-    return fetchAppearance();
+    const a = await fetchAppearance();
+    // The platform serves its custom wallpaper image over plain HTTP; our page is HTTPS, so
+    // the browser would block it as mixed content. Rewrite it to our own same-origin HTTPS
+    // proxy (below) so the OS wallpaper actually shows through. Named presets (no image) pass
+    // through untouched and render as CSS gradients. Ambient video is a local OS-only setting
+    // and isn't in the appearance payload, so it can't be inherited.
+    if (a && typeof a === 'object') {
+      const wi = (a as Record<string, unknown>).wallpaperImage;
+      if (typeof wi === 'string' && /^https?:\/\//i.test(wi)) {
+        (a as Record<string, unknown>).wallpaperImage = '/api/public/wallpaper';
+      }
+    }
+    return a;
+  });
+
+  // Same-origin proxy for the OpenMasjidOS wallpaper image. Fetches the platform's CURRENT
+  // wallpaper server-side (LAN, so plain HTTP is fine there) and streams the bytes over our
+  // HTTPS origin — fixing mixed content AND canvas taint (so luminance/readability works).
+  // The URL is never client-supplied (always the OS's own wallpaperImage), so it isn't an
+  // open proxy. Size- and type-guarded; short public cache.
+  app.get('/api/public/wallpaper', async (_req, reply) => {
+    const a = await fetchAppearance();
+    const src = a && typeof (a as Record<string, unknown>).wallpaperImage === 'string' ? String((a as Record<string, unknown>).wallpaperImage) : '';
+    if (!/^https?:\/\//i.test(src)) return reply.code(404).send({ error: 'No wallpaper set.' });
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch(src, { signal: ctrl.signal, redirect: 'follow' });
+      clearTimeout(t);
+      const ct = res.headers.get('content-type') ?? '';
+      const len = Number(res.headers.get('content-length') ?? '0');
+      if (!res.ok || !/^image\//i.test(ct) || len > 15_000_000) {
+        return reply.code(502).send({ error: 'Wallpaper unavailable.' });
+      }
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.byteLength > 15_000_000) return reply.code(502).send({ error: 'Wallpaper too large.' });
+      reply.header('content-type', ct).header('cache-control', 'public, max-age=300');
+      return reply.send(buf);
+    } catch {
+      return reply.code(502).send({ error: 'Wallpaper unavailable.' });
+    }
   });
 
   // ── Session: who am I? Also performs the SSO upgrade. ───────────────────────

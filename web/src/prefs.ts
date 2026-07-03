@@ -103,9 +103,14 @@ function appearancePatch(p: OmosAppearance): Partial<Prefs> {
   if (typeof p.wallpaper === 'string') out.wallpaper = p.wallpaper;
   if (typeof p.accent === 'string') out.accent = p.accent;
   // wallpaperImage comes from the attacker-craftable #omos fragment (and the public
-  // appearance endpoint). Stored as-is; the Scene sanitises it before rendering it into
-  // a CSS url(...) (accept only http(s)/data:image, reject quotes/backslash/space).
-  if (typeof p.wallpaperImage === 'string') out.wallpaperImage = p.wallpaperImage;
+  // appearance endpoint). The OS serves it over plain HTTP while we're on HTTPS, so route
+  // any absolute URL through our own same-origin HTTPS proxy (/api/public/wallpaper) — that
+  // fixes mixed content on first paint AND canvas taint (so luminance/readability works).
+  // A relative value (already our proxy path, from the relay) is kept as-is. The Scene
+  // still sanitises before use.
+  if (typeof p.wallpaperImage === 'string') {
+    out.wallpaperImage = /^https?:\/\//i.test(p.wallpaperImage) ? withBase('/api/public/wallpaper') : p.wallpaperImage;
+  }
   return out;
 }
 
