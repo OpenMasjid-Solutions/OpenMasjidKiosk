@@ -14,6 +14,7 @@ import androidx.work.WorkerParameters
 import org.openmasjidos.kiosk.KioskApp
 import org.openmasjidos.kiosk.kiosk.DeviceStatus
 import org.openmasjidos.kiosk.net.HeartbeatOutcome
+import org.openmasjidos.kiosk.readers.ReaderManager
 import java.util.concurrent.TimeUnit
 
 /**
@@ -31,7 +32,14 @@ class HeartbeatWorker(appContext: Context, params: WorkerParameters) :
     override suspend fun doWork(): Result {
         val repo = (applicationContext as KioskApp).repository
         val battery = DeviceStatus.battery(applicationContext)
-        return when (repo.heartbeat(battery.level, battery.charging, readerStatus = "not_connected")) {
+        val reader = ReaderManager.statusForHeartbeat()
+        return when (repo.heartbeat(
+            battery.level,
+            battery.charging,
+            readerStatus = reader.status,
+            readerSerial = reader.serial,
+            readerBattery = reader.battery,
+        )) {
             is HeartbeatOutcome.Ok,
             HeartbeatOutcome.Revoked,
             HeartbeatOutcome.NotPaired,

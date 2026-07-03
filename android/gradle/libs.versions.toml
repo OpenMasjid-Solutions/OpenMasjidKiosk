@@ -21,6 +21,9 @@ work = "2.9.1"               # WorkManager backstop heartbeat (compiled against 
 okhttp = "4.12.0"            # pinned-HTTPS client (custom X509TrustManager); supports API 21+
 coroutines = "1.8.1"         # coroutines-android (Dispatchers.IO for blocking OkHttp calls)
 bouncycastle = "1.78.1"      # SCrypt PIN verification (lightweight crypto API, no JCE provider)
+# Slice 5 (card reader): Stripe Terminal SDK for the M2 over Bluetooth AND USB. The umbrella
+# artifact bundles the core + physical-reader (BT/USB) support. minSdk floor is 26 (we're 26).
+stripeterminal = "5.6.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -40,6 +43,8 @@ androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx"
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+# Slice 5: Stripe Terminal Android SDK (Bluetooth + USB M2 reader, connection tokens, updates).
+stripe-terminal = { group = "com.stripe", name = "stripeterminal", version.ref = "stripeterminal" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -48,7 +48,27 @@
     <string name="maintenance_title">Kiosk maintenance</string>
     <string name="maintenance_no_pin">No exit PIN is set yet. Set one in Admin → Devices to protect this kiosk.</string>
     <string name="maintenance_reader_title">Card reader</string>
-    <string name="maintenance_reader_soon">Reader setup arrives in the next update.</string>
+
+    <!-- Card reader (Stripe Reader M2) -->
+    <string name="reader_transport_bluetooth">Bluetooth</string>
+    <string name="reader_transport_usb">USB</string>
+    <string name="reader_transport_simulated">Test reader</string>
+    <string name="reader_scan">Find a reader</string>
+    <string name="reader_stop_scan">Stop looking</string>
+    <string name="reader_scanning">Looking for readers nearby…</string>
+    <string name="reader_connect">Connect</string>
+    <string name="reader_disconnect">Disconnect reader</string>
+    <string name="reader_install_update">Install reader update</string>
+    <string name="reader_updating">Updating the reader — keep it powered and nearby.</string>
+    <string name="reader_battery">Battery %1$d%%</string>
+    <string name="reader_charging">Charging</string>
+    <string name="reader_dismiss">Dismiss</string>
+    <string name="reader_needs_location">Finish Payments setup (Stripe account + a card-reader location) in the admin panel before connecting a reader.</string>
+    <string name="reader_status_connected">Reader connected</string>
+    <string name="reader_status_connecting">Connecting to the reader…</string>
+    <string name="reader_status_discovering">Looking for readers…</string>
+    <string name="reader_status_updating">Updating the reader…</string>
+    <string name="reader_status_error">Reader problem</string>
     <string name="maintenance_server_title">Server &amp; pairing</string>
     <string name="maintenance_diagnostics_title">Diagnostics</string>
     <string name="maintenance_repair">Re-pair this kiosk</string>

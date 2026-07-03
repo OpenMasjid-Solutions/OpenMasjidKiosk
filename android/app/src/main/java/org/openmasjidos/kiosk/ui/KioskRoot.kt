@@ -75,8 +75,16 @@ fun KioskRoot(
                     )
                     Overlay.Maintenance -> MaintenanceScreen(
                         diagnostics = ui.diagnostics,
+                        reader = ui.reader,
+                        locationId = ui.config?.locationId.orEmpty(),
                         noPinSet = ui.config?.pinHash?.isNotBlank() != true,
                         showPinningHint = !isDeviceOwner,
+                        onScanReaders = vm::scanForReaders,
+                        onStopReaderScan = vm::stopReaderScan,
+                        onConnectReader = vm::connectReader,
+                        onDisconnectReader = vm::disconnectReader,
+                        onInstallReaderUpdate = vm::installReaderUpdate,
+                        onDismissReaderError = vm::dismissReaderError,
                         onReturn = vm::closeOverlay,
                         onRePair = vm::rePair,
                         onExit = onExitKiosk,

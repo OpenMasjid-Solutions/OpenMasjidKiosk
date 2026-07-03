@@ -117,6 +117,8 @@ class KioskRepository(context: Context) {
         battery: Int?,
         charging: Boolean?,
         readerStatus: String,
+        readerSerial: String? = null,
+        readerBattery: Int? = null,
     ): HeartbeatOutcome = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: return@withContext HeartbeatOutcome.NotPaired
         val localVersion = store.config.first()?.version ?: 0
@@ -130,8 +132,8 @@ class KioskRepository(context: Context) {
                 battery = battery,
                 charging = charging,
                 readerStatus = readerStatus,
-                readerSerial = null,
-                readerBattery = null,
+                readerSerial = readerSerial,
+                readerBattery = readerBattery,
             )
             if (resp.revoked) {
                 log("warn", "revoked")
@@ -156,6 +158,16 @@ class KioskRepository(context: Context) {
         val api = KioskApi(pinnedClientFor(p.certSha256))
         val cfg = api.getConfig(p.serverUrl, p.deviceToken)
         store.saveConfig(cfg)
+    }
+
+    // ---- Stripe Terminal connection token ----------------------------------------------
+
+    /** Mint a short-lived Stripe Terminal connection token, server-side. Called by the reader's
+     *  [com.stripe.stripeterminal.external.callable.ConnectionTokenProvider]. Throws if not paired
+     *  or the server is unreachable — the SDK surfaces that as a reader error. */
+    suspend fun getConnectionToken(): String = withContext(Dispatchers.IO) {
+        val p = store.pairing.first() ?: throw IOException("Not paired")
+        KioskApi(pinnedClientFor(p.certSha256)).connectionToken(p.serverUrl, p.deviceToken)
     }
 
     // ---- PIN ---------------------------------------------------------------------------

@@ -113,6 +113,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)       // IO dispatcher for blocking OkHttp calls
     implementation(libs.bouncycastle)                     // offline SCrypt PIN verification
 
+    // --- Slice 5: Stripe Terminal SDK (M2 reader over Bluetooth + USB) ---
+    implementation(libs.stripe.terminal)
+
     // Compose tooling (previews) — debug only.
     debugImplementation(libs.androidx.ui.tooling)
 }

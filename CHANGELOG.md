@@ -3,6 +3,17 @@
 
 # Changelog
 
+## 0.4.0
+- **Card reader (Stripe Reader M2).** Set up and manage the reader from the kiosk's PIN-protected
+  maintenance screen: choose **Bluetooth**, **USB**, or the built-in **Test reader**, find it,
+  connect it to your card-reader location, and it handles firmware updates automatically. The
+  reader auto-reconnects if it briefly drops, and its status, serial and battery now show on the
+  **Devices** page so you can spot a flat or unplugged reader remotely.
+- The reader talks to Stripe with a short-lived **connection token** the server mints on demand —
+  the tablet never holds your Stripe secret key, and card data goes reader → Stripe only.
+- New guide: **docs/READER_SETUP.md** (charging, Bluetooth vs USB, permissions, troubleshooting).
+- Taking donations with the reader arrives in the next update.
+
 ## 0.3.2
 - **Fix — the OpenMasjidOS wallpaper now shows even when the image URL is "unusual".** The
   proxy that brings your OS wallpaper onto the kiosk's secure page used to require the image

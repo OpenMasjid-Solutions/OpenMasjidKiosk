@@ -23,6 +23,9 @@ import org.openmasjidos.kiosk.local.PairingRecord
 import org.openmasjidos.kiosk.kiosk.DeviceStatus
 import org.openmasjidos.kiosk.net.HeartbeatOutcome
 import org.openmasjidos.kiosk.net.PairResult
+import org.openmasjidos.kiosk.readers.ReaderManager
+import org.openmasjidos.kiosk.readers.ReaderTransport
+import org.openmasjidos.kiosk.readers.ReaderUiState
 import org.openmasjidos.kiosk.work.HeartbeatWorker
 
 /** Top-level screen the kiosk is showing. */
@@ -65,6 +68,7 @@ data class UiState(
     val pin: PinState = PinState(),
     val identify: Boolean = false,
     val diagnostics: Diagnostics = Diagnostics(),
+    val reader: ReaderUiState = ReaderUiState(),
 )
 
 /**
@@ -93,7 +97,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     private val local = MutableStateFlow(Local(form = PairingForm(name = Build.MODEL ?: "Kiosk")))
 
-    val ui: StateFlow<UiState> = combine(repo.pairing, repo.config, local) { pairing, config, l ->
+    val ui: StateFlow<UiState> = combine(repo.pairing, repo.config, local, ReaderManager.state) { pairing, config, l, reader ->
         UiState(
             phase = if (pairing == null) Phase.Unpaired else Phase.Paired,
             config = config,
@@ -102,7 +106,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             rePair = l.rePair,
             pin = l.pin,
             identify = l.identify,
-            diagnostics = buildDiagnostics(pairing, l),
+            diagnostics = buildDiagnostics(pairing, l, reader),
+            reader = reader,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), UiState())
 
@@ -111,12 +116,45 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     /** Called once from the activity: schedule the backstop and run the loop while paired. */
     fun start() {
         HeartbeatWorker.schedule(appContext)
+        // Create the Terminal instance up front (no Bluetooth/token work happens until an admin
+        // actually scans/connects in maintenance) so the reader section is ready and the heartbeat
+        // can report reader status.
+        runCatching { ReaderManager.ensureInitialized(appContext, repo) }
         viewModelScope.launch {
             repo.pairing.collect { pairing ->
                 if (pairing != null) startHeartbeatLoop() else stopHeartbeatLoop()
             }
         }
     }
+
+    // ---- Card reader (maintenance screen) ----------------------------------------------
+
+    /** Begin discovery over [transport]. Permissions are requested by the UI first. */
+    fun scanForReaders(transport: ReaderTransport) {
+        ReaderManager.ensureInitialized(appContext, repo)
+        ReaderManager.startDiscovery(transport)
+        repo.log("info", "reader_scan", transport.name.lowercase())
+    }
+
+    fun stopReaderScan() = ReaderManager.stopDiscovery()
+
+    fun connectReader(serial: String) {
+        val locationId = ui.value.config?.locationId.orEmpty()
+        ReaderManager.connect(serial, locationId)
+        repo.log("info", "reader_connect", serial)
+    }
+
+    fun disconnectReader() {
+        ReaderManager.disconnect()
+        repo.log("info", "reader_disconnect")
+    }
+
+    fun installReaderUpdate() {
+        ReaderManager.installUpdate()
+        repo.log("info", "reader_update_install")
+    }
+
+    fun dismissReaderError() = ReaderManager.clearError()
 
     // ---- Pairing form actions ----------------------------------------------------------
 
@@ -206,7 +244,14 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive) {
                 val battery = DeviceStatus.battery(appContext)
                 local.update { it.copy(battery = battery.level, charging = battery.charging) }
-                when (val outcome = repo.heartbeat(battery.level, battery.charging, readerStatus = "not_connected")) {
+                val reader = ReaderManager.statusForHeartbeat()
+                when (val outcome = repo.heartbeat(
+                    battery.level,
+                    battery.charging,
+                    readerStatus = reader.status,
+                    readerSerial = reader.serial,
+                    readerBattery = reader.battery,
+                )) {
                     is HeartbeatOutcome.Ok -> {
                         local.update { it.copy(lastHeartbeatMs = System.currentTimeMillis(), online = true) }
                         if (outcome.identify) flashIdentify()
@@ -245,10 +290,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Helpers -----------------------------------------------------------------------
 
-    private fun buildDiagnostics(pairing: PairingRecord?, l: Local) = Diagnostics(
+    private fun buildDiagnostics(pairing: PairingRecord?, l: Local, reader: ReaderUiState) = Diagnostics(
         battery = l.battery,
         charging = l.charging,
-        readerStatus = "not_connected",
+        readerStatus = ReaderManager.statusForHeartbeat().status,
         appVersion = DeviceStatus.appVersion(appContext),
         pinnedCertSha256 = pairing?.certSha256,
         deviceId = pairing?.deviceId,

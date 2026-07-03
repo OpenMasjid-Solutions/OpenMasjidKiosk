@@ -18,19 +18,26 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!--
-      TODO (later slices): permissions arrive with the features that need them.
-        - Reader over Bluetooth (API 31+): BLUETOOTH_SCAN, BLUETOOTH_CONNECT
-        - Reader over Bluetooth (pre-31): ACCESS_FINE_LOCATION
-        - Reader over USB: android.hardware.usb.host feature + USB permission (runtime)
-      Pairing is a typed 6-digit code (no camera/QR), so no CAMERA permission is needed.
-      Keep these out of the manifest until the corresponding slice lands, and request-and-
-      explain them only inside the PIN-protected settings — never in the donor flow.
-
-      <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
-      <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-      <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-      <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+      Slice 5 — Stripe Reader M2 (Bluetooth + USB). The Terminal SDK needs these; they are
+      requested-and-explained ONLY inside the PIN-protected maintenance screen, never in the
+      donor flow. Pairing uses a typed 6-digit code (no camera/QR), so no CAMERA permission.
+        - Bluetooth on API 31+: BLUETOOTH_SCAN (neverForLocation) + BLUETOOTH_CONNECT
+        - Bluetooth pre-31: legacy BLUETOOTH/BLUETOOTH_ADMIN + ACCESS_FINE_LOCATION (BLE scan)
+        - Location: still required by the SDK for ALL discovery configs (location must be ON)
+        - USB: android.hardware.usb.host feature (the SDK prompts for the USB device at connect)
+      The Terminal SDK contributes its own foreground service + FOREGROUND_SERVICE permissions
+      via manifest merging, so we don't declare those here.
     -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
         android:name=".KioskApp"

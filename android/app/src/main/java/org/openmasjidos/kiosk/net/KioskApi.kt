@@ -91,6 +91,13 @@ class KioskApi(private val client: OkHttpClient) {
         )
     }
 
+    /** `POST /api/kiosk/connection-token` (device token). Returns the short-lived Stripe Terminal
+     *  connection token — the only Stripe credential the tablet ever holds. */
+    fun connectionToken(baseUrl: String, token: String): String {
+        val json = post(baseUrl, "/api/kiosk/connection-token", JSONObject(), token)
+        return json.getString("secret")
+    }
+
     /** `POST /api/kiosk/logs` (device token). Returns true on `{ ok: true }`. */
     fun postLogs(baseUrl: String, token: String, entries: List<LogEntry>): Boolean {
         val arr = JSONArray()
