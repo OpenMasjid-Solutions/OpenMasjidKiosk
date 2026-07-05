@@ -81,6 +81,11 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // BouncyCastle (bcprov-jdk18on) and a Stripe Terminal transitive dep both ship this
+            // OSGi metadata file, which collides at resource-merge time. It isn't used at runtime
+            // on Android, so drop the duplicate. (Also cover the sibling OSGI-INF/version files.)
+            excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+            excludes += "/META-INF/versions/9/OSGI-INF/**"
         }
     }
 }
