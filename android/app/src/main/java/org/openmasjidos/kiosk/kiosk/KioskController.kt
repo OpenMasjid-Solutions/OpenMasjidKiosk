@@ -8,6 +8,7 @@ import android.app.ActivityManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.view.WindowManager
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -70,5 +71,28 @@ object KioskController {
     fun isDeviceOwner(context: Context): Boolean {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
         return dpm?.isDeviceOwnerApp(context.packageName) == true
+    }
+
+    /**
+     * Remotely restart the kiosk (admin → Devices → Restart, delivered on the next heartbeat).
+     *  • DEVICE OWNER: a true device reboot via [DevicePolicyManager.reboot].
+     *  • Otherwise: a best-effort restart of the kiosk APP (relaunch its task, then end the process
+     *    so it comes back fresh) — a full OS reboot isn't possible without device owner.
+     */
+    fun reboot(context: Context) {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+        if (dpm != null && dpm.isDeviceOwnerApp(context.packageName)) {
+            val admin = ComponentName(context, KioskAdminReceiver::class.java)
+            if (runCatching { dpm.reboot(admin) }.isSuccess) return
+        }
+        // Fallback: relaunch our own task, then exit so the app restarts cleanly.
+        runCatching {
+            val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                context.startActivity(intent)
+                Runtime.getRuntime().exit(0)
+            }
+        }
     }
 }

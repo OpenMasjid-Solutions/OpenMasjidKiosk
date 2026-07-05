@@ -386,6 +386,15 @@ async function main(): Promise<void> {
     return { data: { ok: true } };
   });
 
+  // Remotely restart a kiosk. Picked up on its next heartbeat: a full device reboot when the
+  // tablet is provisioned as device owner, otherwise a best-effort app restart.
+  app.post('/api/admin/devices/:id/reboot', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!store.getDevice(id)) return reply.code(404).send({ error: 'Kiosk not found.' });
+    store.requestReboot(id);
+    return { data: { ok: true } };
+  });
+
   app.get('/api/admin/devices/:id/logs', { preHandler: requireAdmin }, async (req) => ({
     data: { logs: store.listLogs((req.params as { id: string }).id) },
   }));
@@ -461,10 +470,17 @@ async function main(): Promise<void> {
     const d = resolveDevice(req);
     if (!d) return reply.code(401).send({ error: 'This kiosk isn’t paired.' });
     // A revoked device gets a clean signal (not a 401) so the tablet wipes + re-pairs.
-    if (d.revoked) return { data: { configVersion: store.getConfigVersion(), identify: false, revoked: true } };
+    if (d.revoked) return { data: { configVersion: store.getConfigVersion(), identify: false, reboot: false, revoked: true } };
     const parsed = HeartbeatBody.safeParse(req.body ?? {});
     if (parsed.success) store.updateHeartbeat(d.id, parsed.data);
-    return { data: { configVersion: store.getConfigVersion(), identify: store.consumeIdentify(d.id), revoked: false } };
+    return {
+      data: {
+        configVersion: store.getConfigVersion(),
+        identify: store.consumeIdentify(d.id),
+        reboot: store.consumeReboot(d.id),
+        revoked: false,
+      },
+    };
   });
 
   app.get('/api/kiosk/config', async (req, reply) => {

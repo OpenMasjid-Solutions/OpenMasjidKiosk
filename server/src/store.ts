@@ -535,6 +535,17 @@ export class Store {
     return false;
   }
 
+  /** Pending remote-reboot commands (transient/in-memory — a one-shot command doesn't need to
+   *  survive a server restart; the admin can just click again). Delivered on the next heartbeat. */
+  private pendingReboots = new Set<string>();
+  requestReboot(id: string): void {
+    this.pendingReboots.add(id);
+  }
+  /** Read + clear a pending reboot for this device (returns true once, then false). */
+  consumeReboot(id: string): boolean {
+    return this.pendingReboots.delete(id);
+  }
+
   // ── Device logs ───────────────────────────────────────────────────────────
   addLogs(deviceId: string, entries: { level?: string; event?: string; detail?: string; ts?: number }[]): void {
     const stmt = this.db.prepare('INSERT INTO device_logs (device_id, ts, level, event, detail) VALUES (?, ?, ?, ?, ?)');

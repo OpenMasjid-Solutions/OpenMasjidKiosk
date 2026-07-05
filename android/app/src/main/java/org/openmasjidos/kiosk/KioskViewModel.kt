@@ -21,6 +21,7 @@ import org.openmasjidos.kiosk.local.Diagnostics
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.local.PairingRecord
 import org.openmasjidos.kiosk.kiosk.DeviceStatus
+import org.openmasjidos.kiosk.kiosk.KioskController
 import org.openmasjidos.kiosk.net.HeartbeatOutcome
 import org.openmasjidos.kiosk.net.PairResult
 import org.openmasjidos.kiosk.readers.ReaderManager
@@ -271,6 +272,11 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                     is HeartbeatOutcome.Ok -> {
                         local.update { it.copy(lastHeartbeatMs = System.currentTimeMillis(), online = true) }
                         if (outcome.identify) flashIdentify()
+                        if (outcome.reboot) {
+                            repo.log("warn", "reboot_requested")
+                            repo.flushLogs() // best-effort deliver the log before we go down
+                            KioskController.reboot(appContext)
+                        }
                     }
                     HeartbeatOutcome.Revoked ->
                         // repo already wiped the pairing → the pairing flow flips us to Unpaired,

@@ -20,7 +20,7 @@ class ApiException(val status: Int, message: String) : IOException(message)
 data class PairResponse(val deviceToken: String, val deviceId: String, val configVersion: Int)
 
 /** Parsed result of `POST /api/kiosk/heartbeat`. */
-data class HeartbeatResponse(val configVersion: Int, val identify: Boolean, val revoked: Boolean)
+data class HeartbeatResponse(val configVersion: Int, val identify: Boolean, val reboot: Boolean, val revoked: Boolean)
 
 /**
  * Thin, blocking JSON client over an already-configured (pinned or TOFU) [OkHttpClient].
@@ -72,6 +72,7 @@ class KioskApi(private val client: OkHttpClient) {
         return HeartbeatResponse(
             configVersion = json.optInt("configVersion", configVersion),
             identify = json.optBoolean("identify", false),
+            reboot = json.optBoolean("reboot", false),
             revoked = json.optBoolean("revoked", false),
         )
     }

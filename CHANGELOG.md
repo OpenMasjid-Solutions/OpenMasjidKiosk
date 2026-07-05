@@ -3,6 +3,13 @@
 
 # Changelog
 
+## 0.4.4
+- **Restart a kiosk remotely** (Admin → Devices → **Restart**): the tablet restarts on its next
+  check-in — a full device reboot on tablets set up as device owner, or an app restart otherwise.
+- **Removed the battery indicator** from the Devices page. Kiosk tablets are wall-powered, so the
+  battery %/“not charging” line was just noise (and many tablets report “not charging” at 100%
+  while plugged in). Reader status and app version remain.
+
 ## 0.4.3
 - **Fix — the OpenMasjidOS theme AND wallpaper now reliably pass through.** The panel now always
   mirrors the dashboard's light/dark, accent and wallpaper on every open and refresh (it used to

@@ -15,6 +15,7 @@ import {
   MonitorSmartphone,
   Pencil,
   Plus,
+  RotateCcw,
   ScrollText,
   Smartphone,
   Trash2,
@@ -26,6 +27,7 @@ import {
   getDeviceLogs,
   getDevices,
   identifyDevice,
+  rebootDevice,
   renameDevice,
   revokeDevice,
   setKioskPin,
@@ -58,7 +60,6 @@ function relativeTime(iso: string): string {
   return `${d} day${d === 1 ? '' : 's'} ago`;
 }
 
-const batteryLabel = (b: number) => (b < 0 ? 'Battery —' : `Battery ${Math.round(b)}%`);
 
 /** Turn a raw reader status into plain words, but keep anything we don't recognise. */
 function readerLabel(s: string): string {
@@ -177,7 +178,7 @@ function DeviceList({ devices, onChange }: { devices: Device[]; onChange: () => 
           <MonitorSmartphone size={26} />
         </div>
         <p className="empty-title">No kiosks paired yet</p>
-        <p className="muted">When you pair a tablet it will show up here with its status, battery and reader.</p>
+        <p className="muted">When you pair a tablet it will show up here with its status, reader and app version.</p>
       </div>
     );
   }
@@ -194,8 +195,9 @@ function DeviceRow({ device, onChange }: { device: Device; onChange: () => void 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(device.name);
   const [savingName, setSavingName] = useState(false);
-  const [busy, setBusy] = useState<'identify' | 'remove' | null>(null);
+  const [busy, setBusy] = useState<'identify' | 'remove' | 'reboot' | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [rebootConfirming, setRebootConfirming] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [note, setNote] = useState('');
   const [err, setErr] = useState('');
@@ -228,6 +230,21 @@ function DeviceRow({ device, onChange }: { device: Device; onChange: () => void 
     try {
       await identifyDevice(device.id);
       setNote('The kiosk will flash so you can spot it.');
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reboot = async () => {
+    setErr('');
+    setNote('');
+    setBusy('reboot');
+    try {
+      await rebootDevice(device.id);
+      setRebootConfirming(false);
+      setNote('Restart sent — the kiosk will restart on its next check-in.');
     } catch (e) {
       setErr(errMsg(e));
     } finally {
@@ -286,12 +303,8 @@ function DeviceRow({ device, onChange }: { device: Device; onChange: () => void 
       </div>
 
       <div className="device-meta">
-        {device.online && !device.charging && (
-          <span className="status-pill device-warn">
-            <span className="status-dot status-dot--warn" /> Not charging
-          </span>
-        )}
-        <span className="status-pill">{batteryLabel(device.battery)}</span>
+        {/* Battery / charging removed: kiosk tablets are wall-powered, so it's just noise (and many
+            report "not charging" at 100% while plugged in). Reader + app version are what matter. */}
         <span className="status-pill">Reader: {readerLabel(device.readerStatus)}</span>
         <span className="status-pill">App v{device.appVersion || '—'}</span>
       </div>
@@ -308,6 +321,25 @@ function DeviceRow({ device, onChange }: { device: Device; onChange: () => void 
         <button className="btn btn--ghost btn--sm" onClick={() => setShowLogs(true)}>
           <ScrollText size={14} aria-hidden="true" /> Logs
         </button>
+        {rebootConfirming ? (
+          <>
+            <button className="btn btn--sm device-danger" onClick={() => void reboot()} disabled={busy === 'reboot'}>
+              {busy === 'reboot' ? 'Restarting…' : 'Confirm restart'}
+            </button>
+            <button className="btn btn--ghost btn--sm" onClick={() => setRebootConfirming(false)} disabled={busy === 'reboot'}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={() => setRebootConfirming(true)}
+            disabled={busy !== null || !device.online}
+            title={device.online ? 'Restart this kiosk (full reboot on device-owner tablets)' : 'Only works while the kiosk is online'}
+          >
+            <RotateCcw size={14} aria-hidden="true" /> Restart
+          </button>
+        )}
         {confirming ? (
           <>
             <button className="btn btn--sm device-danger" onClick={() => void remove()} disabled={busy === 'remove'}>
