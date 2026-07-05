@@ -26,11 +26,7 @@ class KioskApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // The Terminal SDK (5.x) only needs onCreate forwarded; it manages memory itself.
         TerminalApplicationDelegate.onCreate(this)
-    }
-
-    override fun onTrimMemory(level: Int) {
-        super.onTrimMemory(level)
-        TerminalApplicationDelegate.onTrimMemory(this, level)
     }
 }

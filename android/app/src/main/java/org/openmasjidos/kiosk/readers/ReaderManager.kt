@@ -209,10 +209,11 @@ object ReaderManager {
         }
         cancelDiscovery()
         _state.update { it.copy(conn = ReaderConn.Connecting, error = null) }
+        // SDK 5.6.0 names the reader-listener param per transport (both take a MobileReaderListener).
         val config = if (_state.value.transport == ReaderTransport.Usb) {
-            UsbConnectionConfiguration(locationId, autoReconnectOnUnexpectedDisconnect = true, mobileReaderListener = readerListener)
+            UsbConnectionConfiguration(locationId, autoReconnectOnUnexpectedDisconnect = true, usbReaderListener = readerListener)
         } else {
-            BluetoothConnectionConfiguration(locationId, autoReconnectOnUnexpectedDisconnect = true, mobileReaderListener = readerListener)
+            BluetoothConnectionConfiguration(locationId, autoReconnectOnUnexpectedDisconnect = true, bluetoothReaderListener = readerListener)
         }
         Terminal.getInstance().connectReader(
             reader,
