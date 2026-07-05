@@ -26,12 +26,11 @@ export function Crescent({ size = 22 }: { size?: number }) {
 export function Scene() {
   const prefs = usePrefs();
   const v = prefs.wallpaperImage.trim();
-  // Accept a same-origin path (our /api/public/wallpaper proxy), an http(s) URL, or a
-  // data:image URL — and nothing with quotes/backslash/whitespace that could break out of
-  // url("…"). The value can come from the attacker-craftable #omos fragment, and this is the
-  // whole backdrop, so sanitise before use (mirrors Donations/Display + the OS proxy).
-  const noBreak = !/["'\\\s]/.test(v);
-  const safe = noBreak && (v.startsWith('/') || /^https?:\/\//i.test(v) || /^data:image\//i.test(v)) ? v : '';
+  // Accept only http(s)/data:image URLs with no characters that could break out of url("…").
+  // The value can come from the attacker-craftable #omos fragment, and this is the whole
+  // backdrop, so sanitise before use (mirrors Donations/Display — the OS's wallpaperImage is a
+  // full image URL rendered directly, no proxy).
+  const safe = /^(https?:\/\/|data:image\/)/i.test(v) && !/["\\\s]/.test(v) ? v : '';
   if (safe) return <div className="scene-img" aria-hidden="true" style={{ backgroundImage: `url("${safe}")` }} />;
   return <div className="scene" aria-hidden="true" />;
 }

@@ -327,8 +327,12 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private companion object {
-        const val HEARTBEAT_INTERVAL_MS = 45_000L
-        const val IDENTIFY_MS = 4_000L
+        // 15s (not 45s): with no server→tablet push, the heartbeat is also how "identify",
+        // config changes and online status reach the kiosk — 45s made "flash to locate" feel
+        // broken (nothing happened for most of a minute). 15s is still trivial LAN traffic.
+        const val HEARTBEAT_INTERVAL_MS = 15_000L
+        // Flash long enough to actually spot across a room and to span heartbeat jitter.
+        const val IDENTIFY_MS = 12_000L
         const val SECRET_TAPS = 5
         const val SECRET_WINDOW_MS = 3_000L
         const val FREE_ATTEMPTS = 3

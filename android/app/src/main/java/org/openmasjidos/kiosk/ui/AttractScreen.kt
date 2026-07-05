@@ -3,6 +3,13 @@
 
 package org.openmasjidos.kiosk.ui
 
+import android.provider.Settings
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -21,8 +28,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
@@ -137,15 +146,39 @@ fun AttractScreen(
                 .padding(24.dp),
         )
 
-        // Identify: a static, high-opacity gold wash so the admin can pick out this tablet.
-        if (identify) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(GoldDark.copy(alpha = 0.28f)),
-            )
-        }
+        // Identify: a bold, pulsing full-screen wash so an admin can spot THIS tablet on the
+        // wall from across the room. Reduced-motion → a strong static wash instead of a pulse.
+        if (identify) IdentifyFlash()
     }
+}
+
+/** The "flash to locate" overlay: a strong gold wash that pulses (or stays solid when the
+ *  device has animations turned off). Full-screen and high-contrast so it's unmistakable. */
+@Composable
+private fun IdentifyFlash() {
+    val context = LocalContext.current
+    val reduceMotion = remember {
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+    }
+    val alpha = if (reduceMotion) {
+        0.5f
+    } else {
+        val transition = rememberInfiniteTransition(label = "identify")
+        transition.animateFloat(
+            initialValue = 0.12f,
+            targetValue = 0.62f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 650, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "identify-alpha",
+        ).value
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(GoldDark.copy(alpha = alpha)),
+    )
 }
 
 /**

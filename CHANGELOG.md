@@ -3,6 +3,17 @@
 
 # Changelog
 
+## 0.4.1
+- **Fix — the OpenMasjidOS wallpaper now shows in the admin panel.** It now inherits the
+  dashboard's custom wallpaper image exactly the way the other OpenMasjid apps do — the image URL
+  you set in OpenMasjidOS is used directly (make sure it's an `https://` link). This also removes
+  the internal image-proxy entirely, so the previous proxy's security hardening is no longer
+  needed. (Named preset wallpapers + accent colour already inherited.)
+- **Fix — "Identify" (flash to locate a kiosk) now actually stands out.** Tapping *Identify* in
+  Admin → Devices makes the tablet pulse a bold gold wash for several seconds — easy to spot on a
+  wall. Kiosks also now check in every 15s (was 45s), so Identify, config changes and online
+  status show up much faster. (Devices with animations turned off get a strong steady wash.)
+
 ## 0.4.0
 - **Card reader (Stripe Reader M2).** Set up and manage the reader from the kiosk's PIN-protected
   maintenance screen: choose **Bluetooth**, **USB**, or the built-in **Test reader**, find it,

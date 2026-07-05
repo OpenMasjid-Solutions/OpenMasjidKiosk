@@ -11,8 +11,6 @@
  *  donations log arrive in later slices. */
 import path from 'node:path';
 import fs from 'node:fs';
-import * as net from 'node:net';
-import * as dns from 'node:dns/promises';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyCookie from '@fastify/cookie';
@@ -40,151 +38,6 @@ import {
 const log = makeLog('main');
 
 const LOOPBACK_RE = /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[?::1)/i;
-
-/** Identify an image from its first bytes (magic numbers) — because many hosts serve images
- *  with the wrong or no content-type. Covers the formats a wallpaper would ever be. */
-function sniffImageType(buf: Buffer): string {
-  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
-  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
-  if (buf.length >= 4 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return 'image/gif';
-  if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
-  if (buf.length >= 2 && buf[0] === 0x42 && buf[1] === 0x4d) return 'image/bmp';
-  if (buf.length >= 4 && buf[0] === 0x00 && buf[1] === 0x00 && buf[2] === 0x01 && buf[3] === 0x00) return 'image/x-icon';
-  if (buf.length >= 12 && buf.toString('ascii', 4, 8) === 'ftyp') {
-    const brand = buf.toString('ascii', 8, 12).toLowerCase();
-    if (brand.startsWith('avif') || brand === 'avis') return 'image/avif';
-    if (brand.startsWith('heic') || brand.startsWith('heif') || brand.startsWith('mif1') || brand.startsWith('msf1')) return 'image/heic';
-  }
-  // SVG is text; look for the root element in the first chunk.
-  const head = buf.toString('utf8', 0, Math.min(buf.length, 512)).trimStart();
-  if (/^<\?xml/i.test(head) ? /<svg[\s>]/i.test(head) : /^<svg[\s>]/i.test(head)) return 'image/svg+xml';
-  return '';
-}
-
-/** Raster image types we're willing to proxy. Deliberately EXCLUDES SVG: an SVG is an active
- *  document that can carry <script>, and we serve wallpapers from our own (admin-authenticated)
- *  HTTPS origin — serving attacker-influenced SVG there would be a stored-XSS vector. Wallpapers
- *  are effectively always raster anyway. */
-const RASTER_IMAGE_TYPES = new Set([
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/x-icon', 'image/avif', 'image/heic',
-]);
-
-/** True for loopback/private/link-local/CGNAT/metadata IPs — targets we must never fetch (SSRF). */
-function ipIsPrivate(ip: string): boolean {
-  if (net.isIPv4(ip)) {
-    const p = ip.split('.').map(Number);
-    if (p[0] === 10 || p[0] === 127 || p[0] === 0) return true;
-    if (p[0] === 169 && p[1] === 254) return true;                 // link-local + cloud metadata (169.254.169.254)
-    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
-    if (p[0] === 192 && p[1] === 168) return true;
-    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true;    // CGNAT 100.64/10
-    return false;
-  }
-  if (net.isIPv6(ip)) {
-    const lc = ip.toLowerCase();
-    if (lc === '::1' || lc === '::') return true;
-    if (lc.startsWith('fe80')) return true;                        // link-local
-    if (lc.startsWith('fc') || lc.startsWith('fd')) return true;   // unique-local
-    const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(lc);  // IPv4-mapped
-    if (mapped) return ipIsPrivate(mapped[1]);
-    return false;
-  }
-  return true; // unparseable → block
-}
-
-/** The platform's own host (from OPENMASJID_BASE_URL) — allowed even though it's a LAN/private
- *  address, because that's where uploaded wallpapers live. Everything else private is blocked. */
-function osHostname(): string | null {
-  try { return new URL(String(process.env.OPENMASJID_BASE_URL ?? '').trim()).hostname.toLowerCase(); }
-  catch { return null; }
-}
-
-/** SSRF guard: may we fetch this host? The OS's own host is always allowed; any other host must
- *  resolve exclusively to public IPs. Blocks loopback/private/link-local/metadata + obvious names. */
-async function wallpaperHostAllowed(hostname: string): Promise<boolean> {
-  const h = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (!h) return false;
-  const os = osHostname();
-  if (os && h === os) return true;
-  if (net.isIP(h)) return !ipIsPrivate(h);
-  if (/^(localhost|localhost\.localdomain)$/.test(h) || /\.(local|internal|localhost|home\.arpa)$/.test(h)) return false;
-  try {
-    const addrs = await dns.lookup(h, { all: true });
-    return addrs.length > 0 && addrs.every((a) => !ipIsPrivate(a.address));
-  } catch {
-    return false;
-  }
-}
-
-/** Fetch a wallpaper's bytes safely: http(s) only, no credentials, SSRF-guarded on EVERY hop
- *  (we follow redirects manually so we can re-check each target host), a hard overall deadline
- *  that also covers the body read, and a streamed byte cap so an absent/lying Content-Length
- *  can't OOM us. Returns null on any failure/violation. */
-async function fetchWallpaperBytes(startUrl: string): Promise<{ buf: Buffer; upstreamType: string } | null> {
-  const MAX_BYTES = 15_000_000;
-  const ctrl = new AbortController();
-  const deadline = setTimeout(() => ctrl.abort(), 12_000);
-  try {
-    let url = startUrl;
-    for (let hop = 0; hop < 4; hop++) {
-      let u: URL;
-      try { u = new URL(url); } catch { return null; }
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-      if (u.username || u.password) return null;                    // no embedded credentials
-      if (!(await wallpaperHostAllowed(u.hostname))) return null;
-      const res = await fetch(u, {
-        signal: ctrl.signal,
-        redirect: 'manual',                                         // re-validate each hop ourselves
-        headers: { 'user-agent': 'OpenMasjidKiosk/wallpaper-proxy', accept: 'image/*,*/*;q=0.8' },
-      });
-      if (res.status >= 300 && res.status < 400) {
-        const loc = res.headers.get('location');
-        if (!loc) return null;
-        url = new URL(loc, u).toString();
-        continue;
-      }
-      if (!res.ok || !res.body) return null;
-      const len = Number(res.headers.get('content-length') ?? '0');
-      if (len && len > MAX_BYTES) return null;
-      const reader = res.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let received = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          received += value.byteLength;
-          if (received > MAX_BYTES) { ctrl.abort(); return null; }
-          chunks.push(value);
-        }
-      }
-      const upstreamType = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
-      return { buf: Buffer.concat(chunks), upstreamType };
-    }
-    return null; // too many redirects
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(deadline);
-  }
-}
-
-/** Last-resort image type from a URL's file extension (before any query string). */
-function extImageType(url: string): string {
-  const m = /\.([a-z0-9]+)(?:$|\?|#)/i.exec(url.split(/[?#]/)[0]);
-  switch ((m?.[1] ?? '').toLowerCase()) {
-    case 'jpg': case 'jpeg': return 'image/jpeg';
-    case 'png': return 'image/png';
-    case 'gif': return 'image/gif';
-    case 'webp': return 'image/webp';
-    case 'bmp': return 'image/bmp';
-    case 'ico': return 'image/x-icon';
-    case 'svg': return 'image/svg+xml';
-    case 'avif': return 'image/avif';
-    case 'heic': case 'heif': return 'image/heic';
-    default: return '';
-  }
-}
 
 /** The download filename we hand the tablet — versioned so a stale cached copy is obvious.
  *  The URL path stays stable at /download/openmasjidkiosk.apk. */
@@ -253,66 +106,13 @@ async function main(): Promise<void> {
   // Our page is served over HTTPS (platform's per-app TLS proxy, because manifest sets
   // `https: true`). The platform's appearance endpoint is plain HTTP, so a direct browser
   // fetch would be mixed-content blocked. The web polls us (same origin) and we fetch the
-  // platform server-to-server. Returns { theme, wallpaper, accent, … } or {} (no secrets).
+  // platform server-to-server, returning it VERBATIM (theme, wallpaper, wallpaperImage,
+  // accent, lang) or {} (no secrets) — exactly like OpenMasjid Donations/Display. The admin
+  // types a full image URL in OpenMasjidOS, so the browser renders wallpaperImage directly;
+  // we do NOT proxy the image bytes (no SSRF surface, matches the other apps).
   app.get('/api/public/appearance', async (_req, reply) => {
     reply.header('cache-control', 'no-store');
-    const a = await fetchAppearance();
-    // The platform serves its custom wallpaper image over plain HTTP; our page is HTTPS, so
-    // the browser would block it as mixed content. Rewrite it to our own same-origin HTTPS
-    // proxy (below) so the OS wallpaper actually shows through. Named presets (no image) pass
-    // through untouched and render as CSS gradients. Ambient video is a local OS-only setting
-    // and isn't in the appearance payload, so it can't be inherited. We rewrite ANY non-empty
-    // wallpaperImage (absolute http(s) OR a relative upload path) — the proxy resolves it.
-    if (a && typeof a === 'object') {
-      const wi = (a as Record<string, unknown>).wallpaperImage;
-      if (typeof wi === 'string' && wi.trim() && !/^data:/i.test(wi.trim())) {
-        (a as Record<string, unknown>).wallpaperImage = '/api/public/wallpaper';
-      }
-    }
-    return a;
-  });
-
-  // Same-origin proxy for the OpenMasjidOS wallpaper image. Fetches the platform's CURRENT
-  // wallpaper server-side and streams the bytes over our HTTPS origin — fixing mixed content
-  // AND canvas taint (so luminance/readability works). The target is the OS appearance's own
-  // wallpaperImage, but it can be an admin-typed EXTERNAL URL, so we treat it as untrusted:
-  //   • http(s) only, no embedded credentials;
-  //   • SSRF-guarded on every redirect hop (no loopback/private/link-local/metadata targets,
-  //     except the platform's own host where uploads live);
-  //   • streamed byte cap + hard deadline (no OOM/slow-loris);
-  //   • RASTER images only (never SVG — it's an active document = XSS on our origin);
-  //   • served with nosniff + a locked-down CSP as defence in depth.
-  app.get('/api/public/wallpaper', async (_req, reply) => {
-    const a = await fetchAppearance();
-    const raw = a && typeof (a as Record<string, unknown>).wallpaperImage === 'string' ? String((a as Record<string, unknown>).wallpaperImage).trim() : '';
-    if (!raw || /^data:/i.test(raw)) return reply.code(404).send({ error: 'No wallpaper set.' });
-    // Resolve to an absolute URL: protocol-relative (`//host/..`) is ABSOLUTE (a different host),
-    // NOT relative — treating it as relative was an SSRF-base-escape. Real relative paths (an
-    // upload like `/uploads/x.jpg`) resolve against the platform base.
-    let src = raw;
-    if (/^\/\//.test(raw)) {
-      src = 'https:' + raw;
-    } else if (!/^https?:\/\//i.test(raw)) {
-      const base = String(process.env.OPENMASJID_BASE_URL ?? '').trim();
-      if (!/^https?:\/\//i.test(base)) return reply.code(404).send({ error: 'No wallpaper set.' });
-      try { src = new URL(raw, base.endsWith('/') ? base : base + '/').toString(); } catch { return reply.code(404).send({ error: 'No wallpaper set.' }); }
-    }
-
-    const fetched = await fetchWallpaperBytes(src);
-    if (!fetched) return reply.code(502).send({ error: 'Wallpaper unavailable.' });
-
-    // Determine a RASTER type: a real raster upstream header, else sniff the bytes, else the URL
-    // extension. Reject anything that isn't raster (notably SVG) — never serve active content.
-    const upstream = RASTER_IMAGE_TYPES.has(fetched.upstreamType) ? fetched.upstreamType : '';
-    const type = upstream || sniffImageType(fetched.buf) || extImageType(src);
-    if (!type || !RASTER_IMAGE_TYPES.has(type)) return reply.code(502).send({ error: 'Wallpaper unavailable.' });
-
-    return reply
-      .header('content-type', type)
-      .header('x-content-type-options', 'nosniff')
-      .header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox")
-      .header('cache-control', 'public, max-age=300')
-      .send(fetched.buf);
+    return await fetchAppearance();
   });
 
   // ── Session: who am I? Also performs the SSO upgrade. ───────────────────────
