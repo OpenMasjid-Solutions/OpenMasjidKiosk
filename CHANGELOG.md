@@ -3,6 +3,13 @@
 
 # Changelog
 
+## 0.4.2
+- **Fix — the OpenMasjidOS wallpaper now really inherits.** Choosing light/dark in the panel used
+  to quietly switch off *all* appearance syncing, so after a refresh the panel fell back to the
+  default background. Now the wallpaper and accent always follow OpenMasjidOS while the app is
+  opened through it; only the light/dark choice stays as you set it. (Set an `https://` image URL
+  in OpenMasjidOS → Settings.)
+
 ## 0.4.1
 - **Fix — the OpenMasjidOS wallpaper now shows in the admin panel.** It now inherits the
   dashboard's custom wallpaper image exactly the way the other OpenMasjid apps do — the image URL
