@@ -69,10 +69,12 @@
     <string name="reader_status_discovering">Looking for readers…</string>
     <string name="reader_status_updating">Updating the reader…</string>
     <string name="reader_status_error">Reader problem</string>
+    <string name="reader_permission_denied">Bluetooth and Location permission are needed to find a reader. Enable them for this app in the tablet\'s Settings, then try again.</string>
     <string name="maintenance_server_title">Server &amp; pairing</string>
     <string name="maintenance_diagnostics_title">Diagnostics</string>
     <string name="maintenance_repair">Re-pair this kiosk</string>
     <string name="maintenance_exit">Exit kiosk</string>
+    <string name="maintenance_exit_needs_pin">To leave kiosk mode, set an exit PIN in Admin → Devices, then unlock with it. This keeps the kiosk locked until the PIN reaches this tablet.</string>
     <string name="maintenance_return">Return to kiosk</string>
 
     <!-- Diagnostics labels -->

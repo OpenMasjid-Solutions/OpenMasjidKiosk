@@ -66,6 +66,7 @@ fun MaintenanceScreen(
     reader: ReaderUiState,
     locationId: String,
     noPinSet: Boolean,
+    exitAllowed: Boolean,
     showPinningHint: Boolean,
     onScanReaders: (ReaderTransport) -> Unit,
     onStopReaderScan: () -> Unit,
@@ -73,6 +74,7 @@ fun MaintenanceScreen(
     onDisconnectReader: () -> Unit,
     onInstallReaderUpdate: () -> Unit,
     onDismissReaderError: () -> Unit,
+    onReaderPermissionDenied: () -> Unit,
     onReturn: () -> Unit,
     onRePair: () -> Unit,
     onExit: () -> Unit,
@@ -145,6 +147,7 @@ fun MaintenanceScreen(
                     onDisconnectReader = onDisconnectReader,
                     onInstallReaderUpdate = onInstallReaderUpdate,
                     onDismissReaderError = onDismissReaderError,
+                    onReaderPermissionDenied = onReaderPermissionDenied,
                 )
             }
 
@@ -178,14 +181,21 @@ fun MaintenanceScreen(
                 Text(stringResource(R.string.maintenance_return), style = MaterialTheme.typography.titleLarge)
             }
             Spacer(Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = onExit,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
-            ) {
-                Text(stringResource(R.string.maintenance_exit), color = DangerDark)
+            // Leaving kiosk mode requires a verified exit PIN this session (see KioskViewModel):
+            // when maintenance was opened without one (no PIN set, or config not yet synced), show a
+            // note instead of the exit button so the lock can't be bypassed in the pre-sync window.
+            if (exitAllowed) {
+                OutlinedButton(
+                    onClick = onExit,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp),
+                ) {
+                    Text(stringResource(R.string.maintenance_exit), color = DangerDark)
+                }
+            } else {
+                Banner(text = stringResource(R.string.maintenance_exit_needs_pin), tone = InkMutedDark)
             }
         }
     }
@@ -261,6 +271,7 @@ private fun ReaderControls(
     onDisconnectReader: () -> Unit,
     onInstallReaderUpdate: () -> Unit,
     onDismissReaderError: () -> Unit,
+    onReaderPermissionDenied: () -> Unit,
 ) {
     val context = LocalContext.current
     var selected by remember { mutableStateOf(reader.transport) }
@@ -270,7 +281,11 @@ private fun ReaderControls(
     ) { result ->
         val t = pending
         pending = null
-        if (t != null && result.values.all { it }) onScanReaders(t)
+        when {
+            t == null -> Unit
+            result.values.all { it } -> onScanReaders(t)
+            else -> onReaderPermissionDenied() // don't leave the Scan button a silent no-op
+        }
     }
     fun startScan(t: ReaderTransport) {
         val perms = readerPermissions(t)
@@ -377,6 +392,7 @@ private fun ReaderControls(
             } else {
                 Button(
                     onClick = { startScan(selected) },
+                    enabled = reader.conn != ReaderConn.Connecting, // don't race an in-flight connect
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,

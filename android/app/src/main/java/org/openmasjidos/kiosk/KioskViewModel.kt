@@ -69,6 +69,10 @@ data class UiState(
     val identify: Boolean = false,
     val diagnostics: Diagnostics = Diagnostics(),
     val reader: ReaderUiState = ReaderUiState(),
+    // Leaving kiosk mode requires a VERIFIED exit PIN this session — not merely a blank local
+    // pinHash (which can just mean config hasn't synced yet). Maintenance stays reachable for
+    // reader setup/diagnostics without a PIN, but "Exit kiosk" is gated on this.
+    val exitAllowed: Boolean = false,
 )
 
 /**
@@ -93,6 +97,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         val charging: Boolean? = null,
         val lastHeartbeatMs: Long? = null,
         val online: Boolean = false,
+        val maintUnlockedViaPin: Boolean = false,
     )
 
     private val local = MutableStateFlow(Local(form = PairingForm(name = Build.MODEL ?: "Kiosk")))
@@ -108,6 +113,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             identify = l.identify,
             diagnostics = buildDiagnostics(pairing, l, reader),
             reader = reader,
+            exitAllowed = l.maintUnlockedViaPin,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), UiState())
 
@@ -156,6 +162,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dismissReaderError() = ReaderManager.clearError()
 
+    /** The volunteer denied a reader permission — tell them how to recover (silent no-op otherwise). */
+    fun onReaderPermissionDenied() =
+        ReaderManager.reportError(appContext.getString(R.string.reader_permission_denied))
+
     // ---- Pairing form actions ----------------------------------------------------------
 
     fun onUrlChange(value: String) = local.update { it.copy(form = it.form.copy(url = value, error = null)) }
@@ -192,9 +202,13 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         while (cornerTaps.isNotEmpty() && now - cornerTaps.first() > SECRET_WINDOW_MS) cornerTaps.removeFirst()
         if (cornerTaps.size >= SECRET_TAPS) {
             cornerTaps.clear()
-            // If no exit PIN has been set yet, don't lock the volunteer out of maintenance.
+            // If no exit PIN is set locally, still open maintenance (so a fresh kiosk isn't bricked
+            // for reader setup/diagnostics) — but WITHOUT exit rights: leaving kiosk mode requires a
+            // verified PIN, so a not-yet-synced PIN can't be bypassed by catching this window.
             val hasPin = ui.value.config?.pinHash?.isNotBlank() == true
-            local.update { it.copy(overlay = if (hasPin) Overlay.Pin else Overlay.Maintenance) }
+            local.update {
+                it.copy(overlay = if (hasPin) Overlay.Pin else Overlay.Maintenance, maintUnlockedViaPin = false)
+            }
         }
     }
 
@@ -208,7 +222,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val ok = hash.isNotBlank() && repo.verifyPin(pin, hash)
             if (ok) {
                 repo.log("info", "kiosk_unlocked")
-                local.update { it.copy(overlay = Overlay.Maintenance, pin = PinState()) }
+                local.update { it.copy(overlay = Overlay.Maintenance, pin = PinState(), maintUnlockedViaPin = true) }
             } else {
                 local.update {
                     val attempts = it.pin.attempts + 1
@@ -219,7 +233,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun closeOverlay() = local.update { it.copy(overlay = Overlay.None, pin = it.pin.copy(wrong = false)) }
+    fun closeOverlay() = local.update {
+        it.copy(overlay = Overlay.None, pin = it.pin.copy(wrong = false), maintUnlockedViaPin = false)
+    }
 
     /** Wipe the local pairing and return to the pairing screen (re-pair / after revoke). */
     fun rePair() {

@@ -12,6 +12,15 @@
 - The reader talks to Stripe with a short-lived **connection token** the server mints on demand —
   the tablet never holds your Stripe secret key, and card data goes reader → Stripe only.
 - New guide: **docs/READER_SETUP.md** (charging, Bluetooth vs USB, permissions, troubleshooting).
+- Reader polish: denying a Bluetooth/Location permission now explains how to fix it (instead of the
+  Find button doing nothing); scanning can't collide with an in-progress connection; and leaving
+  kiosk mode now always requires a verified exit PIN (it can't be bypassed in the brief window
+  after you set a PIN but before it reaches the tablet).
+- **Security hardening of the wallpaper proxy** (also fixes the same issue introduced in 0.3.2):
+  the server only fetches images from your OpenMasjidOS or a public address — never loopback,
+  private, or cloud-metadata addresses, even via redirects — caps and times out the download so a
+  bad image host can't wedge it, and refuses SVG (so a wallpaper can never run code on the admin
+  page).
 - Taking donations with the reader arrives in the next update.
 
 ## 0.3.2

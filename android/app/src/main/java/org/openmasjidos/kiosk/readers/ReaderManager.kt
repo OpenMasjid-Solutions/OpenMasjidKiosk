@@ -87,6 +87,11 @@ object ReaderManager {
     private var discoveryCancelable: Cancelable? = null
     private var connectedSerial: String? = null
 
+    /** Bumped on every scan start AND every cancel. A discovery round's listener/callback captures
+     *  its generation and ignores late events once a newer round (or a cancel/connect) has moved on,
+     *  so a stale onFailure can't clobber a fresh Discovering/Connecting state. */
+    private var discoveryGen = 0
+
     // ---- Initialisation ----------------------------------------------------------------
 
     /** Idempotently create the Terminal instance. Safe to call from the main thread; it does not
@@ -143,8 +148,11 @@ object ReaderManager {
             _state.update { it.copy(error = "Reader isn’t ready yet.") }
             return
         }
+        // Don't disturb an in-flight connect/update — the admin would see a confusing bounce.
+        if (_state.value.conn == ReaderConn.Connecting || _state.value.conn == ReaderConn.Updating) return
         cancelDiscovery()
         lastDiscovered = emptyList()
+        val gen = ++discoveryGen
         _state.update {
             it.copy(transport = transport, conn = ReaderConn.Discovering, discovered = emptyList(), error = null)
         }
@@ -153,35 +161,39 @@ object ReaderManager {
             ReaderTransport.Simulated -> BluetoothDiscoveryConfiguration(0, isSimulated = true)
             ReaderTransport.Usb -> UsbDiscoveryConfiguration(0, isSimulated = false)
         }
+        // Listener + completion callback both capture `gen` and no-op once superseded.
+        val listener = object : DiscoveryListener {
+            override fun onUpdateDiscoveredReaders(readers: List<Reader>) {
+                if (gen != discoveryGen) return
+                lastDiscovered = readers
+                _state.update {
+                    it.copy(discovered = readers.map { r -> DiscoveredReader(r.serialNumber ?: "", labelFor(r)) })
+                }
+            }
+        }
         discoveryCancelable = Terminal.getInstance().discoverReaders(
             config,
-            discoveryListener,
+            listener,
             object : Callback {
                 override fun onSuccess() { /* discovery ended (usually because we cancelled) */ }
                 override fun onFailure(e: TerminalException) {
+                    if (gen != discoveryGen) return
                     _state.update { it.copy(conn = ReaderConn.Error, error = friendly(e)) }
                 }
             },
         )
     }
 
-    private val discoveryListener = object : DiscoveryListener {
-        override fun onUpdateDiscoveredReaders(readers: List<Reader>) {
-            lastDiscovered = readers
-            _state.update {
-                it.copy(discovered = readers.map { r -> DiscoveredReader(r.serialNumber ?: "", labelFor(r)) })
-            }
-        }
-    }
-
     fun stopDiscovery() {
+        val wasDiscovering = _state.value.conn == ReaderConn.Discovering
         cancelDiscovery()
-        if (_state.value.conn == ReaderConn.Discovering) {
+        if (wasDiscovering) {
             _state.update { it.copy(conn = ReaderConn.NotConnected) }
         }
     }
 
     private fun cancelDiscovery() {
+        discoveryGen++ // invalidate any in-flight round's listener/callback
         discoveryCancelable?.let { c ->
             runCatching {
                 if (!c.isCompleted) c.cancel(object : Callback {
@@ -192,6 +204,9 @@ object ReaderManager {
         }
         discoveryCancelable = null
     }
+
+    /** Surface a message on the reader card (used by the UI when a permission is denied). */
+    fun reportError(message: String) = _state.update { it.copy(error = message) }
 
     // ---- Connect / disconnect ----------------------------------------------------------
 
