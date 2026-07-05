@@ -131,7 +131,10 @@ function readOmosFragment(): OmosAppearance | null {
 function load(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Prefs>) } : { ...DEFAULTS };
+    // followOmos is a SESSION flag, never persisted: every load starts by following the OS, so the
+    // dashboard's theme/wallpaper/accent always pass through on open + refresh. A manual light/dark
+    // toggle sets it false for this session only; a refresh returns to following the OS.
+    return { ...DEFAULTS, ...(raw ? (JSON.parse(raw) as Partial<Prefs>) : {}), followOmos: true };
   } catch {
     return { ...DEFAULTS };
   }
@@ -266,14 +269,13 @@ export function useReadableTheme(imageUrl: string | undefined, fallback: 'light'
   return theme;
 }
 
-/** While embedded under OpenMasjidOS, keep wallpaper + accent (and theme, unless manually
- *  overridden) in sync with the dashboard — poll on load, every 45s, and whenever the page
- *  regains focus. The one-shot #omos fragment is the primary hand-off; this is live sync.
- *  NOTE: this deliberately does NOT gate on followOmos — a manual light/dark choice must not
- *  stop the wallpaper from inheriting (fetchOmosAppearance holds back only the theme field). */
-export function useOmosAppearanceSync(embedded: boolean | undefined): void {
+/** Keep wallpaper + accent (and theme, unless manually overridden this session) in sync with the
+ *  dashboard — poll on load, every 45s, and whenever the page regains focus. Deliberately does NOT
+ *  gate on `embedded`: we always poll our OWN same-origin relay, which returns {} when standalone
+ *  (so it's a harmless no-op) and the OS appearance when embedded. Gating on a possibly-miscomputed
+ *  `embedded` flag was a way for inheritance to silently never start. */
+export function useOmosAppearanceSync(_embedded?: boolean | undefined): void {
   useEffect(() => {
-    if (!embedded) return;
     void fetchOmosAppearance();
     const iv = window.setInterval(() => void fetchOmosAppearance(), 45_000);
     const onFocus = () => void fetchOmosAppearance();
@@ -282,5 +284,5 @@ export function useOmosAppearanceSync(embedded: boolean | undefined): void {
       window.clearInterval(iv);
       window.removeEventListener('focus', onFocus);
     };
-  }, [embedded]);
+  }, []);
 }

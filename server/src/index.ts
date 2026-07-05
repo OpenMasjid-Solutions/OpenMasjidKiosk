@@ -99,6 +99,10 @@ async function main(): Promise<void> {
       name: 'OpenMasjid Kiosk',
       version: config.version,
       embedded: ssoConfigured(),
+      // Whether the platform's base URL actually reached this container. If this is false while
+      // running under OpenMasjidOS, the `environment:` block in docker-compose.yml didn't pass
+      // OPENMASJID_BASE_URL through — and appearance/SSO/notifications all silently no-op.
+      fabricReachable: !!config.omosBaseUrl,
       apkAvailable: fs.existsSync(config.apkPath),
       apkDownloadPath: '/download/openmasjidkiosk.apk',
       apkFilename,

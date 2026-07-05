@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.4.3
+- **Fix — the OpenMasjidOS theme AND wallpaper now reliably pass through.** The panel now always
+  mirrors the dashboard's light/dark, accent and wallpaper on every open and refresh (it used to
+  only sync when it *thought* it was running under the platform, and a light/dark toggle switched
+  syncing off entirely — so a refresh fell back to defaults). A manual light/dark choice still
+  holds for your current session. (Set an `https://` image URL in OpenMasjidOS → Settings.)
+- The About/status now reports whether the app can see OpenMasjidOS, which makes "why isn't it
+  inheriting?" easy to diagnose (it means the platform's address reached the app).
+
 ## 0.4.2
 - **Fix — the OpenMasjidOS wallpaper now really inherits.** Choosing light/dark in the panel used
   to quietly switch off *all* appearance syncing, so after a refresh the panel fell back to the
