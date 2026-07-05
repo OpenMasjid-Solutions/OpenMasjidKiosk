@@ -59,6 +59,31 @@ export interface MasjidInfo {
   address: MasjidAddress;
 }
 
+/** The giving screen the kiosk shows (designed in the admin panel; the designer UI is a later
+ *  slice). Amounts are stored in integer MINOR units so no float rounding ever reaches Stripe. */
+export interface GivingConfig {
+  presetsMinor: number[];
+  allowCustom: boolean;
+  customMinMinor: number;
+  customMaxMinor: number;
+  monthlyEnabled: boolean;
+  namePolicy: 'off' | 'optional' | 'required';
+  emailPolicy: 'off' | 'optional' | 'required';
+  thankYouMessage: string;
+}
+
+const GIVING_DEFAULTS: GivingConfig = {
+  // 5 / 10 / 20 / 50 / 100 / 250 for a 2-decimal currency (sensible starting points; editable).
+  presetsMinor: [500, 1000, 2000, 5000, 10000, 25000],
+  allowCustom: true,
+  customMinMinor: 100,
+  customMaxMinor: 1_000_000,
+  monthlyEnabled: true,
+  namePolicy: 'optional',
+  emailPolicy: 'optional',
+  thankYouMessage: 'JazākAllāhu khayran — thank you for your generous donation.',
+};
+
 /** A paired kiosk (tablet). `token_hash` (not the token) is stored. */
 export interface Device {
   id: string;
@@ -132,6 +157,22 @@ export class Store {
         detail TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS idx_logs_device ON device_logs(device_id, id);
+
+      CREATE TABLE IF NOT EXISTS donations (
+        id TEXT PRIMARY KEY,
+        payment_intent_id TEXT NOT NULL DEFAULT '',
+        device_id TEXT NOT NULL DEFAULT '',
+        amount_minor INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'one_time',
+        status TEXT NOT NULL DEFAULT '',
+        donor_name TEXT NOT NULL DEFAULT '',
+        donor_email TEXT NOT NULL DEFAULT '',
+        charge_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_donations_pi ON donations(payment_intent_id);
+      CREATE INDEX IF NOT EXISTS idx_donations_created ON donations(created_at);
     `);
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
@@ -288,9 +329,77 @@ export class Store {
     return this.getRaw('attract_title') ?? '';
   }
 
-  /** The versioned config a paired kiosk pulls. Amounts/messages/wallpaper arrive with the
-   *  giving-screen designer (later slice); slice 4 syncs the PIN, currency and location. */
+  // ── Giving config (the amounts/messages the kiosk shows; designer UI is a later slice) ──
+  getGiving(): GivingConfig {
+    return this.getJson<GivingConfig>('giving', GIVING_DEFAULTS);
+  }
+  setGiving(patch: Partial<GivingConfig>): GivingConfig {
+    const cur = this.getGiving();
+    const merged: GivingConfig = { ...cur, ...clean(patch as Record<string, unknown>) } as GivingConfig;
+    // Sanitise: at most 6 positive integer presets; sane custom bounds; known policies.
+    merged.presetsMinor = (Array.isArray(merged.presetsMinor) ? merged.presetsMinor : [])
+      .map((n) => Math.round(Number(n)))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .slice(0, 6);
+    merged.customMinMinor = Math.max(1, Math.round(Number(merged.customMinMinor) || GIVING_DEFAULTS.customMinMinor));
+    merged.customMaxMinor = Math.max(merged.customMinMinor, Math.round(Number(merged.customMaxMinor) || GIVING_DEFAULTS.customMaxMinor));
+    const pol = (v: unknown): 'off' | 'optional' | 'required' => (v === 'off' || v === 'required' ? v : 'optional');
+    merged.namePolicy = pol(merged.namePolicy);
+    merged.emailPolicy = pol(merged.emailPolicy);
+    merged.allowCustom = merged.allowCustom !== false;
+    merged.monthlyEnabled = merged.monthlyEnabled !== false;
+    merged.thankYouMessage = String(merged.thankYouMessage ?? GIVING_DEFAULTS.thankYouMessage).slice(0, 500);
+    this.setRaw('giving', JSON.stringify(merged));
+    this.bumpConfigVersion();
+    return merged;
+  }
+
+  /** Server-side amount guard (never trust the tablet): an allowed amount is a configured
+   *  preset, or — when custom is enabled — within [min,max]. Integer minor units only. */
+  isAllowedAmount(amountMinor: number): boolean {
+    if (!Number.isInteger(amountMinor) || amountMinor <= 0) return false;
+    const g = this.getGiving();
+    if (g.presetsMinor.includes(amountMinor)) return true;
+    return g.allowCustom && amountMinor >= g.customMinMinor && amountMinor <= g.customMaxMinor;
+  }
+
+  // ── Donations (recorded ONLY after the server verifies the PI with Stripe) ──────
+  recordDonation(d: {
+    paymentIntentId: string;
+    deviceId: string;
+    amountMinor: number;
+    currency: string;
+    kind: string;
+    status: string;
+    donorName?: string;
+    donorEmail?: string;
+    chargeId?: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO donations (id, payment_intent_id, device_id, amount_minor, currency, kind, status, donor_name, donor_email, charge_id, created_at)
+         VALUES (@id, @paymentIntentId, @deviceId, @amountMinor, @currency, @kind, @status, @donorName, @donorEmail, @chargeId, @createdAt)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status, charge_id = excluded.charge_id`,
+      )
+      .run({
+        id: d.paymentIntentId,
+        paymentIntentId: d.paymentIntentId,
+        deviceId: d.deviceId,
+        amountMinor: d.amountMinor,
+        currency: d.currency,
+        kind: d.kind,
+        status: d.status,
+        donorName: d.donorName || '',
+        donorEmail: d.donorEmail || '',
+        chargeId: d.chargeId || '',
+        createdAt: new Date().toISOString(),
+      });
+  }
+
+  /** The versioned config a paired kiosk pulls: the PIN, currency, location, masjid name, and
+   *  the giving screen (amounts, custom bounds, monthly, name/email policy, thank-you). */
   getKioskConfig(): { version: number; config: Record<string, unknown> } {
+    const g = this.getGiving();
     return {
       version: this.getConfigVersion(),
       config: {
@@ -299,6 +408,14 @@ export class Store {
         locationId: this.getLocation()?.id ?? '',
         masjidName: this.getMasjid().name,
         attractTitle: this.getAttractTitle(),
+        presetsMinor: g.presetsMinor,
+        allowCustom: g.allowCustom,
+        customMinMinor: g.customMinMinor,
+        customMaxMinor: g.customMaxMinor,
+        monthlyEnabled: g.monthlyEnabled,
+        namePolicy: g.namePolicy,
+        emailPolicy: g.emailPolicy,
+        thankYouMessage: g.thankYouMessage,
       },
     };
   }

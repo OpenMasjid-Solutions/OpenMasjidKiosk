@@ -164,3 +164,72 @@ export async function retrieveLocation(secretKey: string, id: string): Promise<T
     return null;
   }
 }
+
+// ── Terminal: card-present PaymentIntents (the one-time donation core) ────────────
+export interface CreatePaymentIntentInput {
+  amountMinor: number;
+  currency: string;
+  description?: string;
+  receiptEmail?: string;
+  metadata?: Record<string, string>;
+}
+
+/** Create a card-present PaymentIntent for the reader to collect + confirm. Manual capture:
+ *  the tablet confirms, the PI lands in `requires_capture`, and the SERVER captures it in
+ *  [completeCardPresentPaymentIntent] only after re-checking with Stripe — so a donation is
+ *  never recorded on the tablet's word alone. An idempotency key makes retries safe. */
+export async function createCardPresentPaymentIntent(
+  secretKey: string,
+  input: CreatePaymentIntentInput,
+  idempotencyKey?: string,
+): Promise<{ id: string; clientSecret: string }> {
+  const pi = await client(secretKey).paymentIntents.create(
+    {
+      amount: input.amountMinor,
+      currency: input.currency.toLowerCase(),
+      payment_method_types: ['card_present'],
+      capture_method: 'manual',
+      description: input.description || undefined,
+      receipt_email: input.receiptEmail || undefined,
+      metadata: input.metadata,
+    },
+    idempotencyKey ? { idempotencyKey } : undefined,
+  );
+  return { id: pi.id, clientSecret: pi.client_secret ?? '' };
+}
+
+export interface CompletedPaymentIntent {
+  status: string;
+  succeeded: boolean;
+  amountMinor: number;
+  currency: string;
+  chargeId?: string;
+  /** The reusable PaymentMethod Stripe derives from a card-present charge (monthly, slice 7). */
+  generatedCard?: string;
+  receiptUrl?: string;
+  /** The metadata we set at create time (device id, kind, donor name/email) — trustworthy since
+   *  it comes back from Stripe, not the tablet. */
+  metadata: Record<string, string>;
+}
+
+/** The server side of "verify before we record": retrieve the PI from Stripe, capture it if it's
+ *  `requires_capture`, and report the TRUE outcome. Never trusts the tablet. */
+export async function completeCardPresentPaymentIntent(secretKey: string, id: string): Promise<CompletedPaymentIntent> {
+  const c = client(secretKey);
+  let pi = await c.paymentIntents.retrieve(id, { expand: ['latest_charge'] });
+  if (pi.status === 'requires_capture') {
+    pi = await c.paymentIntents.capture(id, { expand: ['latest_charge'] });
+  }
+  const charge = pi.latest_charge && typeof pi.latest_charge !== 'string' ? (pi.latest_charge as Stripe.Charge) : undefined;
+  const cardPresent = charge?.payment_method_details?.card_present as { generated_card?: string | null } | undefined;
+  return {
+    status: pi.status,
+    succeeded: pi.status === 'succeeded',
+    amountMinor: pi.amount,
+    currency: pi.currency.toUpperCase(),
+    chargeId: charge?.id,
+    generatedCard: cardPresent?.generated_card ?? undefined,
+    receiptUrl: charge?.receipt_url ?? undefined,
+    metadata: (pi.metadata ?? {}) as Record<string, string>,
+  };
+}

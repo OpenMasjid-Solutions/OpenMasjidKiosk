@@ -22,6 +22,8 @@ import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePair
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache } from './fabric';
 import { LoginLimiter } from './rateLimit';
 import {
+  completeCardPresentPaymentIntent,
+  createCardPresentPaymentIntent,
   createConnectionToken,
   createLocation,
   listLocations,
@@ -31,6 +33,7 @@ import {
   retrieveLocation,
   stripeConfigured,
   stripeMode,
+  toMajor,
   verifySecretKey,
   type StripeKeys,
 } from './stripe';
@@ -489,6 +492,91 @@ async function main(): Promise<void> {
       return { data: { secret } };
     } catch {
       return reply.code(502).send({ error: 'Couldn’t reach Stripe Terminal. Please try again.' });
+    }
+  });
+
+  // ── One-time donations (Terminal card-present) ───────────────────────────────
+  // Format an amount for the donation alert (best-effort; falls back to "<major> <CUR>").
+  const formatMoney = (minor: number, currency: string): string => {
+    try {
+      return new Intl.NumberFormat('en', { style: 'currency', currency }).format(toMajor(minor, currency));
+    } catch {
+      return `${toMajor(minor, currency)} ${currency}`;
+    }
+  };
+
+  const PaymentIntentBody = z.object({
+    amountMinor: z.number().int().positive(),
+    donorName: z.string().trim().max(120).optional(),
+    donorEmail: z.string().trim().max(200).optional(),
+    // Per-attempt key so a network retry can't create a second PI (Stripe idempotency).
+    idempotencyKey: z.string().trim().min(8).max(255).optional(),
+  });
+
+  // Create the PaymentIntent the reader will collect + confirm. The amount is validated
+  // server-side against the configured presets/custom bounds — NEVER trust the tablet.
+  app.post('/api/kiosk/payment-intents', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const parsed = PaymentIntentBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'That donation request wasn’t valid.' });
+    const { amountMinor, donorName, idempotencyKey } = parsed.data;
+    const donorEmail = (parsed.data.donorEmail ?? '').trim();
+    if (!store.isAllowedAmount(amountMinor)) return reply.code(400).send({ error: 'That amount isn’t available.' });
+    const acct = await resolveAccount();
+    if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
+    const currency = store.getCurrency();
+    const preset = store.getGiving().presetsMinor.includes(amountMinor) ? 'preset' : 'custom';
+    try {
+      const pi = await createCardPresentPaymentIntent(
+        acct.keys.secretKey,
+        {
+          amountMinor,
+          currency,
+          description: `Donation — ${store.getMasjid().name || 'OpenMasjid Kiosk'}`,
+          receiptEmail: donorEmail || undefined, // Stripe emails a receipt on success (if enabled)
+          metadata: { app: 'kiosk', deviceId: d.id, kind: 'one_time', preset, donorName: donorName ?? '', donorEmail },
+        },
+        idempotencyKey,
+      );
+      return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret } };
+    } catch {
+      return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
+    }
+  });
+
+  // Finish a donation: the server retrieves the PI from Stripe, captures it if needed, and
+  // records the donation ONLY if Stripe says it succeeded. The tablet's word is never enough.
+  app.post('/api/kiosk/payment-intents/:id/complete', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const id = (req.params as { id: string }).id;
+    if (!/^pi_[A-Za-z0-9_]+$/.test(id)) return reply.code(400).send({ error: 'That payment wasn’t valid.' });
+    const acct = await resolveAccount();
+    if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
+    try {
+      const result = await completeCardPresentPaymentIntent(acct.keys.secretKey, id);
+      const meta = result.metadata;
+      store.recordDonation({
+        paymentIntentId: id,
+        deviceId: d.id,
+        amountMinor: result.amountMinor,
+        currency: result.currency,
+        kind: meta.kind || 'one_time',
+        status: result.succeeded ? 'succeeded' : result.status,
+        donorName: meta.donorName,
+        donorEmail: meta.donorEmail,
+        chargeId: result.chargeId,
+      });
+      if (result.succeeded) {
+        void notify({
+          text: `${formatMoney(result.amountMinor, result.currency)} donation received at ${d.name || 'the kiosk'}.`,
+          level: 'success',
+        });
+      }
+      return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency } };
+    } catch {
+      return reply.code(502).send({ error: 'Couldn’t confirm the payment with Stripe.' });
     }
   });
 
