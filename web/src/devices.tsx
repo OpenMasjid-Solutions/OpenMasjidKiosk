@@ -370,14 +370,18 @@ function LogsModal({ device, onClose }: { device: Device; onClose: () => void })
       onClick={onClose}
     >
       <div className="modal glass-raised" onClick={(e) => e.stopPropagation()}>
+        <div className="tl-bar">
+          <button className="tl tl--red" onClick={onClose} aria-label="Close">
+            <X size={9} strokeWidth={3} />
+          </button>
+          <span className="tl tl--amber" aria-hidden="true" />
+          <span className="tl tl--green" aria-hidden="true" />
+        </div>
         <div className="modal-head">
           <div className="card-head__main">
             <h3 className="section-title-inline">{device.name || 'Kiosk'} — activity</h3>
             <p className="muted">Recent events from this kiosk, newest first.</p>
           </div>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
-            <X size={18} />
-          </button>
         </div>
         <div className="modal-body">
           {err && <p className="form-error">{err}</p>}

@@ -25,7 +25,7 @@ import {
   Smartphone,
   TrendingUp,
 } from 'lucide-react';
-import { getAppInfo, getSession, login, sendTestNotification, setupAdmin, type AppInfo, type NotifyTestResult, type Session } from './api';
+import { getAppInfo, getDevices, getSession, login, sendTestNotification, setupAdmin, type AppInfo, type Device, type NotifyTestResult, type Session } from './api';
 import { withBase, stripBase } from './base';
 import { useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
 import { PaymentsSection } from './payments';
@@ -220,6 +220,16 @@ function DashboardTab({ session, embedded }: { session: Session; embedded: boole
   const who = session.sso.username
     ? `Signed in as ${session.sso.username}${embedded ? ' · via OpenMasjidOS' : ''}`
     : 'Signed in as the local admin';
+  const [devices, setDevices] = useState<Device[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getDevices().then((r) => alive && setDevices(r.devices)).catch(() => alive && setDevices([]));
+    return () => { alive = false; };
+  }, []);
+  const total = devices?.length ?? null;
+  const online = devices?.filter((d) => d.online).length ?? 0;
+  const kiosksValue = total == null ? '—' : String(total);
+  const kiosksSub = total == null ? 'Loading…' : total === 0 ? 'None paired yet' : `${online} online`;
   return (
     <>
       <section className="glass panel">
@@ -249,7 +259,7 @@ function DashboardTab({ session, embedded }: { session: Session; embedded: boole
       </section>
 
       <div className="stat-grid stat-grid--two">
-        <StatTile icon={<MonitorSmartphone size={17} />} label="Kiosks" value="0" sub="None paired yet" />
+        <StatTile icon={<MonitorSmartphone size={17} />} label="Kiosks" value={kiosksValue} sub={kiosksSub} />
         <StatTile icon={<Coins size={17} />} label="Donations" value="—" sub="Coming soon" />
       </div>
     </>

@@ -123,9 +123,15 @@ object ReaderManager {
                 return
             }
             try {
-                callback.onSuccess(runBlocking { r.getConnectionToken() })
+                val token = runBlocking { r.getConnectionToken() }
+                r.log("info", "reader_token_ok")
+                callback.onSuccess(token)
             } catch (e: Exception) {
-                callback.onFailure(ConnectionTokenException("Couldn’t reach the server for a reader token.", e))
+                // Surfaces the SERVER's reason (e.g. "Payments aren't set up yet.") in Devices → Logs,
+                // which is the usual cause of "the reader won't connect".
+                val why = e.message ?: "server unreachable"
+                r.log("error", "reader_token_failed", why)
+                callback.onFailure(ConnectionTokenException("Couldn’t get a reader token: $why", e))
             }
         }
     }
@@ -155,6 +161,7 @@ object ReaderManager {
         cancelDiscovery()
         lastDiscovered = emptyList()
         val gen = ++discoveryGen
+        repo?.log("info", "reader_scan_start", transport.name.lowercase())
         _state.update {
             it.copy(transport = transport, conn = ReaderConn.Discovering, discovered = emptyList(), error = null)
         }
@@ -163,11 +170,16 @@ object ReaderManager {
             ReaderTransport.Simulated -> BluetoothDiscoveryConfiguration(0, isSimulated = true)
             ReaderTransport.Usb -> UsbDiscoveryConfiguration(0, isSimulated = false)
         }
+        var lastLoggedCount = -1
         // Listener + completion callback both capture `gen` and no-op once superseded.
         val listener = object : DiscoveryListener {
             override fun onUpdateDiscoveredReaders(readers: List<Reader>) {
                 if (gen != discoveryGen) return
                 lastDiscovered = readers
+                if (readers.size != lastLoggedCount) {
+                    lastLoggedCount = readers.size
+                    repo?.log("info", "reader_found", "${readers.size} reader(s)")
+                }
                 _state.update {
                     it.copy(discovered = readers.map { r -> DiscoveredReader(r.serialNumber ?: "", labelFor(r)) })
                 }
@@ -180,6 +192,7 @@ object ReaderManager {
                 override fun onSuccess() { /* discovery ended (usually because we cancelled) */ }
                 override fun onFailure(e: TerminalException) {
                     if (gen != discoveryGen) return
+                    repo?.log("error", "reader_scan_failed", e.errorMessage)
                     _state.update { it.copy(conn = ReaderConn.Error, error = friendly(e)) }
                 }
             },
@@ -225,6 +238,7 @@ object ReaderManager {
             return
         }
         cancelDiscovery()
+        repo?.log("info", "reader_connect_start", serial)
         _state.update { it.copy(conn = ReaderConn.Connecting, error = null) }
         // SDK 5.6.0 names the reader-listener param per transport (both take a MobileReaderListener).
         val config = if (_state.value.transport == ReaderTransport.Usb) {
@@ -238,12 +252,14 @@ object ReaderManager {
             object : ReaderCallback {
                 override fun onSuccess(reader: Reader) {
                     connectedSerial = reader.serialNumber
+                    repo?.log("info", "reader_connected", reader.serialNumber ?: "")
                     _state.update {
                         it.copy(conn = ReaderConn.Connected, connectedLabel = labelFor(reader), discovered = emptyList(), error = null)
                     }
                 }
 
                 override fun onFailure(e: TerminalException) {
+                    repo?.log("error", "reader_connect_failed", e.errorMessage)
                     _state.update { it.copy(conn = ReaderConn.Error, error = friendly(e)) }
                 }
             },

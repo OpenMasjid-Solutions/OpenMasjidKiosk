@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.5.1
+- **Fix — the Dashboard now shows the real number of paired kiosks** (it was always showing 0).
+- **Fix — a kiosk's activity log now opens as its own window** (dimmed backdrop, macOS-style
+  traffic-light close) instead of overlapping the cards behind it.
+- **Reader troubleshooting.** When a reader won't connect, the exact reason is now written to the
+  kiosk's log (Devices → Logs) — most often "Payments aren't set up yet" (choose a Stripe account
+  and create a card-reader location in Settings → Payments first) or the reader's own error. Scan,
+  connect and connection-token steps are all logged.
+
 ## 0.5.0
 - **Take donations!** The kiosk now runs the full giving flow on the tablet: tap **Tap to donate**,
   pick one of six amounts (or **Other** on a big number pad), optionally add a name/email for a
