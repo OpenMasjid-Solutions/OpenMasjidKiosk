@@ -31,7 +31,9 @@ object PaymentController {
         val pi = retrieve(clientSecret)
         val collected = collect(pi)
         val confirmed = confirm(collected)
-        return confirmed.id
+        // The SDK types the id as nullable; a confirmed PI always has one. Treat a null as failure
+        // (the caller runCatching { … } maps the thrown error to the "try again" path).
+        return confirmed.id ?: error("Confirmed payment has no id")
     }
 
     /** Cancel an in-progress card collection (donor pressed cancel / timed out back to attract). */
