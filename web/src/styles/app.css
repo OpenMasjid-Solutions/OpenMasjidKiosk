@@ -375,12 +375,19 @@ h1, h2, h3, p, ul { margin: 0; }
   display: flex; flex-direction: column; padding: 1.1rem 1.2rem;
   background: var(--color-surface-raised); /* opaque so the cards behind never show through */
 }
+/* A larger, draggable "window" (used by the activity log). Fixed height so the list scrolls
+   inside it; the JS applies a translate() for dragging. */
+.modal--window {
+  width: min(52rem, 94vw); height: min(78vh, 46rem); max-height: none;
+  will-change: transform;
+}
 .modal-head { display: flex; align-items: flex-start; gap: 0.6rem; margin-block-end: 0.8rem; }
 .modal-head .card-head__main { flex: 1; }
 .modal-body { overflow-y: auto; min-height: 0; }
 
-/* macOS-style window chrome (traffic lights); red closes. Mirrors OpenMasjidOS/Donations. */
-.tl-bar { display: flex; align-items: center; gap: 0.5rem; margin-block-end: 0.7rem; }
+/* macOS-style window chrome (traffic lights); red closes. Mirrors OpenMasjidOS/Donations.
+   The bar doubles as the window's drag handle. */
+.tl-bar { display: flex; align-items: center; gap: 0.5rem; margin-block-end: 0.7rem; cursor: move; user-select: none; touch-action: none; }
 .tl { width: 0.85rem; height: 0.85rem; border-radius: 50%; border: 0; padding: 0; flex-shrink: 0; display: grid; place-items: center; }
 .tl--red { background: #ff5f57; cursor: pointer; }
 .tl--amber { background: #febc2e; }

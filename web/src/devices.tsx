@@ -7,7 +7,7 @@
  *  PIN staff use to leave the giving screen. Polls every ~15s. Every call fails soft to a
  *  friendly inline message — the page never crashes. Matches the admin design language
  *  (glass cards, tokens, RTL-safe logical spacing, reduced-motion respected). */
-import { useCallback, useEffect, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   CheckCircle2,
   Loader2,
@@ -386,6 +386,21 @@ function LogsModal({ device, onClose }: { device: Device; onClose: () => void })
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Draggable window: the title bar (traffic lights) is the drag handle; we translate the window
+  // from its centred position. Pointer capture keeps the drag going outside the bar.
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ sx: number; sy: number; bx: number; by: number } | null>(null);
+  const onDragStart = (e: ReactPointerEvent) => {
+    dragRef.current = { sx: e.clientX, sy: e.clientY, bx: pos.x, by: pos.y };
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+  };
+  const onDragMove = (e: ReactPointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setPos({ x: d.bx + (e.clientX - d.sx), y: d.by + (e.clientY - d.sy) });
+  };
+  const onDragEnd = () => { dragRef.current = null; };
+
   const sorted = logs ? [...logs].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)) : null;
 
   return (
@@ -396,13 +411,21 @@ function LogsModal({ device, onClose }: { device: Device; onClose: () => void })
       aria-label={`Activity for ${device.name || 'kiosk'}`}
       onClick={onClose}
     >
-      <div className="modal glass-raised" onClick={(e) => e.stopPropagation()}>
-        <div className="tl-bar">
-          <button className="tl tl--red" onClick={onClose} aria-label="Close">
+      <div
+        className="modal modal--window glass-raised"
+        style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="tl-bar" onPointerDown={onDragStart} onPointerMove={onDragMove} onPointerUp={onDragEnd}>
+          <button
+            className="tl tl--red"
+            onClick={onClose}
+            onPointerDown={(e) => e.stopPropagation()}
+            aria-label="Close"
+          >
             <X size={9} strokeWidth={3} />
           </button>
           <span className="tl tl--amber" aria-hidden="true" />
-          <span className="tl tl--green" aria-hidden="true" />
         </div>
         <div className="modal-head">
           <div className="card-head__main">

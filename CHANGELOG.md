@@ -3,6 +3,11 @@
 
 # Changelog
 
+## 0.5.3
+- **The activity log is now a proper draggable window** — bigger, centred on screen, and you can
+  drag it around by its title bar. Removed the (non-functional) green "full-screen" light; the red
+  light closes it.
+
 ## 0.5.2
 - **Push app updates to a kiosk from the admin panel.** When a kiosk is running an older version
   than the server, an **Update to vX.Y.Z** button appears on its card (Devices). Tapping it tells
