@@ -19,6 +19,12 @@ class ApiException(val status: Int, message: String) : IOException(message)
 /** Parsed result of `POST /api/kiosk/pair`. */
 data class PairResponse(val deviceToken: String, val deviceId: String, val configVersion: Int)
 
+/** Parsed result of `POST /api/kiosk/payment-intents`. */
+data class CreatedPaymentIntent(val id: String, val clientSecret: String)
+
+/** Parsed result of `POST /api/kiosk/payment-intents/{id}/complete` (server-verified). */
+data class CompletedDonation(val status: String, val succeeded: Boolean, val amountMinor: Long, val currency: String)
+
 /** Parsed result of `POST /api/kiosk/heartbeat`. */
 data class HeartbeatResponse(val configVersion: Int, val identify: Boolean, val revoked: Boolean)
 
@@ -81,6 +87,10 @@ class KioskApi(private val client: OkHttpClient) {
         val json = get(baseUrl, "/api/kiosk/config", token)
         val version = json.optInt("version", 0)
         val cfg = json.optJSONObject("config") ?: JSONObject()
+        val presetsArr = cfg.optJSONArray("presetsMinor")
+        val presets = buildList {
+            if (presetsArr != null) for (i in 0 until presetsArr.length()) add(presetsArr.optLong(i))
+        }
         return KioskConfig(
             version = version,
             pinHash = cfg.optString("pinHash", ""),
@@ -88,6 +98,14 @@ class KioskApi(private val client: OkHttpClient) {
             locationId = cfg.optString("locationId", ""),
             attractTitle = cfg.optString("attractTitle", "").takeIf { it.isNotBlank() },
             masjidName = cfg.optString("masjidName", "").takeIf { it.isNotBlank() },
+            presetsMinor = presets,
+            allowCustom = cfg.optBoolean("allowCustom", true),
+            customMinMinor = cfg.optLong("customMinMinor", 100),
+            customMaxMinor = cfg.optLong("customMaxMinor", 1_000_000),
+            monthlyEnabled = cfg.optBoolean("monthlyEnabled", false),
+            namePolicy = cfg.optString("namePolicy", "optional"),
+            emailPolicy = cfg.optString("emailPolicy", "optional"),
+            thankYouMessage = cfg.optString("thankYouMessage", ""),
         )
     }
 
@@ -96,6 +114,37 @@ class KioskApi(private val client: OkHttpClient) {
     fun connectionToken(baseUrl: String, token: String): String {
         val json = post(baseUrl, "/api/kiosk/connection-token", JSONObject(), token)
         return json.getString("secret")
+    }
+
+    /** `POST /api/kiosk/payment-intents` — the server validates the amount against the configured
+     *  presets/limits and creates a card-present PaymentIntent. Returns its id + client secret. */
+    fun createPaymentIntent(
+        baseUrl: String,
+        token: String,
+        amountMinor: Long,
+        donorName: String?,
+        donorEmail: String?,
+        idempotencyKey: String,
+    ): CreatedPaymentIntent {
+        val body = JSONObject()
+            .put("amountMinor", amountMinor)
+            .put("idempotencyKey", idempotencyKey)
+        if (!donorName.isNullOrBlank()) body.put("donorName", donorName)
+        if (!donorEmail.isNullOrBlank()) body.put("donorEmail", donorEmail)
+        val json = post(baseUrl, "/api/kiosk/payment-intents", body, token)
+        return CreatedPaymentIntent(json.getString("paymentIntentId"), json.getString("clientSecret"))
+    }
+
+    /** `POST /api/kiosk/payment-intents/{id}/complete` — the server verifies + captures with Stripe
+     *  and records the donation only if it truly succeeded. Returns the verified outcome. */
+    fun completePaymentIntent(baseUrl: String, token: String, id: String): CompletedDonation {
+        val json = post(baseUrl, "/api/kiosk/payment-intents/$id/complete", JSONObject(), token)
+        return CompletedDonation(
+            status = json.optString("status"),
+            succeeded = json.optBoolean("succeeded", false),
+            amountMinor = json.optLong("amountMinor", 0L),
+            currency = json.optString("currency"),
+        )
     }
 
     /** `POST /api/kiosk/logs` (device token). Returns true on `{ ok: true }`. */

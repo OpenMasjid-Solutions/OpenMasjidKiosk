@@ -44,7 +44,6 @@ import androidx.compose.ui.unit.dp
 import org.openmasjidos.kiosk.R
 import org.openmasjidos.kiosk.ui.theme.GoldDark
 import org.openmasjidos.kiosk.ui.theme.InkDark
-import org.openmasjidos.kiosk.ui.theme.InkFaintDark
 import org.openmasjidos.kiosk.ui.theme.InkMutedDark
 import org.openmasjidos.kiosk.ui.theme.PrimaryDark
 import org.openmasjidos.kiosk.ui.theme.PrimaryHoverDark
@@ -79,6 +78,7 @@ fun AttractScreen(
     masjidName: String? = null,
     attractTitle: String? = null,
     identify: Boolean = false,
+    onTapToDonate: () -> Unit = {},
 ) {
     val scene = Brush.linearGradient(
         colors = listOf(SceneStart, SceneMid, SceneEnd),
@@ -120,7 +120,7 @@ fun AttractScreen(
             Spacer(Modifier.height(44.dp))
 
             Button(
-                onClick = { /* Non-functional until the giving flow slice. */ },
+                onClick = onTapToDonate,
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -135,16 +135,6 @@ fun AttractScreen(
                 )
             }
         }
-
-        Text(
-            text = stringResource(R.string.attract_scaffold_note),
-            style = MaterialTheme.typography.bodyMedium,
-            color = InkFaintDark,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(24.dp),
-        )
 
         // Identify: a bold, pulsing full-screen wash so an admin can spot THIS tablet on the
         // wall from across the room. Reduced-motion → a strong static wash instead of a pulse.

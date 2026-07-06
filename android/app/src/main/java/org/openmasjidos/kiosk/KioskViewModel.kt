@@ -23,9 +23,12 @@ import org.openmasjidos.kiosk.local.PairingRecord
 import org.openmasjidos.kiosk.kiosk.DeviceStatus
 import org.openmasjidos.kiosk.net.HeartbeatOutcome
 import org.openmasjidos.kiosk.net.PairResult
+import org.openmasjidos.kiosk.readers.PaymentController
+import org.openmasjidos.kiosk.readers.ReaderConn
 import org.openmasjidos.kiosk.readers.ReaderManager
 import org.openmasjidos.kiosk.readers.ReaderTransport
 import org.openmasjidos.kiosk.readers.ReaderUiState
+import java.util.UUID
 import org.openmasjidos.kiosk.work.HeartbeatWorker
 
 /** Top-level screen the kiosk is showing. */
@@ -33,6 +36,19 @@ enum class Phase { Loading, Unpaired, Paired }
 
 /** Overlay shown on top of the attract screen in the Paired phase. */
 enum class Overlay { None, Pin, Maintenance }
+
+/** The donor-facing giving flow (Paired phase). Idle = the attract screen. */
+enum class GivingStep { Idle, Amount, Details, Card, Thanks, Error }
+
+/** State of an in-progress donation. Amounts are integer MINOR units (validated server-side). */
+data class GivingState(
+    val step: GivingStep = GivingStep.Idle,
+    val amountMinor: Long = 0L,
+    val donorName: String = "",
+    val donorEmail: String = "",
+    val busy: Boolean = false,
+    val error: String? = null,
+)
 
 /**
  * Why the kiosk is demanding a re-pair (a fail-closed lockout that blocks everything).
@@ -73,6 +89,7 @@ data class UiState(
     // pinHash (which can just mean config hasn't synced yet). Maintenance stays reachable for
     // reader setup/diagnostics without a PIN, but "Exit kiosk" is gated on this.
     val exitAllowed: Boolean = false,
+    val giving: GivingState = GivingState(),
 )
 
 /**
@@ -98,6 +115,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         val lastHeartbeatMs: Long? = null,
         val online: Boolean = false,
         val maintUnlockedViaPin: Boolean = false,
+        val giving: GivingState = GivingState(),
     )
 
     private val local = MutableStateFlow(Local(form = PairingForm(name = Build.MODEL ?: "Kiosk")))
@@ -114,6 +132,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             diagnostics = buildDiagnostics(pairing, l, reader),
             reader = reader,
             exitAllowed = l.maintUnlockedViaPin,
+            giving = l.giving,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), UiState())
 
@@ -165,6 +184,103 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     /** The volunteer denied a reader permission — tell them how to recover (silent no-op otherwise). */
     fun onReaderPermissionDenied() =
         ReaderManager.reportError(appContext.getString(R.string.reader_permission_denied))
+
+    // ---- Giving flow (donor-facing) ----------------------------------------------------
+
+    private var givingJob: Job? = null
+
+    private fun updateGiving(f: (GivingState) -> GivingState) = local.update { it.copy(giving = f(it.giving)) }
+
+    /** Donor tapped "Tap to donate" on the attract screen. */
+    fun beginGiving() = updateGiving { GivingState(step = GivingStep.Amount) }
+
+    /** Return to the attract screen; also cancels any in-progress card collection. */
+    fun cancelGiving() {
+        givingJob?.cancel()
+        PaymentController.cancelCollect()
+        ReaderManager.clearPrompt()
+        updateGiving { GivingState() }
+    }
+
+    fun setDonorName(v: String) = updateGiving { it.copy(donorName = v.take(120)) }
+    fun setDonorEmail(v: String) = updateGiving { it.copy(donorEmail = v.take(200)) }
+
+    /** Pick an amount (minor units). Goes to the details step when the admin asks for name/email,
+     *  otherwise straight to the card. */
+    fun chooseAmount(amountMinor: Long) {
+        if (amountMinor <= 0) return
+        val cfg = ui.value.config
+        val wantsDetails = (cfg?.namePolicy ?: "off") != "off" || (cfg?.emailPolicy ?: "off") != "off"
+        updateGiving { it.copy(amountMinor = amountMinor, error = null, step = if (wantsDetails) GivingStep.Details else GivingStep.Card) }
+        if (!wantsDetails) startCollect()
+    }
+
+    /** Continue from the details step (validating required name/email). */
+    fun submitDetails() {
+        val cfg = ui.value.config
+        val g = local.value.giving
+        when {
+            cfg?.namePolicy == "required" && g.donorName.isBlank() ->
+                updateGiving { it.copy(error = "Please enter your name.") }
+            cfg?.emailPolicy == "required" && !isEmail(g.donorEmail) ->
+                updateGiving { it.copy(error = "Please enter a valid email for your receipt.") }
+            g.donorEmail.isNotBlank() && !isEmail(g.donorEmail) ->
+                updateGiving { it.copy(error = "That email doesn’t look right.") }
+            else -> {
+                updateGiving { it.copy(error = null, step = GivingStep.Card) }
+                startCollect()
+            }
+        }
+    }
+
+    /** From the error screen, try the same amount again. */
+    fun retryGiving() = updateGiving { GivingState(step = GivingStep.Amount) }
+
+    private fun startCollect() {
+        val g = local.value.giving
+        if (ui.value.reader.conn != ReaderConn.Connected) {
+            updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "The card reader isn’t connected. Please tell a volunteer.") }
+            return
+        }
+        updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null) }
+        givingJob?.cancel()
+        givingJob = viewModelScope.launch {
+            val name = g.donorName.trim().ifBlank { null }
+            val email = g.donorEmail.trim().ifBlank { null }
+            val idem = UUID.randomUUID().toString()
+            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, name, email, idem) }.getOrNull()
+            if (pi == null) {
+                repo.log("warn", "donation_create_failed")
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start the payment. Please try again.") }
+                return@launch
+            }
+            val piId = runCatching { PaymentController.collectAndConfirm(pi.clientSecret) }.getOrNull()
+            ReaderManager.clearPrompt()
+            if (piId == null) {
+                repo.log("warn", "donation_collect_failed", pi.id)
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t go through — no charge was made. Try again?") }
+                return@launch
+            }
+            val result = runCatching { repo.completePaymentIntent(piId) }.getOrNull()
+            if (result?.succeeded == true) {
+                repo.log("info", "donation_succeeded", piId)
+                updateGiving { it.copy(step = GivingStep.Thanks, busy = false) }
+                viewModelScope.launch {
+                    delay(THANKS_MS)
+                    if (local.value.giving.step == GivingStep.Thanks) updateGiving { GivingState() }
+                }
+            } else {
+                repo.log("warn", "donation_not_succeeded", piId)
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t complete. If your card was charged it will be refunded.") }
+            }
+            repo.flushLogs()
+        }
+    }
+
+    private fun isEmail(s: String): Boolean {
+        val t = s.trim()
+        return t.length in 3..200 && t.contains('@') && t.substringAfter('@').contains('.')
+    }
 
     // ---- Pairing form actions ----------------------------------------------------------
 
@@ -333,6 +449,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         const val HEARTBEAT_INTERVAL_MS = 15_000L
         // Flash long enough to actually spot across a room and to span heartbeat jitter.
         const val IDENTIFY_MS = 12_000L
+        // How long the thank-you screen stays up before returning to attract.
+        const val THANKS_MS = 8_000L
         const val SECRET_TAPS = 5
         const val SECRET_WINDOW_MS = 3_000L
         const val FREE_ATTEMPTS = 3

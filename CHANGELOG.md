@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.5.0
+- **Take donations!** The kiosk now runs the full giving flow on the tablet: tap **Tap to donate**,
+  pick one of six amounts (or **Other** on a big number pad), optionally add a name/email for a
+  receipt, then tap/insert/swipe on the reader. A warm thank-you shows and it resets for the next
+  giver. Amounts are validated on the server and every payment is verified with Stripe before it's
+  recorded — the tablet's word is never trusted, and card data goes reader → Stripe only.
+- The giving screen (amounts, custom min/max, name/email prompts, thank-you message) is read from
+  the app's settings; a visual designer for it comes next.
+
 ## 0.4.5
 - **Removed the "Restart" button.** Android doesn't let an app reboot the tablet unless the tablet
   is set up as a device owner, and the fallback (restarting just the app) was unreliable and looked

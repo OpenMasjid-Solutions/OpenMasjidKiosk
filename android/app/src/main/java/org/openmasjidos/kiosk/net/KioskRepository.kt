@@ -170,6 +170,29 @@ class KioskRepository(context: Context) {
         KioskApi(pinnedClientFor(p.certSha256)).connectionToken(p.serverUrl, p.deviceToken)
     }
 
+    // ---- Donations (server validates the amount + verifies the payment) ────────────────
+
+    /** Ask the server to create a card-present PaymentIntent for [amountMinor] (validated against
+     *  the configured presets/limits server-side). [idempotencyKey] is stable per attempt so a
+     *  network retry can't double-charge. */
+    suspend fun createPaymentIntent(
+        amountMinor: Long,
+        donorName: String?,
+        donorEmail: String?,
+        idempotencyKey: String,
+    ): CreatedPaymentIntent = withContext(Dispatchers.IO) {
+        val p = store.pairing.first() ?: throw IOException("Not paired")
+        KioskApi(pinnedClientFor(p.certSha256))
+            .createPaymentIntent(p.serverUrl, p.deviceToken, amountMinor, donorName, donorEmail, idempotencyKey)
+    }
+
+    /** After the reader confirms, ask the server to verify + capture with Stripe and record the
+     *  donation. The returned outcome is Stripe's truth, not the tablet's. */
+    suspend fun completePaymentIntent(id: String): CompletedDonation = withContext(Dispatchers.IO) {
+        val p = store.pairing.first() ?: throw IOException("Not paired")
+        KioskApi(pinnedClientFor(p.certSha256)).completePaymentIntent(p.serverUrl, p.deviceToken, id)
+    }
+
     // ---- PIN ---------------------------------------------------------------------------
 
     /** Offline scrypt verification of the exit PIN against the last-synced config hash. */

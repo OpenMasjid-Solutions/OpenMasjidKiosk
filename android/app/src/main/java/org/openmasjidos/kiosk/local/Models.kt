@@ -34,6 +34,15 @@ data class KioskConfig(
     val locationId: String,
     val attractTitle: String?,
     val masjidName: String?,
+    // ── Giving screen (slice 6) ──
+    val presetsMinor: List<Long> = emptyList(),
+    val allowCustom: Boolean = true,
+    val customMinMinor: Long = 100,
+    val customMaxMinor: Long = 1_000_000,
+    val monthlyEnabled: Boolean = false, // slice 7
+    val namePolicy: String = "optional", // off | optional | required
+    val emailPolicy: String = "optional",
+    val thankYouMessage: String = "",
 )
 
 /** A snapshot of device health sent on each heartbeat and shown on the maintenance screen. */

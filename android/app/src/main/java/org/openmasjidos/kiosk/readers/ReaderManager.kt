@@ -23,6 +23,8 @@ import com.stripe.stripeterminal.external.models.DiscoveryConfiguration.Bluetoot
 import com.stripe.stripeterminal.external.models.DiscoveryConfiguration.UsbDiscoveryConfiguration
 import com.stripe.stripeterminal.external.models.PaymentStatus
 import com.stripe.stripeterminal.external.models.Reader
+import com.stripe.stripeterminal.external.models.ReaderDisplayMessage
+import com.stripe.stripeterminal.external.models.ReaderInputOptions
 import com.stripe.stripeterminal.external.models.ReaderSoftwareUpdate
 import com.stripe.stripeterminal.external.models.TerminalException
 import com.stripe.stripeterminal.log.LogLevel
@@ -316,7 +318,20 @@ object ReaderManager {
             connectedSerial = null
             _state.update { it.copy(conn = ReaderConn.NotConnected, connectedLabel = null, error = "The reader disconnected. Reconnect it below.") }
         }
+
+        // During a payment the reader tells us what to show the donor ("Insert or tap card",
+        // "Remove card", …). The giving flow surfaces `prompt` on the card screen.
+        override fun onRequestReaderInput(options: ReaderInputOptions) {
+            _state.update { it.copy(prompt = "Tap, insert or swipe your card") }
+        }
+
+        override fun onRequestReaderDisplayMessage(message: ReaderDisplayMessage) {
+            _state.update { it.copy(prompt = prettifyReaderMessage(message.toString())) }
+        }
     }
+
+    /** Clear the transient reader prompt (called when a donation flow ends/resets). */
+    fun clearPrompt() = _state.update { it.copy(prompt = null) }
 
     // ---- Heartbeat snapshot ------------------------------------------------------------
 
@@ -346,4 +361,9 @@ object ReaderManager {
 
     private fun friendly(e: TerminalException): String =
         e.errorMessage.ifBlank { "Something went wrong with the reader. Try again." }
+
+    /** Turn an SDK ReaderDisplayMessage enum name (e.g. "INSERT_OR_SWIPE_CARD") into readable text
+     *  without hard-coding the enum values (which vary by SDK version). */
+    private fun prettifyReaderMessage(raw: String): String =
+        raw.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }
 }

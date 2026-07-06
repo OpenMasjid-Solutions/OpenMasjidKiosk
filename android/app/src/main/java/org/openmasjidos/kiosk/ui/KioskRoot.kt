@@ -22,6 +22,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.openmasjidos.kiosk.GivingStep
 import org.openmasjidos.kiosk.KioskViewModel
 import org.openmasjidos.kiosk.Overlay
 import org.openmasjidos.kiosk.Phase
@@ -61,11 +62,26 @@ fun KioskRoot(
             )
 
             else -> { // Paired
-                AttractScreen(
-                    masjidName = ui.config?.masjidName,
-                    attractTitle = ui.config?.attractTitle,
-                    identify = ui.identify,
-                )
+                if (ui.giving.step != GivingStep.Idle) {
+                    GivingScreen(
+                        giving = ui.giving,
+                        config = ui.config,
+                        readerPrompt = ui.reader.prompt,
+                        onChooseAmount = vm::chooseAmount,
+                        onDonorName = vm::setDonorName,
+                        onDonorEmail = vm::setDonorEmail,
+                        onSubmitDetails = vm::submitDetails,
+                        onRetry = vm::retryGiving,
+                        onCancel = vm::cancelGiving,
+                    )
+                } else {
+                    AttractScreen(
+                        masjidName = ui.config?.masjidName,
+                        attractTitle = ui.config?.attractTitle,
+                        identify = ui.identify,
+                        onTapToDonate = vm::beginGiving,
+                    )
+                }
                 when (ui.overlay) {
                     Overlay.None -> SecretCorner(onTap = vm::onSecretCornerTap)
                     Overlay.Pin -> PinPad(
