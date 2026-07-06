@@ -3,6 +3,14 @@
 
 # Changelog
 
+## 0.5.2
+- **Push app updates to a kiosk from the admin panel.** When a kiosk is running an older version
+  than the server, an **Update to vX.Y.Z** button appears on its card (Devices). Tapping it tells
+  the kiosk to download the new app and start installing on its next check-in. The kiosk also shows
+  an **Install update** button in its maintenance screen when a newer version is available.
+  Note: Android only lets an app update itself silently on tablets provisioned as **device owner**;
+  otherwise a volunteer taps "Install" once on the tablet (same limitation as remote reboot).
+
 ## 0.5.1
 - **Fix — the Dashboard now shows the real number of paired kiosks** (it was always showing 0).
 - **Fix — a kiosk's activity log now opens as its own window** (dimmed backdrop, macOS-style

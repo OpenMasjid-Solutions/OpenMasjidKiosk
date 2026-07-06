@@ -51,6 +51,7 @@ data class Diagnostics(
     val charging: Boolean? = null,
     val readerStatus: String = "not_connected", // reader arrives in slice 5
     val appVersion: String = "",
+    val latestAppVersion: String = "", // the server's bundled APK version (for "update available")
     val pinnedCertSha256: String? = null,
     val deviceId: String? = null,
     val serverUrl: String? = null,

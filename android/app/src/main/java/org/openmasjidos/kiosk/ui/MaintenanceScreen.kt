@@ -68,6 +68,7 @@ fun MaintenanceScreen(
     noPinSet: Boolean,
     exitAllowed: Boolean,
     showPinningHint: Boolean,
+    onInstallAppUpdate: () -> Unit,
     onScanReaders: (ReaderTransport) -> Unit,
     onStopReaderScan: () -> Unit,
     onConnectReader: (String) -> Unit,
@@ -149,6 +150,31 @@ fun MaintenanceScreen(
                     onDismissReaderError = onDismissReaderError,
                     onReaderPermissionDenied = onReaderPermissionDenied,
                 )
+            }
+
+            // --- App update (shown only when the server has a newer version) ----------
+            val updateAvailable = diagnostics.latestAppVersion.isNotBlank() &&
+                diagnostics.appVersion.isNotBlank() &&
+                diagnostics.latestAppVersion != diagnostics.appVersion
+            if (updateAvailable) {
+                Spacer(Modifier.height(16.dp))
+                SectionCard(title = stringResource(R.string.maintenance_update_title)) {
+                    Text(
+                        text = stringResource(R.string.maintenance_update_body, diagnostics.latestAppVersion, diagnostics.appVersion),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = InkMutedDark,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = onInstallAppUpdate,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(stringResource(R.string.maintenance_update_install)) }
+                }
             }
 
             Spacer(Modifier.height(16.dp))

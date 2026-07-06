@@ -26,7 +26,13 @@ data class CreatedPaymentIntent(val id: String, val clientSecret: String)
 data class CompletedDonation(val status: String, val succeeded: Boolean, val amountMinor: Long, val currency: String)
 
 /** Parsed result of `POST /api/kiosk/heartbeat`. */
-data class HeartbeatResponse(val configVersion: Int, val identify: Boolean, val revoked: Boolean)
+data class HeartbeatResponse(
+    val configVersion: Int,
+    val identify: Boolean,
+    val updateApp: Boolean,
+    val latestAppVersion: String,
+    val revoked: Boolean,
+)
 
 /**
  * Thin, blocking JSON client over an already-configured (pinned or TOFU) [OkHttpClient].
@@ -78,6 +84,8 @@ class KioskApi(private val client: OkHttpClient) {
         return HeartbeatResponse(
             configVersion = json.optInt("configVersion", configVersion),
             identify = json.optBoolean("identify", false),
+            updateApp = json.optBoolean("updateApp", false),
+            latestAppVersion = json.optString("latestAppVersion", ""),
             revoked = json.optBoolean("revoked", false),
         )
     }

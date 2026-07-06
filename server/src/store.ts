@@ -525,6 +525,16 @@ export class Store {
   setIdentify(id: string): void {
     this.db.prepare('UPDATE devices SET identify = 1 WHERE id = ?').run(id);
   }
+
+  /** Pending "install the latest app" commands (transient/in-memory; delivered once on the next
+   *  heartbeat). The tablet downloads the server's bundled APK and launches the installer. */
+  private pendingUpdates = new Set<string>();
+  requestUpdate(id: string): void {
+    this.pendingUpdates.add(id);
+  }
+  consumeUpdate(id: string): boolean {
+    return this.pendingUpdates.delete(id);
+  }
   /** Read + clear the "identify" flag (the kiosk flashes once when it sees it). */
   consumeIdentify(id: string): boolean {
     const row = this.db.prepare('SELECT identify FROM devices WHERE id = ?').get(id) as { identify?: number } | undefined;

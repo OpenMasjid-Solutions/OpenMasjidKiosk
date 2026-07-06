@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.openmasjidos.kiosk.local.DeviceStore
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.local.LogEntry
@@ -28,7 +29,7 @@ sealed interface PairResult {
 
 /** Outcome of a heartbeat, driving the foreground loop and WorkManager backstop. */
 sealed interface HeartbeatOutcome {
-    data class Ok(val identify: Boolean) : HeartbeatOutcome
+    data class Ok(val identify: Boolean, val updateApp: Boolean, val latestAppVersion: String) : HeartbeatOutcome
     data object Revoked : HeartbeatOutcome       // server removed this device → wipe + re-pair
     data object CertMismatch : HeartbeatOutcome  // pinned cert changed → fail closed, re-pair
     data object NotPaired : HeartbeatOutcome
@@ -144,7 +145,7 @@ class KioskRepository(context: Context) {
             if (resp.configVersion > localVersion) {
                 runCatching { fetchConfig() }
             }
-            HeartbeatOutcome.Ok(resp.identify)
+            HeartbeatOutcome.Ok(resp.identify, resp.updateApp, resp.latestAppVersion)
         } catch (e: IOException) {
             if (PinnedHttp.isCertMismatch(e)) HeartbeatOutcome.CertMismatch
             else HeartbeatOutcome.NetworkError
@@ -191,6 +192,29 @@ class KioskRepository(context: Context) {
     suspend fun completePaymentIntent(id: String): CompletedDonation = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: throw IOException("Not paired")
         KioskApi(pinnedClientFor(p.certSha256)).completePaymentIntent(p.serverUrl, p.deviceToken, id)
+    }
+
+    // ---- App update (download the server's bundled APK over the pinned connection) ─────
+
+    /** Download the server's current kiosk APK to [dest] over the pinned HTTPS connection.
+     *  Returns true on success. The install itself is launched by AppUpdater. */
+    suspend fun downloadApk(dest: java.io.File): Boolean = withContext(Dispatchers.IO) {
+        val p = store.pairing.first() ?: return@withContext false
+        val req = Request.Builder()
+            .url(p.serverUrl.trimEnd('/') + "/download/openmasjidkiosk.apk")
+            .get()
+            .build()
+        try {
+            pinnedClientFor(p.certSha256).newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext false
+                val body = resp.body ?: return@withContext false
+                dest.parentFile?.mkdirs()
+                dest.outputStream().use { out -> body.byteStream().copyTo(out) }
+            }
+            dest.length() > 1000L // a real APK is far larger; guard against an error page
+        } catch (_: Exception) {
+            false
+        }
     }
 
     // ---- PIN ---------------------------------------------------------------------------

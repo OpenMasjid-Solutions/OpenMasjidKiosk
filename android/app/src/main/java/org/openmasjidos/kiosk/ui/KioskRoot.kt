@@ -96,6 +96,7 @@ fun KioskRoot(
                         noPinSet = ui.config?.pinHash?.isNotBlank() != true,
                         exitAllowed = ui.exitAllowed,
                         showPinningHint = !isDeviceOwner,
+                        onInstallAppUpdate = vm::startAppUpdate,
                         onScanReaders = vm::scanForReaders,
                         onStopReaderScan = vm::stopReaderScan,
                         onConnectReader = vm::connectReader,

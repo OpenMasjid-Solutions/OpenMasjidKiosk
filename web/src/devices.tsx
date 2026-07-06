@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import {
   CheckCircle2,
   Loader2,
+  Download,
   Lock,
   MonitorSmartphone,
   Pencil,
@@ -23,12 +24,14 @@ import {
 } from 'lucide-react';
 import {
   createPairCode,
+  getAppInfo,
   getDeviceLogs,
   getDevices,
   identifyDevice,
   renameDevice,
   revokeDevice,
   setKioskPin,
+  updateDeviceApp,
   type Device,
   type DeviceLog,
   type PairCode,
@@ -168,7 +171,7 @@ function PairCodeDisplay({ pair, onNew, busy }: { pair: PairCode; onNew: () => v
 }
 
 // ── Your kiosks (the fleet) ─────────────────────────────────────────────────────
-function DeviceList({ devices, onChange }: { devices: Device[]; onChange: () => void }) {
+function DeviceList({ devices, serverVersion, onChange }: { devices: Device[]; serverVersion: string; onChange: () => void }) {
   if (!devices.length) {
     return (
       <div className="empty-state">
@@ -183,17 +186,17 @@ function DeviceList({ devices, onChange }: { devices: Device[]; onChange: () => 
   return (
     <div className="stack">
       {devices.map((d) => (
-        <DeviceRow key={d.id} device={d} onChange={onChange} />
+        <DeviceRow key={d.id} device={d} serverVersion={serverVersion} onChange={onChange} />
       ))}
     </div>
   );
 }
 
-function DeviceRow({ device, onChange }: { device: Device; onChange: () => void }) {
+function DeviceRow({ device, serverVersion, onChange }: { device: Device; serverVersion: string; onChange: () => void }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(device.name);
   const [savingName, setSavingName] = useState(false);
-  const [busy, setBusy] = useState<'identify' | 'remove' | null>(null);
+  const [busy, setBusy] = useState<'identify' | 'remove' | 'update' | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [note, setNote] = useState('');
@@ -227,6 +230,20 @@ function DeviceRow({ device, onChange }: { device: Device; onChange: () => void 
     try {
       await identifyDevice(device.id);
       setNote('The kiosk will flash so you can spot it.');
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const update = async () => {
+    setErr('');
+    setNote('');
+    setBusy('update');
+    try {
+      await updateDeviceApp(device.id);
+      setNote('Update sent — the kiosk will download it and start the install on its next check-in.');
     } catch (e) {
       setErr(errMsg(e));
     } finally {
@@ -303,6 +320,16 @@ function DeviceRow({ device, onChange }: { device: Device; onChange: () => void 
         <button className="btn btn--ghost btn--sm" onClick={() => setShowLogs(true)}>
           <ScrollText size={14} aria-hidden="true" /> Logs
         </button>
+        {!!serverVersion && !!device.appVersion && device.appVersion !== serverVersion && (
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={() => void update()}
+            disabled={busy !== null || !device.online}
+            title={device.online ? `Update this kiosk to v${serverVersion}` : 'Only works while the kiosk is online'}
+          >
+            <Download size={14} aria-hidden="true" /> {busy === 'update' ? 'Sending…' : `Update to v${serverVersion}`}
+          </button>
+        )}
         {confirming ? (
           <>
             <button className="btn btn--sm device-danger" onClick={() => void remove()} disabled={busy === 'remove'}>
@@ -485,7 +512,14 @@ function PinCard() {
 // ── The Devices screen ──────────────────────────────────────────────────────────
 export function DevicesSection() {
   const [devices, setDevices] = useState<Device[] | null>(null);
+  const [serverVersion, setServerVersion] = useState('');
   const [err, setErr] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    getAppInfo().then((a) => alive && setServerVersion(a.version)).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -525,7 +559,7 @@ export function DevicesSection() {
         ) : (
           <>
             {err && <p className="hint">Couldn't refresh just now — showing the last known status.</p>}
-            <DeviceList devices={devices} onChange={() => void load()} />
+            <DeviceList devices={devices} serverVersion={serverVersion} onChange={() => void load()} />
           </>
         )}
       </section>

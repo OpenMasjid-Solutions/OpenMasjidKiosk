@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+  FileProvider paths: exposes the staged update APK (filesDir/updates/) to the system installer.
+-->
+<paths>
+    <files-path name="updates" path="updates/" />
+</paths>
