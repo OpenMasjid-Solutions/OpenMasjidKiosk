@@ -94,6 +94,7 @@
     <string name="diag_device_id">Device ID</string>
     <string name="diag_server">Server</string>
     <string name="diag_last_checkin">Last check-in</string>
+    <string name="diag_uptime">Uptime</string>
     <string name="diag_unknown">Unknown</string>
     <string name="diag_never">Never</string>
     <string name="diag_just_now">Just now</string>

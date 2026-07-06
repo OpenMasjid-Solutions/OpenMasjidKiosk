@@ -3,23 +3,18 @@
 
 package org.openmasjidos.kiosk.ui
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.openmasjidos.kiosk.GivingStep
@@ -80,10 +75,11 @@ fun KioskRoot(
                         attractTitle = ui.config?.attractTitle,
                         identify = ui.identify,
                         onTapToDonate = vm::beginGiving,
+                        onSecretTap = vm::onSecretTap,
                     )
                 }
                 when (ui.overlay) {
-                    Overlay.None -> SecretCorner(onTap = vm::onSecretCornerTap)
+                    Overlay.None -> Unit // maintenance is reached by 7 rapid taps on the attract screen
                     Overlay.Pin -> PinPad(
                         state = ui.pin,
                         onSubmit = vm::submitPin,
@@ -112,26 +108,6 @@ fun KioskRoot(
             }
         }
     }
-}
-
-/**
- * An invisible touch target in the top-start corner. Five taps within 3s (counted in the VM)
- * reveal the unlock PIN. It carries no ripple and no accessibility label so it stays hidden from
- * donors while remaining reachable by a maintainer who knows the gesture.
- */
-@Composable
-private fun SecretCorner(onTap: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier
-            .size(84.dp)
-            .clearAndSetSemantics { } // never announced to donors / TalkBack
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                onClick = onTap,
-            ),
-    )
 }
 
 @Composable

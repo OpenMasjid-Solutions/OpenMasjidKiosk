@@ -57,6 +57,7 @@ data class Diagnostics(
     val serverUrl: String? = null,
     val lastHeartbeatMs: Long? = null,
     val online: Boolean = false,
+    val uptimeMs: Long = 0, // how long this kiosk app has been running
 )
 
 /** One structured device log line, batched and flushed to `POST /api/kiosk/logs`. */

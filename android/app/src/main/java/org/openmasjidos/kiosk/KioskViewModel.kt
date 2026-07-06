@@ -103,6 +103,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = (app as KioskApp).repository
     private val appContext = app.applicationContext
+    private val startedAtMs = System.currentTimeMillis() // for the uptime stat in maintenance
 
     /** Ephemeral, in-memory UI that never needs persisting. */
     private data class Local(
@@ -335,8 +336,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     private val cornerTaps = ArrayDeque<Long>()
 
-    /** Records a tap in the hidden top-start corner; 5 within 3s reveals the unlock path. */
-    fun onSecretCornerTap() {
+    /** Records a rapid tap on the attract screen; 7 within 3s reveals the unlock/settings path. */
+    fun onSecretTap() {
         val now = System.currentTimeMillis()
         cornerTaps.addLast(now)
         while (cornerTaps.isNotEmpty() && now - cornerTaps.first() > SECRET_WINDOW_MS) cornerTaps.removeFirst()
@@ -460,6 +461,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         serverUrl = pairing?.serverUrl,
         lastHeartbeatMs = l.lastHeartbeatMs,
         online = l.online,
+        uptimeMs = System.currentTimeMillis() - startedAtMs,
     )
 
     /** Exponential backoff after repeated wrong PINs; no lockout for the first few attempts. */
@@ -479,7 +481,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         const val IDENTIFY_MS = 12_000L
         // How long the thank-you screen stays up before returning to attract.
         const val THANKS_MS = 8_000L
-        const val SECRET_TAPS = 5
+        const val SECRET_TAPS = 7
         const val SECRET_WINDOW_MS = 3_000L
         const val FREE_ATTEMPTS = 3
         const val BACKOFF_BASE_SECONDS = 5L

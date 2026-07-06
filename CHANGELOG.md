@@ -3,6 +3,16 @@
 
 # Changelog
 
+## 0.5.4
+- **Open kiosk settings with 7 quick taps.** Tap the giving screen 7 times fast (anywhere) to bring
+  up the exit-PIN, then the maintenance/settings screen — reader setup, install app updates, kiosk
+  stats (now including **uptime**), and leaving kiosk mode. (Was a hidden corner tap; now it's
+  anywhere on the screen.)
+- **Reader firmware visibility.** When a reader needs a firmware update to connect, that's now
+  logged (Devices → Logs) and shown on-screen with progress. A first connect after the reader was
+  used elsewhere often triggers this — it needs the reader **charged to ≥50%** and can take a few
+  minutes; keep it powered and nearby.
+
 ## 0.5.3
 - **The activity log is now a proper draggable window** — bigger, centred on screen, and you can
   drag it around by its title bar. Removed the (non-functional) green "full-screen" light; the red

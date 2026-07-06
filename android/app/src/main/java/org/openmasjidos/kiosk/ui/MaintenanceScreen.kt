@@ -129,6 +129,7 @@ fun MaintenanceScreen(
                     valueTone = if (diagnostics.readerStatus == "connected") SuccessDark else null,
                 )
                 DiagnosticRow(stringResource(R.string.diag_last_checkin), lastCheckInText(diagnostics.lastHeartbeatMs))
+                DiagnosticRow(stringResource(R.string.diag_uptime), uptimeText(diagnostics.uptimeMs))
                 DiagnosticRow(stringResource(R.string.diag_app_version), diagnostics.appVersion.ifBlank { stringResource(R.string.diag_unknown) })
                 DiagnosticRow(stringResource(R.string.diag_device_id), diagnostics.deviceId ?: stringResource(R.string.diag_unknown))
                 DiagnosticRow(stringResource(R.string.diag_server), diagnostics.serverUrl ?: stringResource(R.string.diag_unknown))
@@ -482,6 +483,19 @@ private fun transportLabel(t: ReaderTransport): String = when (t) {
 }
 
 private fun batteryText(pct: Int?): String = if (pct == null) "—" else "$pct%"
+
+/** Human uptime like "3h 12m" / "12m" / "45s". */
+private fun uptimeText(ms: Long): String {
+    if (ms <= 0) return "—"
+    val totalMin = ms / 60_000
+    val h = totalMin / 60
+    val m = totalMin % 60
+    return when {
+        h > 0 -> "${h}h ${m}m"
+        totalMin > 0 -> "${m}m"
+        else -> "${ms / 1000}s"
+    }
+}
 
 @Composable
 private fun lastCheckInText(ms: Long?): String {

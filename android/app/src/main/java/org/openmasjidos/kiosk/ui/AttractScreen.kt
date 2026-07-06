@@ -12,6 +12,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
@@ -79,6 +81,7 @@ fun AttractScreen(
     attractTitle: String? = null,
     identify: Boolean = false,
     onTapToDonate: () -> Unit = {},
+    onSecretTap: () -> Unit = {},
 ) {
     val scene = Brush.linearGradient(
         colors = listOf(SceneStart, SceneMid, SceneEnd),
@@ -89,7 +92,11 @@ fun AttractScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(scene),
+            .background(scene)
+            // Hidden maintenance gesture: 7 rapid taps anywhere on the attract background (counted
+            // in the VM) opens the exit-PIN → settings. The "Tap to donate" button consumes its own
+            // taps, so donors never trigger this.
+            .pointerInput(Unit) { detectTapGestures(onTap = { onSecretTap() }) },
         contentAlignment = Alignment.Center,
     ) {
         Column(

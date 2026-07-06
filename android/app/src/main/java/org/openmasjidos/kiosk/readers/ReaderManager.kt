@@ -290,10 +290,14 @@ object ReaderManager {
 
     private val readerListener = object : MobileReaderListener {
         override fun onReportAvailableUpdate(update: ReaderSoftwareUpdate) {
+            // A required firmware update on connect is the usual reason a reader "won't connect" —
+            // it needs ≥50% battery and can take a few minutes. Log it so it's visible.
+            repo?.log("warn", "reader_update_available")
             _state.update { it.copy(updateAvailable = true) }
         }
 
         override fun onStartInstallingUpdate(update: ReaderSoftwareUpdate, cancelable: Cancelable?) {
+            repo?.log("warn", "reader_update_installing", "keep powered — can take a few minutes")
             _state.update { it.copy(conn = ReaderConn.Updating, updateProgress = 0, updateAvailable = true) }
         }
 
@@ -302,6 +306,7 @@ object ReaderManager {
         }
 
         override fun onFinishInstallingUpdate(update: ReaderSoftwareUpdate?, e: TerminalException?) {
+            repo?.log(if (e != null) "error" else "info", "reader_update_finished", e?.errorMessage ?: "ok")
             val connected = Terminal.isInitialized() && Terminal.getInstance().connectedReader != null
             _state.update {
                 it.copy(
@@ -313,11 +318,16 @@ object ReaderManager {
             }
         }
 
+        override fun onReportLowBatteryWarning() {
+            repo?.log("warn", "reader_low_battery", "charge the reader to ≥50% for firmware updates")
+        }
+
         override fun onBatteryLevelUpdate(batteryLevel: Float, batteryStatus: BatteryStatus, isCharging: Boolean) {
             _state.update { it.copy(battery = (batteryLevel * 100).toInt().coerceIn(0, 100), charging = isCharging) }
         }
 
         override fun onDisconnect(reason: DisconnectReason) {
+            repo?.log("warn", "reader_disconnected", reason.toString())
             connectedSerial = null
             _state.update { it.copy(conn = ReaderConn.NotConnected, connectedLabel = null, battery = null) }
         }
