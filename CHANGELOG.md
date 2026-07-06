@@ -3,6 +3,26 @@
 
 # Changelog
 
+## 0.6.0
+- **Monthly donations!** The giving screen now has a **One-time / Monthly** toggle (when you enable
+  monthly in the app). A monthly donor taps their amount, enters name + email (required), and taps
+  their card once: that first month is charged on the reader, and an ongoing **monthly subscription**
+  is set up from that same card — the next charge is a month later (never double-charged), and Stripe
+  emails the receipts automatically. If a card can't be reused for recurring giving, the one-time gift
+  still counts and the donor is told kindly. You can see active subscriptions in your Stripe dashboard.
+- **The tablet now clearly confirms a donation.** After the card is read it shows a **"Processing…"**
+  step, then a thank-you that names the **amount given** (and, for monthly, "set up") — so a
+  successful tap is unmistakable. Payment success/failure is also logged more clearly (Devices → Logs).
+- **Update a kiosk from the admin panel — for real this time.** When a kiosk is out of date, press
+  **Update** on its card: the tablet opens the newest app in its own browser to download and install
+  (the same way you first installed it). There's step-by-step help right on the card, and the same
+  **Update app** button is in the tablet's 7-tap maintenance screen. (Android won't let an app update
+  itself without a person tapping "Install", so this opens that install for them.)
+- **Light-mode tablets are readable again.** The kiosk is a dark-by-design giving station, so it now
+  always renders dark — a tablet set to a light system theme no longer shows unreadable settings.
+- **Fix — the activity-log window no longer overlaps the cards behind it.** It now floats above a
+  properly dimmed page (it was being trapped inside a panel).
+
 ## 0.5.5
 - **Removed the "push update to the tablet" button.** Android doesn't allow an app to update itself
   without a person tapping "Install", and inside kiosk mode even that is blocked — so a remote,

@@ -8,8 +8,10 @@
  *  friendly inline message — the page never crashes. Matches the admin design language
  *  (glass cards, tokens, RTL-safe logical spacing, reduced-motion respected). */
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
+  DownloadCloud,
   Loader2,
   Lock,
   MonitorSmartphone,
@@ -30,6 +32,7 @@ import {
   renameDevice,
   revokeDevice,
   setKioskPin,
+  updateDeviceApp,
   type Device,
   type DeviceLog,
   type PairCode,
@@ -194,11 +197,14 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(device.name);
   const [savingName, setSavingName] = useState(false);
-  const [busy, setBusy] = useState<'identify' | 'remove' | null>(null);
+  const [busy, setBusy] = useState<'identify' | 'remove' | 'update' | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+  const [showUpdateHelp, setShowUpdateHelp] = useState(false);
   const [note, setNote] = useState('');
   const [err, setErr] = useState('');
+
+  const outOfDate = !!serverVersion && !!device.appVersion && device.appVersion !== serverVersion;
 
   const cancelEdit = () => {
     setEditing(false);
@@ -248,6 +254,21 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
     }
   };
 
+  const update = async () => {
+    setErr('');
+    setNote('');
+    setBusy('update');
+    try {
+      await updateDeviceApp(device.id);
+      setNote('Asked this kiosk to open the update page — finish installing on the tablet (see the steps below).');
+      setShowUpdateHelp(true);
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="device-row glass-inset">
       <div className="device-row__head">
@@ -290,10 +311,15 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
             report "not charging" at 100% while plugged in). Reader + app version are what matter. */}
         <span className="status-pill">Reader: {readerLabel(device.readerStatus)}</span>
         <span className="status-pill">App v{device.appVersion || '—'}</span>
-        {!!serverVersion && !!device.appVersion && device.appVersion !== serverVersion && (
-          <span className="status-pill device-warn" title={`Latest is v${serverVersion}. Reinstall the app on the tablet to update.`}>
-            <span className="status-dot status-dot--warn" /> Update available
-          </span>
+        {outOfDate && (
+          <button
+            type="button"
+            className="status-pill device-warn"
+            onClick={() => setShowUpdateHelp((v) => !v)}
+            title={`Latest is v${serverVersion}. Click for how to update this kiosk.`}
+          >
+            <span className="status-dot status-dot--warn" /> Update available (v{serverVersion})
+          </button>
         )}
       </div>
 
@@ -309,6 +335,16 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
         <button className="btn btn--ghost btn--sm" onClick={() => setShowLogs(true)}>
           <ScrollText size={14} aria-hidden="true" /> Logs
         </button>
+        {outOfDate && (
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={() => void update()}
+            disabled={busy !== null || !device.online}
+            title={device.online ? 'Open the update page on this kiosk to install the newest app' : 'The kiosk must be online to receive this'}
+          >
+            <DownloadCloud size={14} aria-hidden="true" /> {busy === 'update' ? 'Sending…' : 'Update'}
+          </button>
+        )}
         {confirming ? (
           <>
             <button className="btn btn--sm device-danger" onClick={() => void remove()} disabled={busy === 'remove'}>
@@ -330,6 +366,27 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
           Removing unlinks this kiosk — the tablet returns to its pairing screen until you add it again.
         </p>
       )}
+
+      {outOfDate && showUpdateHelp && (
+        <div className="update-help">
+          <p className="hint" style={{ marginBlockEnd: '0.5rem' }}>
+            This kiosk is on <strong>v{device.appVersion}</strong>; the latest is <strong>v{serverVersion}</strong>. Android
+            can't update the app on its own, so a person at the tablet installs it — two ways:
+          </p>
+          <p className="label" style={{ marginBlockEnd: '0.2rem' }}>From here (easiest)</p>
+          <ol className="update-steps">
+            <li>Press <strong>Update</strong> above (the kiosk must be online).</li>
+            <li>On the tablet, its browser opens the newest app. Tap through any security notice for your server, then let it download.</li>
+            <li>Open the downloaded file and tap <strong>Install</strong> (allow the browser to install apps if asked). The kiosk relaunches on the new version.</li>
+          </ol>
+          <p className="label" style={{ marginBlockStart: '0.7rem', marginBlockEnd: '0.2rem' }}>At the tablet</p>
+          <ol className="update-steps">
+            <li>Tap the giving screen <strong>7 times quickly</strong>, then enter the kiosk PIN.</li>
+            <li>In maintenance, tap <strong>Update app</strong> and follow the same download &amp; install steps.</li>
+          </ol>
+        </div>
+      )}
+
       {note && (
         <p className="status-pill status-pill--ok" style={{ marginBlockStart: '0.2rem' }}>
           <Zap size={13} aria-hidden="true" /> {note}
@@ -382,7 +439,11 @@ function LogsModal({ device, onClose }: { device: Device; onClose: () => void })
 
   const sorted = logs ? [...logs].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)) : null;
 
-  return (
+  // Render into <body> via a portal: the modal is position:fixed, but an ancestor panel uses
+  // backdrop-filter, which makes "fixed" resolve against that panel instead of the viewport — so
+  // the scrim didn't cover the page and the window overlapped the cards/PIN behind it. A portal
+  // escapes those containing blocks so the backdrop truly covers everything.
+  return createPortal(
     <div
       className="modal-scrim"
       role="dialog"
@@ -434,7 +495,8 @@ function LogsModal({ device, onClose }: { device: Device; onClose: () => void })
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -75,6 +75,7 @@ fun MaintenanceScreen(
     onInstallReaderUpdate: () -> Unit,
     onDismissReaderError: () -> Unit,
     onReaderPermissionDenied: () -> Unit,
+    onUpdateApp: () -> Unit,
     onReturn: () -> Unit,
     onRePair: () -> Unit,
     onExit: () -> Unit,
@@ -152,8 +153,8 @@ fun MaintenanceScreen(
                 )
             }
 
-            // --- App update (informational — Android can't self-update a non-device-owner
-            //     tablet, so we point to the reinstall path rather than a button that can't work) --
+            // --- App update — Android can't update an ordinary app itself, so "Update app" opens
+            //     the newest APK link in the browser to download + install (same as first install) --
             val updateAvailable = diagnostics.latestAppVersion.isNotBlank() &&
                 diagnostics.appVersion.isNotBlank() &&
                 diagnostics.latestAppVersion != diagnostics.appVersion
@@ -171,6 +172,16 @@ fun MaintenanceScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = InkMutedDark,
                     )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = onUpdateApp,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(stringResource(R.string.maintenance_update_button)) }
                 }
             }
 

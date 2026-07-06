@@ -37,17 +37,23 @@ enum class Phase { Loading, Unpaired, Paired }
 /** Overlay shown on top of the attract screen in the Paired phase. */
 enum class Overlay { None, Pin, Maintenance }
 
-/** The donor-facing giving flow (Paired phase). Idle = the attract screen. */
-enum class GivingStep { Idle, Amount, Details, Card, Thanks, Error }
+/** The donor-facing giving flow (Paired phase). Idle = the attract screen. Processing = the card
+ *  was read and we're verifying with the server (so the tap is acknowledged immediately). */
+enum class GivingStep { Idle, Amount, Details, Card, Processing, Thanks, Error }
+
+/** Whether a requested monthly subscription was set up (drives the thank-you wording). */
+enum class MonthlyOutcome { None, Created, NotSupported }
 
 /** State of an in-progress donation. Amounts are integer MINOR units (validated server-side). */
 data class GivingState(
     val step: GivingStep = GivingStep.Idle,
     val amountMinor: Long = 0L,
+    val monthly: Boolean = false,
     val donorName: String = "",
     val donorEmail: String = "",
     val busy: Boolean = false,
     val error: String? = null,
+    val monthlyOutcome: MonthlyOutcome = MonthlyOutcome.None,
 )
 
 /**
@@ -90,6 +96,9 @@ data class UiState(
     // reader setup/diagnostics without a PIN, but "Exit kiosk" is gated on this.
     val exitAllowed: Boolean = false,
     val giving: GivingState = GivingState(),
+    /** When non-null, the UI should open this URL (the server's APK download) in the browser so a
+     *  person can install the update, then call [KioskViewModel.consumeOpenUpdate]. */
+    val openUpdateUrl: String? = null,
 )
 
 /**
@@ -118,6 +127,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         val maintUnlockedViaPin: Boolean = false,
         val giving: GivingState = GivingState(),
         val latestAppVersion: String = "",
+        // Set when the admin (webui) or a maintainer (7-tap menu) asks this kiosk to update; the UI
+        // opens the APK link in the browser to install (Android can't update an ordinary app itself).
+        val openUpdatePending: Boolean = false,
     )
 
     private val local = MutableStateFlow(Local(form = PairingForm(name = Build.MODEL ?: "Kiosk")))
@@ -135,6 +147,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             reader = reader,
             exitAllowed = l.maintUnlockedViaPin,
             giving = l.giving,
+            openUpdateUrl = if (l.openUpdatePending && pairing != null)
+                pairing.serverUrl.trimEnd('/') + "/download/openmasjidkiosk.apk" else null,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), UiState())
 
@@ -187,6 +201,21 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     fun onReaderPermissionDenied() =
         ReaderManager.reportError(appContext.getString(R.string.reader_permission_denied))
 
+    // ---- App update (browser install) --------------------------------------------------
+    // Android can't update an ordinary app itself, so "update" = open the server's APK link in the
+    // browser (Chrome) so a person can download + install it — the same path used to install the app
+    // the first time. Triggered either by a maintainer in the 7-tap menu or by the admin from the
+    // webui (delivered on the heartbeat). Both just flip [Local.openUpdatePending]; the UI turns that
+    // into [UiState.openUpdateUrl], opens the browser, then calls [consumeOpenUpdate].
+
+    /** Maintainer tapped "Update app" in the maintenance screen. */
+    fun requestAppUpdate() {
+        repo.log("info", "app_update_open_browser", "maintenance")
+        local.update { it.copy(openUpdatePending = true) }
+    }
+
+    /** The UI has opened the update URL in the browser — clear the one-shot flag. */
+    fun consumeOpenUpdate() = local.update { it.copy(openUpdatePending = false) }
 
     // ---- Giving flow (donor-facing) ----------------------------------------------------
 
@@ -208,24 +237,30 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     fun setDonorName(v: String) = updateGiving { it.copy(donorName = v.take(120)) }
     fun setDonorEmail(v: String) = updateGiving { it.copy(donorEmail = v.take(200)) }
 
-    /** Pick an amount (minor units). Goes to the details step when the admin asks for name/email,
-     *  otherwise straight to the card. */
+    /** Choose one-time vs monthly on the amount screen (only when the admin enabled monthly). */
+    fun setMonthly(monthly: Boolean) = updateGiving { it.copy(monthly = monthly, error = null) }
+
+    /** Pick an amount (minor units). Goes to the details step when the admin asks for name/email —
+     *  or always for monthly (which requires name + email) — otherwise straight to the card. */
     fun chooseAmount(amountMinor: Long) {
         if (amountMinor <= 0) return
         val cfg = ui.value.config
-        val wantsDetails = (cfg?.namePolicy ?: "off") != "off" || (cfg?.emailPolicy ?: "off") != "off"
+        val monthly = local.value.giving.monthly
+        val wantsDetails = monthly || (cfg?.namePolicy ?: "off") != "off" || (cfg?.emailPolicy ?: "off") != "off"
         updateGiving { it.copy(amountMinor = amountMinor, error = null, step = if (wantsDetails) GivingStep.Details else GivingStep.Card) }
         if (!wantsDetails) startCollect()
     }
 
-    /** Continue from the details step (validating required name/email). */
+    /** Continue from the details step (validating required name/email; both required for monthly). */
     fun submitDetails() {
         val cfg = ui.value.config
         val g = local.value.giving
+        val nameRequired = g.monthly || cfg?.namePolicy == "required"
+        val emailRequired = g.monthly || cfg?.emailPolicy == "required"
         when {
-            cfg?.namePolicy == "required" && g.donorName.isBlank() ->
+            nameRequired && g.donorName.isBlank() ->
                 updateGiving { it.copy(error = "Please enter your name.") }
-            cfg?.emailPolicy == "required" && !isEmail(g.donorEmail) ->
+            emailRequired && !isEmail(g.donorEmail) ->
                 updateGiving { it.copy(error = "Please enter a valid email for your receipt.") }
             g.donorEmail.isNotBlank() && !isEmail(g.donorEmail) ->
                 updateGiving { it.copy(error = "That email doesn’t look right.") }
@@ -247,14 +282,18 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         }
         updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null) }
         givingJob?.cancel()
+        val monthly = g.monthly
+        val kind = if (monthly) "monthly" else "one_time"
         givingJob = viewModelScope.launch {
             val name = g.donorName.trim().ifBlank { null }
             val email = g.donorEmail.trim().ifBlank { null }
             val idem = UUID.randomUUID().toString()
-            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, name, email, idem) }.getOrNull()
+            repo.log("info", "donation_started", "${g.amountMinor} minor · $kind")
+            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, name, email, monthly, idem) }.getOrNull()
             if (pi == null) {
-                repo.log("warn", "donation_create_failed")
+                repo.log("warn", "donation_create_failed", "$kind")
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start the payment. Please try again.") }
+                repo.flushLogs()
                 return@launch
             }
             val piId = runCatching { PaymentController.collectAndConfirm(pi.clientSecret) }.getOrNull()
@@ -262,18 +301,26 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             if (piId == null) {
                 repo.log("warn", "donation_collect_failed", pi.id)
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t go through — no charge was made. Try again?") }
+                repo.flushLogs()
                 return@launch
             }
+            // Card read — acknowledge the tap immediately while the server verifies + captures.
+            updateGiving { it.copy(step = GivingStep.Processing, busy = true) }
             val result = runCatching { repo.completePaymentIntent(piId) }.getOrNull()
             if (result?.succeeded == true) {
-                repo.log("info", "donation_succeeded", piId)
-                updateGiving { it.copy(step = GivingStep.Thanks, busy = false) }
+                val outcome = when {
+                    !result.monthlyRequested -> MonthlyOutcome.None
+                    result.monthlyCreated -> MonthlyOutcome.Created
+                    else -> MonthlyOutcome.NotSupported
+                }
+                repo.log("info", "donation_succeeded", "${result.amountMinor} ${result.currency} · $kind${if (result.monthlyRequested) " · monthly=${result.monthlyCreated}" else ""}")
+                updateGiving { it.copy(step = GivingStep.Thanks, busy = false, monthlyOutcome = outcome) }
                 viewModelScope.launch {
                     delay(THANKS_MS)
                     if (local.value.giving.step == GivingStep.Thanks) updateGiving { GivingState() }
                 }
             } else {
-                repo.log("warn", "donation_not_succeeded", piId)
+                repo.log("warn", "donation_not_succeeded", "$kind · status=${result?.status ?: "unknown"}")
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t complete. If your card was charged it will be refunded.") }
             }
             repo.flushLogs()
@@ -389,7 +436,13 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 )) {
                     is HeartbeatOutcome.Ok -> {
                         local.update {
-                            it.copy(lastHeartbeatMs = System.currentTimeMillis(), online = true, latestAppVersion = outcome.latestAppVersion)
+                            it.copy(
+                                lastHeartbeatMs = System.currentTimeMillis(),
+                                online = true,
+                                latestAppVersion = outcome.latestAppVersion,
+                                // Admin pressed "Update" in the webui → open the APK link to install.
+                                openUpdatePending = it.openUpdatePending || outcome.openUpdate,
+                            )
                         }
                         if (outcome.identify) flashIdentify()
                     }

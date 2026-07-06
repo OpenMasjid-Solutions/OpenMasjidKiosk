@@ -11,6 +11,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,15 +32,27 @@ import org.openmasjidos.kiosk.ui.theme.InkMutedDark
  * @param isDeviceOwner whether the tablet is provisioned as device owner; drives the
  *   "not a locked-down kiosk yet" hint on the maintenance screen.
  * @param onExitKiosk stop lock task and leave the app (wired to the Activity in MainActivity).
+ * @param onOpenBrowser drop lock task and open a URL in the browser (used to install an app update).
  */
 @Composable
 fun KioskRoot(
     vm: KioskViewModel,
     isDeviceOwner: Boolean,
     onExitKiosk: () -> Unit,
+    onOpenBrowser: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+
+    // When the admin (webui) or a maintainer asks this kiosk to update, open the APK link in the
+    // browser so a person can install it, then clear the one-shot flag.
+    val updateUrl = ui.openUpdateUrl
+    LaunchedEffect(updateUrl) {
+        if (updateUrl != null) {
+            onOpenBrowser(updateUrl)
+            vm.consumeOpenUpdate()
+        }
+    }
 
     Box(modifier = modifier) {
         when {
@@ -62,6 +75,7 @@ fun KioskRoot(
                         giving = ui.giving,
                         config = ui.config,
                         readerPrompt = ui.reader.prompt,
+                        onSetMonthly = vm::setMonthly,
                         onChooseAmount = vm::chooseAmount,
                         onDonorName = vm::setDonorName,
                         onDonorEmail = vm::setDonorEmail,
@@ -99,6 +113,7 @@ fun KioskRoot(
                         onInstallReaderUpdate = vm::installReaderUpdate,
                         onDismissReaderError = vm::dismissReaderError,
                         onReaderPermissionDenied = vm::onReaderPermissionDenied,
+                        onUpdateApp = vm::requestAppUpdate,
                         onReturn = vm::closeOverlay,
                         onRePair = vm::rePair,
                         onExit = onExitKiosk,

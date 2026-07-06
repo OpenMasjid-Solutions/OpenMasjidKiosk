@@ -22,8 +22,17 @@ data class PairResponse(val deviceToken: String, val deviceId: String, val confi
 /** Parsed result of `POST /api/kiosk/payment-intents`. */
 data class CreatedPaymentIntent(val id: String, val clientSecret: String)
 
-/** Parsed result of `POST /api/kiosk/payment-intents/{id}/complete` (server-verified). */
-data class CompletedDonation(val status: String, val succeeded: Boolean, val amountMinor: Long, val currency: String)
+/** Parsed result of `POST /api/kiosk/payment-intents/{id}/complete` (server-verified).
+ *  [monthlyRequested]/[monthlyCreated] tell the tablet whether an ongoing monthly subscription was
+ *  set up, so it can thank the donor accordingly (or say monthly couldn't be arranged with the card). */
+data class CompletedDonation(
+    val status: String,
+    val succeeded: Boolean,
+    val amountMinor: Long,
+    val currency: String,
+    val monthlyRequested: Boolean = false,
+    val monthlyCreated: Boolean = false,
+)
 
 /** Parsed result of `POST /api/kiosk/heartbeat`. */
 data class HeartbeatResponse(
@@ -31,6 +40,8 @@ data class HeartbeatResponse(
     val identify: Boolean,
     val latestAppVersion: String,
     val revoked: Boolean,
+    /** One-shot: the admin pressed "Update" in the webui — open the APK link to install. */
+    val openUpdate: Boolean,
 )
 
 /**
@@ -70,10 +81,12 @@ class KioskApi(private val client: OkHttpClient) {
         readerStatus: String?,
         readerSerial: String?,
         readerBattery: Int?,
+        foreground: Boolean,
     ): HeartbeatResponse {
         val body = JSONObject()
             .put("appVersion", appVersion)
             .put("configVersion", configVersion)
+            .put("foreground", foreground)
         if (battery != null) body.put("battery", battery)
         if (charging != null) body.put("charging", charging)
         if (readerStatus != null) body.put("readerStatus", readerStatus)
@@ -85,6 +98,7 @@ class KioskApi(private val client: OkHttpClient) {
             identify = json.optBoolean("identify", false),
             latestAppVersion = json.optString("latestAppVersion", ""),
             revoked = json.optBoolean("revoked", false),
+            openUpdate = json.optBoolean("openUpdate", false),
         )
     }
 
@@ -130,10 +144,12 @@ class KioskApi(private val client: OkHttpClient) {
         amountMinor: Long,
         donorName: String?,
         donorEmail: String?,
+        monthly: Boolean,
         idempotencyKey: String,
     ): CreatedPaymentIntent {
         val body = JSONObject()
             .put("amountMinor", amountMinor)
+            .put("monthly", monthly)
             .put("idempotencyKey", idempotencyKey)
         if (!donorName.isNullOrBlank()) body.put("donorName", donorName)
         if (!donorEmail.isNullOrBlank()) body.put("donorEmail", donorEmail)
@@ -145,11 +161,14 @@ class KioskApi(private val client: OkHttpClient) {
      *  and records the donation only if it truly succeeded. Returns the verified outcome. */
     fun completePaymentIntent(baseUrl: String, token: String, id: String): CompletedDonation {
         val json = post(baseUrl, "/api/kiosk/payment-intents/$id/complete", JSONObject(), token)
+        val monthly = json.optJSONObject("monthly")
         return CompletedDonation(
             status = json.optString("status"),
             succeeded = json.optBoolean("succeeded", false),
             amountMinor = json.optLong("amountMinor", 0L),
             currency = json.optString("currency"),
+            monthlyRequested = monthly?.optBoolean("requested", false) ?: false,
+            monthlyCreated = monthly?.optBoolean("created", false) ?: false,
         )
     }
 

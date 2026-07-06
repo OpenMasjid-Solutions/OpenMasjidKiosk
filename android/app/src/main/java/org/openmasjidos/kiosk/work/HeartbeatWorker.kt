@@ -39,6 +39,9 @@ class HeartbeatWorker(appContext: Context, params: WorkerParameters) :
             readerStatus = reader.status,
             readerSerial = reader.serial,
             readerBattery = reader.battery,
+            // Backstop: must NOT consume the one-shot "open update" flag (it can't open a browser);
+            // leaving it set lets the next foreground heartbeat deliver it instead of losing it.
+            foreground = false,
         )
         return when (outcome) {
             is HeartbeatOutcome.Ok,

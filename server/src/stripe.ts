@@ -207,6 +207,9 @@ export interface CompletedPaymentIntent {
   /** The reusable PaymentMethod Stripe derives from a card-present charge (monthly, slice 7). */
   generatedCard?: string;
   receiptUrl?: string;
+  /** When Stripe created the PaymentIntent (epoch seconds). Deterministic per PI, so it anchors the
+   *  monthly subscription's first-charge date identically on any retry (keeps idempotency stable). */
+  createdSec: number;
   /** The metadata we set at create time (device id, kind, donor name/email) — trustworthy since
    *  it comes back from Stripe, not the tablet. */
   metadata: Record<string, string>;
@@ -230,6 +233,89 @@ export async function completeCardPresentPaymentIntent(secretKey: string, id: st
     chargeId: charge?.id,
     generatedCard: cardPresent?.generated_card ?? undefined,
     receiptUrl: charge?.receipt_url ?? undefined,
+    createdSec: pi.created,
     metadata: (pi.metadata ?? {}) as Record<string, string>,
   };
+}
+
+// ── Monthly donations: Customer + Subscription from the card-present charge (slice 7) ──────
+export interface MonthlySubscriptionInput {
+  amountMinor: number;
+  currency: string;
+  /** The reusable PaymentMethod Stripe derived from the card-present charge (generated_card). */
+  paymentMethod: string;
+  name?: string;
+  email?: string;
+  /** Human product name shown on the donor's Stripe invoices, e.g. "Monthly donation — Al-Noor". */
+  productName: string;
+  deviceId?: string;
+  /** Epoch seconds to anchor the first recurring charge one month after (use the PaymentIntent's
+   *  `created` — deterministic per PI, so trial_end is identical on a retry and idempotency holds). */
+  anchorSec: number;
+  /** Stable key (the PaymentIntent id) so a retried `/complete` can't create a second customer
+   *  or subscription — same key + same body → Stripe returns the original object. */
+  idempotencyKey?: string;
+}
+
+export interface MonthlySubscriptionResult {
+  created: boolean;
+  subscriptionId?: string;
+  customerId?: string;
+  reason?: string;
+}
+
+/**
+ * Set up an ongoing monthly donation from a card-present first payment. The FIRST month is the
+ * card-present PaymentIntent already collected + captured on the reader; here we only arrange the
+ * *recurring* part: create a Customer, attach the reusable card, and create a monthly Subscription
+ * whose first automatic charge is one month out (`trial_end`) so the donor is never double-charged
+ * for month one. Stripe emails invoice receipts on each renewal automatically. We do NOT track
+ * renewals (no webhooks, LAN-only) — the admin sees active subscriptions in the Stripe dashboard.
+ */
+export async function createMonthlySubscription(secretKey: string, input: MonthlySubscriptionInput): Promise<MonthlySubscriptionResult> {
+  const c = client(secretKey);
+  const idem = input.idempotencyKey;
+  const customer = await c.customers.create(
+    {
+      name: input.name || undefined,
+      email: input.email || undefined,
+      payment_method: input.paymentMethod, // attaches the generated_card to the customer
+      invoice_settings: { default_payment_method: input.paymentMethod },
+      metadata: { app: 'kiosk', deviceId: input.deviceId || '' },
+    },
+    idem ? { idempotencyKey: `${idem}_cust` } : undefined,
+  );
+  // A recurring monthly Price for this amount. Subscription `price_data` requires an existing
+  // product id, whereas `prices.create` accepts an inline `product_data` (auto-creating the
+  // product) — account-agnostic and idempotent, so we build the price here then subscribe to it.
+  const price = await c.prices.create(
+    {
+      currency: input.currency.toLowerCase(),
+      unit_amount: input.amountMinor,
+      recurring: { interval: 'month' },
+      product_data: { name: input.productName },
+    },
+    idem ? { idempotencyKey: `${idem}_price` } : undefined,
+  );
+  // Anchor the first recurring charge to the same day next month (first month already collected).
+  // Derived from a FIXED timestamp (the PI's created) so a retried /complete recomputes the exact
+  // same trial_end — otherwise the `_sub` idempotency key would carry a different body and Stripe
+  // would reject it. Clamp the day so a month-end signup (e.g. Jan 31) doesn't overflow past Feb.
+  const anchor = new Date(input.anchorSec * 1000);
+  const daysInNextMonth = new Date(anchor.getFullYear(), anchor.getMonth() + 2, 0).getDate();
+  anchor.setDate(1);
+  anchor.setMonth(anchor.getMonth() + 1);
+  anchor.setDate(Math.min(new Date(input.anchorSec * 1000).getDate(), daysInNextMonth));
+  const trialEnd = Math.floor(anchor.getTime() / 1000);
+  const sub = await c.subscriptions.create(
+    {
+      customer: customer.id,
+      items: [{ price: price.id }],
+      default_payment_method: input.paymentMethod,
+      trial_end: trialEnd,
+      metadata: { app: 'kiosk', deviceId: input.deviceId || '' },
+    },
+    idem ? { idempotencyKey: `${idem}_sub` } : undefined,
+  );
+  return { created: true, subscriptionId: sub.id, customerId: customer.id };
 }

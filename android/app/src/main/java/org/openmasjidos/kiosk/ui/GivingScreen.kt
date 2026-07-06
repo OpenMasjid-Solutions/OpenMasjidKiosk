@@ -19,9 +19,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import org.openmasjidos.kiosk.GivingState
 import org.openmasjidos.kiosk.GivingStep
+import org.openmasjidos.kiosk.MonthlyOutcome
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.ui.theme.DangerDark
 import org.openmasjidos.kiosk.ui.theme.GoldDark
@@ -59,6 +64,7 @@ fun GivingScreen(
     giving: GivingState,
     config: KioskConfig?,
     readerPrompt: String?,
+    onSetMonthly: (Boolean) -> Unit,
     onChooseAmount: (Long) -> Unit,
     onDonorName: (String) -> Unit,
     onDonorEmail: (String) -> Unit,
@@ -70,10 +76,11 @@ fun GivingScreen(
     val currency = config?.currency?.ifBlank { "USD" } ?: "USD"
     SceneBox(modifier) {
         when (giving.step) {
-            GivingStep.Amount -> AmountStep(config, currency, onChooseAmount, onCancel)
+            GivingStep.Amount -> AmountStep(giving, config, currency, onSetMonthly, onChooseAmount, onCancel)
             GivingStep.Details -> DetailsStep(giving, config, onDonorName, onDonorEmail, onSubmitDetails, onCancel)
             GivingStep.Card -> CardStep(giving.amountMinor, currency, readerPrompt, onCancel)
-            GivingStep.Thanks -> ThanksStep(config, onCancel)
+            GivingStep.Processing -> ProcessingStep(giving.amountMinor, currency)
+            GivingStep.Thanks -> ThanksStep(giving, config, currency, onCancel)
             GivingStep.Error -> ErrorStep(giving.error, onRetry, onCancel)
             GivingStep.Idle -> Unit
         }
@@ -109,10 +116,13 @@ private fun ColumnScopeAmountHeader(masjid: String?) {
     Spacer(Modifier.height(24.dp))
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun androidx.compose.foundation.layout.ColumnScope.AmountStep(
+    giving: GivingState,
     config: KioskConfig?,
     currency: String,
+    onSetMonthly: (Boolean) -> Unit,
     onChoose: (Long) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -122,6 +132,31 @@ private fun androidx.compose.foundation.layout.ColumnScope.AmountStep(
         return
     }
     ColumnScopeAmountHeader(config?.masjidName)
+    // One-time vs monthly (only when the admin enabled monthly giving).
+    if (config?.monthlyEnabled == true) {
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SegmentedButton(
+                selected = !giving.monthly,
+                onClick = { onSetMonthly(false) },
+                shape = SegmentedButtonDefaults.itemShape(0, 2),
+            ) { Text("One-time") }
+            SegmentedButton(
+                selected = giving.monthly,
+                onClick = { onSetMonthly(true) },
+                shape = SegmentedButtonDefaults.itemShape(1, 2),
+            ) { Text("Monthly") }
+        }
+        if (giving.monthly) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Give this amount automatically every month. We'll ask for your name and email to set it up and send receipts.",
+                style = MaterialTheme.typography.bodySmall,
+                color = InkMutedDark,
+                textAlign = TextAlign.Center,
+            )
+        }
+        Spacer(Modifier.height(18.dp))
+    }
     val presets = (config?.presetsMinor ?: emptyList()).ifEmpty { listOf(500L, 1000L, 2000L, 5000L, 10000L, 25000L) }
     // 2-column grid of big tiles.
     presets.chunked(2).forEach { row ->
@@ -215,13 +250,18 @@ private fun androidx.compose.foundation.layout.ColumnScope.DetailsStep(
     onSubmit: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    val nameOn = (config?.namePolicy ?: "off") != "off"
-    val emailOn = (config?.emailPolicy ?: "off") != "off"
-    val nameReq = config?.namePolicy == "required"
-    val emailReq = config?.emailPolicy == "required"
+    // Monthly always needs a name + email (to create the customer/subscription and send receipts).
+    val nameOn = giving.monthly || (config?.namePolicy ?: "off") != "off"
+    val emailOn = giving.monthly || (config?.emailPolicy ?: "off") != "off"
+    val nameReq = giving.monthly || config?.namePolicy == "required"
+    val emailReq = giving.monthly || config?.emailPolicy == "required"
     Text("Your details", style = MaterialTheme.typography.headlineSmall, color = InkDark)
     Spacer(Modifier.height(6.dp))
-    Text("For your receipt — optional unless marked required.", style = MaterialTheme.typography.bodyMedium, color = InkMutedDark)
+    Text(
+        if (giving.monthly) "For your monthly giving and receipts." else "For your receipt — optional unless marked required.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = InkMutedDark,
+    )
     Spacer(Modifier.height(20.dp))
     if (nameOn) {
         OutlinedTextField(
@@ -280,14 +320,66 @@ private fun androidx.compose.foundation.layout.ColumnScope.CardStep(
     OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp)) { Text("Cancel", color = InkMutedDark) }
 }
 
+// ── Step: processing (card read; server verifying) ───────────────────────────
+@Composable
+private fun androidx.compose.foundation.layout.ColumnScope.ProcessingStep(amountMinor: Long, currency: String) {
+    Text(formatMoney(amountMinor, currency), style = MaterialTheme.typography.displayMedium, color = GoldDark)
+    Spacer(Modifier.height(20.dp))
+    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+    Spacer(Modifier.height(20.dp))
+    Text(
+        text = "Processing your donation…",
+        style = MaterialTheme.typography.headlineSmall,
+        color = InkDark,
+        textAlign = TextAlign.Center,
+    )
+}
+
 // ── Step: thank you ──────────────────────────────────────────────────────────
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.ThanksStep(config: KioskConfig?, onCancel: () -> Unit) {
+private fun androidx.compose.foundation.layout.ColumnScope.ThanksStep(
+    giving: GivingState,
+    config: KioskConfig?,
+    currency: String,
+    onCancel: () -> Unit,
+) {
     val msg = config?.thankYouMessage?.takeIf { it.isNotBlank() }
         ?: "JazākAllāhu khayran — thank you for your generous donation."
     Text("✓", style = MaterialTheme.typography.displayLarge, color = SuccessDark)
-    Spacer(Modifier.height(16.dp))
+    Spacer(Modifier.height(12.dp))
+    // Concrete acknowledgement of what was given, so a successful tap is unmistakable.
+    if (giving.amountMinor > 0) {
+        Text(
+            text = if (giving.monthly) "${formatMoney(giving.amountMinor, currency)} / month" else "You gave ${formatMoney(giving.amountMinor, currency)}",
+            style = MaterialTheme.typography.headlineMedium,
+            color = GoldDark,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(12.dp))
+    }
     Text(msg, style = MaterialTheme.typography.headlineSmall, color = InkDark, textAlign = TextAlign.Center)
+    // Monthly outcome (warm, honest if the card couldn't be set up for recurring giving).
+    when (giving.monthlyOutcome) {
+        MonthlyOutcome.Created -> {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Your monthly donation is set up — we'll email your receipts.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = SuccessDark,
+                textAlign = TextAlign.Center,
+            )
+        }
+        MonthlyOutcome.NotSupported -> {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "We couldn't set up monthly giving with this card, but your gift today went through. Thank you!",
+                style = MaterialTheme.typography.bodyMedium,
+                color = InkMutedDark,
+                textAlign = TextAlign.Center,
+            )
+        }
+        MonthlyOutcome.None -> Unit
+    }
     Spacer(Modifier.height(28.dp))
     OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp)) { Text("Done", color = InkDark) }
 }

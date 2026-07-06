@@ -251,6 +251,11 @@ export const revokeDevice = (id: string) =>
 export const identifyDevice = (id: string) =>
   request<{ ok: true }>(`/api/admin/devices/${encodeURIComponent(id)}/identify`, { method: 'POST' });
 
+/** Ask a kiosk to open the newest APK link in its browser so a person can install the update
+ *  (Android can't update an ordinary app itself). Delivered on the kiosk's next heartbeat. */
+export const updateDeviceApp = (id: string) =>
+  request<{ ok: true }>(`/api/admin/devices/${encodeURIComponent(id)}/update`, { method: 'POST' });
+
 export const getDeviceLogs = (id: string) =>
   request<{ logs: DeviceLog[] }>(`/api/admin/devices/${encodeURIComponent(id)}/logs`);
 

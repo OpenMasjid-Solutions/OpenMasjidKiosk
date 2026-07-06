@@ -3,6 +3,8 @@
 
 package org.openmasjidos.kiosk
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -32,7 +34,9 @@ class MainActivity : ComponentActivity() {
         val deviceOwner = KioskController.isDeviceOwner(this)
 
         setContent {
-            SakinaTheme {
+            // The kiosk is a dark-by-design giving station: force dark so a tablet set to LIGHT
+            // system theme still renders the (dark-scene) donor + maintenance screens legibly.
+            SakinaTheme(darkTheme = true) {
                 KioskRoot(
                     vm = vm,
                     isDeviceOwner = deviceOwner,
@@ -43,6 +47,15 @@ class MainActivity : ComponentActivity() {
                         // device-owner removed; documented in docs/TABLET_SETUP.md.)
                         KioskController.exitKiosk(this)
                         finishAndRemoveTask()
+                    },
+                    onOpenBrowser = { url ->
+                        // Updating = install the newest APK from the server via the browser (Android
+                        // can't update an ordinary app itself). Drop lock task so the browser + the
+                        // installer can appear; onResume re-locks the kiosk when we return.
+                        KioskController.exitKiosk(this)
+                        runCatching {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }
                     },
                 )
             }

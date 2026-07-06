@@ -28,7 +28,7 @@ sealed interface PairResult {
 
 /** Outcome of a heartbeat, driving the foreground loop and WorkManager backstop. */
 sealed interface HeartbeatOutcome {
-    data class Ok(val identify: Boolean, val latestAppVersion: String) : HeartbeatOutcome
+    data class Ok(val identify: Boolean, val openUpdate: Boolean, val latestAppVersion: String) : HeartbeatOutcome
     data object Revoked : HeartbeatOutcome       // server removed this device → wipe + re-pair
     data object CertMismatch : HeartbeatOutcome  // pinned cert changed → fail closed, re-pair
     data object NotPaired : HeartbeatOutcome
@@ -119,6 +119,9 @@ class KioskRepository(context: Context) {
         readerStatus: String,
         readerSerial: String? = null,
         readerBattery: Int? = null,
+        // The live on-screen loop is foreground; the WorkManager backstop passes false so it never
+        // consumes the server's one-shot "open update" flag (only the foreground loop can act on it).
+        foreground: Boolean = true,
     ): HeartbeatOutcome = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: return@withContext HeartbeatOutcome.NotPaired
         val localVersion = store.config.first()?.version ?: 0
@@ -134,6 +137,7 @@ class KioskRepository(context: Context) {
                 readerStatus = readerStatus,
                 readerSerial = readerSerial,
                 readerBattery = readerBattery,
+                foreground = foreground,
             )
             if (resp.revoked) {
                 log("warn", "revoked")
@@ -144,7 +148,7 @@ class KioskRepository(context: Context) {
             if (resp.configVersion > localVersion) {
                 runCatching { fetchConfig() }
             }
-            HeartbeatOutcome.Ok(resp.identify, resp.latestAppVersion)
+            HeartbeatOutcome.Ok(resp.identify, resp.openUpdate, resp.latestAppVersion)
         } catch (e: IOException) {
             if (PinnedHttp.isCertMismatch(e)) HeartbeatOutcome.CertMismatch
             else HeartbeatOutcome.NetworkError
@@ -179,11 +183,12 @@ class KioskRepository(context: Context) {
         amountMinor: Long,
         donorName: String?,
         donorEmail: String?,
+        monthly: Boolean,
         idempotencyKey: String,
     ): CreatedPaymentIntent = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: throw IOException("Not paired")
         KioskApi(pinnedClientFor(p.certSha256))
-            .createPaymentIntent(p.serverUrl, p.deviceToken, amountMinor, donorName, donorEmail, idempotencyKey)
+            .createPaymentIntent(p.serverUrl, p.deviceToken, amountMinor, donorName, donorEmail, monthly, idempotencyKey)
     }
 
     /** After the reader confirms, ask the server to verify + capture with Stripe and record the

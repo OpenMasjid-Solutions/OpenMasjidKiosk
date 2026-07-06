@@ -26,6 +26,7 @@ import {
   createCardPresentPaymentIntent,
   createConnectionToken,
   createLocation,
+  createMonthlySubscription,
   listLocations,
   looksLikePublishable,
   looksLikeSecret,
@@ -386,6 +387,15 @@ async function main(): Promise<void> {
     return { data: { ok: true } };
   });
 
+  // Admin: ask this kiosk to open the APK download link in its browser so a person can install the
+  // update (Android can't update an ordinary app itself). Delivered on the kiosk's next heartbeat.
+  app.post('/api/admin/devices/:id/update', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!store.getDevice(id)) return reply.code(404).send({ error: 'Kiosk not found.' });
+    store.requestBrowserUpdate(id);
+    return { data: { ok: true } };
+  });
+
 
   app.get('/api/admin/devices/:id/logs', { preHandler: requireAdmin }, async (req) => ({
     data: { logs: store.listLogs((req.params as { id: string }).id) },
@@ -457,6 +467,10 @@ async function main(): Promise<void> {
     readerBattery: z.number().min(0).max(100).optional(),
     appVersion: z.string().max(40).optional(),
     configVersion: z.number().int().optional(),
+    // The live on-screen loop sends foreground:true; the WorkManager backstop sends false. Only a
+    // foreground heartbeat can act on the one-shot "open update" flag, so only it consumes it — the
+    // backstop must not, or an admin's Update could be silently eaten by a background check-in.
+    foreground: z.boolean().optional(),
   });
   app.post('/api/kiosk/heartbeat', async (req, reply) => {
     const d = resolveDevice(req);
@@ -465,11 +479,15 @@ async function main(): Promise<void> {
     if (d.revoked) return { data: { configVersion: store.getConfigVersion(), identify: false, latestAppVersion: config.version, revoked: true } };
     const parsed = HeartbeatBody.safeParse(req.body ?? {});
     if (parsed.success) store.updateHeartbeat(d.id, parsed.data);
+    const isForeground = !(parsed.success && parsed.data.foreground === false);
     return {
       data: {
         configVersion: store.getConfigVersion(),
         identify: store.consumeIdentify(d.id),
         latestAppVersion: config.version, // the APK version bundled in this server image (info only)
+        // One-shot: the admin pressed "Update" — the tablet opens the APK link in its browser. Only
+        // consumed by a foreground heartbeat (the backstop can't open a browser), so it's never lost.
+        openUpdate: isForeground ? store.consumeBrowserUpdate(d.id) : false,
         revoked: false,
       },
     };
@@ -521,9 +539,14 @@ async function main(): Promise<void> {
     amountMinor: z.number().int().positive(),
     donorName: z.string().trim().max(120).optional(),
     donorEmail: z.string().trim().max(200).optional(),
+    // Recurring monthly donation (sets up a Subscription from the card-present charge).
+    monthly: z.boolean().optional(),
     // Per-attempt key so a network retry can't create a second PI (Stripe idempotency).
     idempotencyKey: z.string().trim().min(8).max(255).optional(),
   });
+
+  /** A light email sanity check for the monthly gate (Stripe validates for real on the receipt). */
+  const looksLikeEmail = (e: string): boolean => e.length >= 3 && e.length <= 200 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
 
   // Create the PaymentIntent the reader will collect + confirm. The amount is validated
   // server-side against the configured presets/custom bounds — NEVER trust the tablet.
@@ -534,7 +557,15 @@ async function main(): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: 'That donation request wasn’t valid.' });
     const { amountMinor, donorName, idempotencyKey } = parsed.data;
     const donorEmail = (parsed.data.donorEmail ?? '').trim();
+    const monthly = parsed.data.monthly === true;
     if (!store.isAllowedAmount(amountMinor)) return reply.code(400).send({ error: 'That amount isn’t available.' });
+    // Monthly giving needs name + email (to create the Customer/Subscription and send receipts).
+    // Enforced on the tablet AND here — never trust the client.
+    if (monthly) {
+      if (!store.getGiving().monthlyEnabled) return reply.code(400).send({ error: 'Monthly giving isn’t available right now.' });
+      if (!donorName || !donorName.trim()) return reply.code(400).send({ error: 'Monthly giving needs a name.' });
+      if (!looksLikeEmail(donorEmail)) return reply.code(400).send({ error: 'Monthly giving needs a valid email for the receipt.' });
+    }
     const acct = await resolveAccount();
     if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     const currency = store.getCurrency();
@@ -545,9 +576,9 @@ async function main(): Promise<void> {
         {
           amountMinor,
           currency,
-          description: `Donation — ${store.getMasjid().name || 'OpenMasjid Kiosk'}`,
+          description: `${monthly ? 'Monthly donation' : 'Donation'} — ${store.getMasjid().name || 'OpenMasjid Kiosk'}`,
           receiptEmail: donorEmail || undefined, // Stripe emails a receipt on success (if enabled)
-          metadata: { app: 'kiosk', deviceId: d.id, kind: 'one_time', preset, donorName: donorName ?? '', donorEmail },
+          metadata: { app: 'kiosk', deviceId: d.id, kind: monthly ? 'monthly' : 'one_time', preset, donorName: donorName ?? '', donorEmail },
         },
         idempotencyKey,
       );
@@ -569,6 +600,32 @@ async function main(): Promise<void> {
     try {
       const result = await completeCardPresentPaymentIntent(acct.keys.secretKey, id);
       const meta = result.metadata;
+      const wantsMonthly = meta.kind === 'monthly';
+      // For a successful monthly donation, set up the recurring Subscription from the reusable
+      // card Stripe derived from this card-present charge. The first month is THIS payment; the
+      // Subscription's first automatic charge is a month out (never double-charged). If the card
+      // can't be reused (generated_card absent), the one-time gift still stands — we just report
+      // that monthly couldn't be arranged so the tablet can say so kindly.
+      let monthly = { requested: wantsMonthly, created: false };
+      if (result.succeeded && wantsMonthly && result.generatedCard) {
+        try {
+          const masjidName = store.getMasjid().name || 'OpenMasjid Kiosk';
+          const sub = await createMonthlySubscription(acct.keys.secretKey, {
+            amountMinor: result.amountMinor,
+            currency: result.currency,
+            paymentMethod: result.generatedCard,
+            name: meta.donorName || undefined,
+            email: meta.donorEmail || undefined,
+            productName: `Monthly donation — ${masjidName}`,
+            deviceId: d.id,
+            anchorSec: result.createdSec, // deterministic across retries (idempotency-safe)
+            idempotencyKey: id,
+          });
+          monthly = { requested: true, created: sub.created };
+        } catch (e) {
+          log.warn('monthly subscription failed: ' + (e instanceof Error ? e.message : String(e)));
+        }
+      }
       store.recordDonation({
         paymentIntentId: id,
         deviceId: d.id,
@@ -581,12 +638,13 @@ async function main(): Promise<void> {
         chargeId: result.chargeId,
       });
       if (result.succeeded) {
+        const label = monthly.created ? 'monthly donation set up' : 'donation received';
         void notify({
-          text: `${formatMoney(result.amountMinor, result.currency)} donation received at ${d.name || 'the kiosk'}.`,
+          text: `${formatMoney(result.amountMinor, result.currency)} ${label} at ${d.name || 'the kiosk'}.`,
           level: 'success',
         });
       }
-      return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency } };
+      return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency, monthly } };
     } catch {
       return reply.code(502).send({ error: 'Couldn’t confirm the payment with Stripe.' });
     }

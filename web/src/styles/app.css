@@ -357,7 +357,20 @@ h1, h2, h3, p, ul { margin: 0; }
 .device-name-input { max-width: 12rem; padding-block: 0.4rem; }
 .device-meta { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .device-warn { color: var(--color-warning); }
+/* The "Update available" pill doubles as a button that toggles the how-to steps. */
+button.status-pill { border: 0; cursor: pointer; font-family: inherit; }
+button.status-pill:hover { filter: brightness(1.08); }
 .device-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+/* Step-by-step "how to update this kiosk" panel. */
+.update-help {
+  margin-block-start: 0.5rem; padding: 0.75rem 0.9rem; border-radius: var(--radius-button);
+  background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
+}
+.update-steps {
+  margin: 0; padding-inline-start: 1.2rem; display: flex; flex-direction: column; gap: 0.3rem;
+  font-size: 0.85rem; color: var(--color-ink-muted); line-height: 1.5;
+}
+.update-steps strong { color: var(--color-ink); font-weight: 600; }
 .device-remove-btn:hover { color: var(--color-danger); }
 .device-danger { background: var(--color-danger); color: var(--color-on-primary); }
 .device-danger:hover { background: var(--color-danger); filter: brightness(1.06); }
