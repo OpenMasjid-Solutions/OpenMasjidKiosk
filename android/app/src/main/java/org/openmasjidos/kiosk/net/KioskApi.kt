@@ -29,7 +29,6 @@ data class CompletedDonation(val status: String, val succeeded: Boolean, val amo
 data class HeartbeatResponse(
     val configVersion: Int,
     val identify: Boolean,
-    val updateApp: Boolean,
     val latestAppVersion: String,
     val revoked: Boolean,
 )
@@ -84,7 +83,6 @@ class KioskApi(private val client: OkHttpClient) {
         return HeartbeatResponse(
             configVersion = json.optInt("configVersion", configVersion),
             identify = json.optBoolean("identify", false),
-            updateApp = json.optBoolean("updateApp", false),
             latestAppVersion = json.optString("latestAppVersion", ""),
             revoked = json.optBoolean("revoked", false),
         )

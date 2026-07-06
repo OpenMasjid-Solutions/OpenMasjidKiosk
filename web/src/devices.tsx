@@ -11,7 +11,6 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type Pointer
 import {
   CheckCircle2,
   Loader2,
-  Download,
   Lock,
   MonitorSmartphone,
   Pencil,
@@ -31,7 +30,6 @@ import {
   renameDevice,
   revokeDevice,
   setKioskPin,
-  updateDeviceApp,
   type Device,
   type DeviceLog,
   type PairCode,
@@ -196,7 +194,7 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(device.name);
   const [savingName, setSavingName] = useState(false);
-  const [busy, setBusy] = useState<'identify' | 'remove' | 'update' | null>(null);
+  const [busy, setBusy] = useState<'identify' | 'remove' | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [note, setNote] = useState('');
@@ -230,20 +228,6 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
     try {
       await identifyDevice(device.id);
       setNote('The kiosk will flash so you can spot it.');
-    } catch (e) {
-      setErr(errMsg(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const update = async () => {
-    setErr('');
-    setNote('');
-    setBusy('update');
-    try {
-      await updateDeviceApp(device.id);
-      setNote('Update sent — the kiosk will download it and start the install on its next check-in.');
     } catch (e) {
       setErr(errMsg(e));
     } finally {
@@ -306,6 +290,11 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
             report "not charging" at 100% while plugged in). Reader + app version are what matter. */}
         <span className="status-pill">Reader: {readerLabel(device.readerStatus)}</span>
         <span className="status-pill">App v{device.appVersion || '—'}</span>
+        {!!serverVersion && !!device.appVersion && device.appVersion !== serverVersion && (
+          <span className="status-pill device-warn" title={`Latest is v${serverVersion}. Reinstall the app on the tablet to update.`}>
+            <span className="status-dot status-dot--warn" /> Update available
+          </span>
+        )}
       </div>
 
       <div className="device-actions">
@@ -320,16 +309,6 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
         <button className="btn btn--ghost btn--sm" onClick={() => setShowLogs(true)}>
           <ScrollText size={14} aria-hidden="true" /> Logs
         </button>
-        {!!serverVersion && !!device.appVersion && device.appVersion !== serverVersion && (
-          <button
-            className="btn btn--ghost btn--sm"
-            onClick={() => void update()}
-            disabled={busy !== null || !device.online}
-            title={device.online ? `Update this kiosk to v${serverVersion}` : 'Only works while the kiosk is online'}
-          >
-            <Download size={14} aria-hidden="true" /> {busy === 'update' ? 'Sending…' : `Update to v${serverVersion}`}
-          </button>
-        )}
         {confirming ? (
           <>
             <button className="btn btn--sm device-danger" onClick={() => void remove()} disabled={busy === 'remove'}>

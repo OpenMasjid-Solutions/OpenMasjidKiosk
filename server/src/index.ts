@@ -386,15 +386,6 @@ async function main(): Promise<void> {
     return { data: { ok: true } };
   });
 
-  // Ask a kiosk to install the latest app (the APK bundled in this server). Picked up on its next
-  // heartbeat: the tablet downloads the APK and launches the installer (silent only on device-owner
-  // tablets; otherwise a volunteer taps "Install" once).
-  app.post('/api/admin/devices/:id/update', { preHandler: requireAdmin }, async (req, reply) => {
-    const id = (req.params as { id: string }).id;
-    if (!store.getDevice(id)) return reply.code(404).send({ error: 'Kiosk not found.' });
-    store.requestUpdate(id);
-    return { data: { ok: true } };
-  });
 
   app.get('/api/admin/devices/:id/logs', { preHandler: requireAdmin }, async (req) => ({
     data: { logs: store.listLogs((req.params as { id: string }).id) },
@@ -471,15 +462,14 @@ async function main(): Promise<void> {
     const d = resolveDevice(req);
     if (!d) return reply.code(401).send({ error: 'This kiosk isn’t paired.' });
     // A revoked device gets a clean signal (not a 401) so the tablet wipes + re-pairs.
-    if (d.revoked) return { data: { configVersion: store.getConfigVersion(), identify: false, updateApp: false, latestAppVersion: config.version, revoked: true } };
+    if (d.revoked) return { data: { configVersion: store.getConfigVersion(), identify: false, latestAppVersion: config.version, revoked: true } };
     const parsed = HeartbeatBody.safeParse(req.body ?? {});
     if (parsed.success) store.updateHeartbeat(d.id, parsed.data);
     return {
       data: {
         configVersion: store.getConfigVersion(),
         identify: store.consumeIdentify(d.id),
-        updateApp: store.consumeUpdate(d.id),
-        latestAppVersion: config.version, // the APK version bundled in this server image
+        latestAppVersion: config.version, // the APK version bundled in this server image (info only)
         revoked: false,
       },
     };

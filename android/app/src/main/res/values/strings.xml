@@ -74,8 +74,8 @@
     <string name="maintenance_diagnostics_title">Diagnostics</string>
     <string name="maintenance_repair">Re-pair this kiosk</string>
     <string name="maintenance_update_title">App update available</string>
-    <string name="maintenance_update_body">Version %1$s is ready to install (this kiosk is on %2$s).</string>
-    <string name="maintenance_update_install">Install update</string>
+    <string name="maintenance_update_body">Version %1$s is available (this kiosk is on %2$s).</string>
+    <string name="maintenance_update_how">To update, download the latest app from your OpenMasjidOS setup page and reinstall it on this tablet. (Tablets set up as device owner can be updated automatically — see the docs.)</string>
     <string name="maintenance_exit">Exit kiosk</string>
     <string name="maintenance_exit_needs_pin">To leave kiosk mode, set an exit PIN in Admin → Devices, then unlock with it. This keeps the kiosk locked until the PIN reaches this tablet.</string>
     <string name="maintenance_return">Return to kiosk</string>

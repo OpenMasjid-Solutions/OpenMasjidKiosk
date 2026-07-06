@@ -3,6 +3,14 @@
 
 # Changelog
 
+## 0.5.5
+- **Removed the "push update to the tablet" button.** Android doesn't allow an app to update itself
+  without a person tapping "Install", and inside kiosk mode even that is blocked — so a remote,
+  hands-off update isn't possible on an ordinary tablet (only on ones provisioned as *device owner*).
+  Rather than a button that can't deliver, the Devices page and the kiosk's own settings now just
+  show **"Update available"** with clear instructions: download the latest app from your setup page
+  and reinstall it on the tablet. (Automatic updates for device-owner tablets can come later.)
+
 ## 0.5.4
 - **Open kiosk settings with 7 quick taps.** Tap the giving screen 7 times fast (anywhere) to bring
   up the exit-PIN, then the maintenance/settings screen — reader setup, install app updates, kiosk

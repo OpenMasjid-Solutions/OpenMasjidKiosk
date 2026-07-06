@@ -68,7 +68,6 @@ fun MaintenanceScreen(
     noPinSet: Boolean,
     exitAllowed: Boolean,
     showPinningHint: Boolean,
-    onInstallAppUpdate: () -> Unit,
     onScanReaders: (ReaderTransport) -> Unit,
     onStopReaderScan: () -> Unit,
     onConnectReader: (String) -> Unit,
@@ -153,7 +152,8 @@ fun MaintenanceScreen(
                 )
             }
 
-            // --- App update (shown only when the server has a newer version) ----------
+            // --- App update (informational — Android can't self-update a non-device-owner
+            //     tablet, so we point to the reinstall path rather than a button that can't work) --
             val updateAvailable = diagnostics.latestAppVersion.isNotBlank() &&
                 diagnostics.appVersion.isNotBlank() &&
                 diagnostics.latestAppVersion != diagnostics.appVersion
@@ -163,18 +163,14 @@ fun MaintenanceScreen(
                     Text(
                         text = stringResource(R.string.maintenance_update_body, diagnostics.latestAppVersion, diagnostics.appVersion),
                         style = MaterialTheme.typography.bodyMedium,
+                        color = InkDark,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.maintenance_update_how),
+                        style = MaterialTheme.typography.bodyMedium,
                         color = InkMutedDark,
                     )
-                    Spacer(Modifier.height(12.dp))
-                    Button(
-                        onClick = onInstallAppUpdate,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(stringResource(R.string.maintenance_update_install)) }
                 }
             }
 

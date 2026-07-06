@@ -20,7 +20,6 @@ import kotlinx.coroutines.launch
 import org.openmasjidos.kiosk.local.Diagnostics
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.local.PairingRecord
-import org.openmasjidos.kiosk.kiosk.AppUpdater
 import org.openmasjidos.kiosk.kiosk.DeviceStatus
 import org.openmasjidos.kiosk.net.HeartbeatOutcome
 import org.openmasjidos.kiosk.net.PairResult
@@ -188,27 +187,6 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     fun onReaderPermissionDenied() =
         ReaderManager.reportError(appContext.getString(R.string.reader_permission_denied))
 
-    // ---- App update -------------------------------------------------------------------
-
-    private var updateJob: Job? = null
-
-    /** Download the server's current APK over the pinned connection, then launch the installer
-     *  (silent only on a device-owner tablet; otherwise a one-tap confirm). Triggered by the admin
-     *  "Update" push (heartbeat) or the "Install update" button in maintenance. */
-    fun startAppUpdate() {
-        if (updateJob?.isActive == true) return
-        updateJob = viewModelScope.launch {
-            repo.log("info", "app_update_start")
-            val f = AppUpdater.apkFile(appContext)
-            if (repo.downloadApk(f)) {
-                repo.log("info", "app_update_downloaded")
-                AppUpdater.install(appContext, f)
-            } else {
-                repo.log("error", "app_update_download_failed")
-            }
-            repo.flushLogs()
-        }
-    }
 
     // ---- Giving flow (donor-facing) ----------------------------------------------------
 
@@ -414,7 +392,6 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                             it.copy(lastHeartbeatMs = System.currentTimeMillis(), online = true, latestAppVersion = outcome.latestAppVersion)
                         }
                         if (outcome.identify) flashIdentify()
-                        if (outcome.updateApp) startAppUpdate()
                     }
                     HeartbeatOutcome.Revoked ->
                         // repo already wiped the pairing → the pairing flow flips us to Unpaired,
