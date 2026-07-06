@@ -251,9 +251,6 @@ export const revokeDevice = (id: string) =>
 export const identifyDevice = (id: string) =>
   request<{ ok: true }>(`/api/admin/devices/${encodeURIComponent(id)}/identify`, { method: 'POST' });
 
-export const rebootDevice = (id: string) =>
-  request<{ ok: true }>(`/api/admin/devices/${encodeURIComponent(id)}/reboot`, { method: 'POST' });
-
 export const getDeviceLogs = (id: string) =>
   request<{ logs: DeviceLog[] }>(`/api/admin/devices/${encodeURIComponent(id)}/logs`);
 

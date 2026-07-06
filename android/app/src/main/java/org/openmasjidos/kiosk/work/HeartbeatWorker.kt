@@ -13,7 +13,6 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import org.openmasjidos.kiosk.KioskApp
 import org.openmasjidos.kiosk.kiosk.DeviceStatus
-import org.openmasjidos.kiosk.kiosk.KioskController
 import org.openmasjidos.kiosk.net.HeartbeatOutcome
 import org.openmasjidos.kiosk.readers.ReaderManager
 import java.util.concurrent.TimeUnit
@@ -41,13 +40,6 @@ class HeartbeatWorker(appContext: Context, params: WorkerParameters) :
             readerSerial = reader.serial,
             readerBattery = reader.battery,
         )
-        // Act on a pending reboot even if only the backstop checked in (the server clears the flag
-        // when it hands it out, so we must not consume it here without acting).
-        if (outcome is HeartbeatOutcome.Ok && outcome.reboot) {
-            repo.log("warn", "reboot_requested")
-            repo.flushLogs()
-            KioskController.reboot(applicationContext)
-        }
         return when (outcome) {
             is HeartbeatOutcome.Ok,
             HeartbeatOutcome.Revoked,

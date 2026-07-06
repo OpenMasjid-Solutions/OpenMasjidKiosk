@@ -15,7 +15,6 @@ import {
   MonitorSmartphone,
   Pencil,
   Plus,
-  RotateCcw,
   ScrollText,
   Smartphone,
   Trash2,
@@ -27,7 +26,6 @@ import {
   getDeviceLogs,
   getDevices,
   identifyDevice,
-  rebootDevice,
   renameDevice,
   revokeDevice,
   setKioskPin,
@@ -195,9 +193,8 @@ function DeviceRow({ device, onChange }: { device: Device; onChange: () => void 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(device.name);
   const [savingName, setSavingName] = useState(false);
-  const [busy, setBusy] = useState<'identify' | 'remove' | 'reboot' | null>(null);
+  const [busy, setBusy] = useState<'identify' | 'remove' | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [rebootConfirming, setRebootConfirming] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [note, setNote] = useState('');
   const [err, setErr] = useState('');
@@ -230,21 +227,6 @@ function DeviceRow({ device, onChange }: { device: Device; onChange: () => void 
     try {
       await identifyDevice(device.id);
       setNote('The kiosk will flash so you can spot it.');
-    } catch (e) {
-      setErr(errMsg(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const reboot = async () => {
-    setErr('');
-    setNote('');
-    setBusy('reboot');
-    try {
-      await rebootDevice(device.id);
-      setRebootConfirming(false);
-      setNote('Restart sent — the kiosk will restart on its next check-in.');
     } catch (e) {
       setErr(errMsg(e));
     } finally {
@@ -321,25 +303,6 @@ function DeviceRow({ device, onChange }: { device: Device; onChange: () => void 
         <button className="btn btn--ghost btn--sm" onClick={() => setShowLogs(true)}>
           <ScrollText size={14} aria-hidden="true" /> Logs
         </button>
-        {rebootConfirming ? (
-          <>
-            <button className="btn btn--sm device-danger" onClick={() => void reboot()} disabled={busy === 'reboot'}>
-              {busy === 'reboot' ? 'Restarting…' : 'Confirm restart'}
-            </button>
-            <button className="btn btn--ghost btn--sm" onClick={() => setRebootConfirming(false)} disabled={busy === 'reboot'}>
-              Cancel
-            </button>
-          </>
-        ) : (
-          <button
-            className="btn btn--ghost btn--sm"
-            onClick={() => setRebootConfirming(true)}
-            disabled={busy !== null || !device.online}
-            title={device.online ? 'Restart this kiosk (full reboot on device-owner tablets)' : 'Only works while the kiosk is online'}
-          >
-            <RotateCcw size={14} aria-hidden="true" /> Restart
-          </button>
-        )}
         {confirming ? (
           <>
             <button className="btn btn--sm device-danger" onClick={() => void remove()} disabled={busy === 'remove'}>

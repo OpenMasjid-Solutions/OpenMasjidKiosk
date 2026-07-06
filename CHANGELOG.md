@@ -3,6 +3,13 @@
 
 # Changelog
 
+## 0.4.5
+- **Removed the "Restart" button.** Android doesn't let an app reboot the tablet unless the tablet
+  is set up as a device owner, and the fallback (restarting just the app) was unreliable and looked
+  like a crash. Rather than ship something that doesn't do what it says, it's gone. To restart a
+  kiosk, power-cycle the tablet. (A proper device-owner-only reboot can return later if there's
+  demand.)
+
 ## 0.4.4
 - **Restart a kiosk remotely** (Admin → Devices → **Restart**): the tablet restarts on its next
   check-in — a full device reboot on tablets set up as device owner, or an app restart otherwise.
