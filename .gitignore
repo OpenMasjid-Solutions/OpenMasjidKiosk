@@ -30,3 +30,6 @@ android/local.properties
 .env
 .env.*
 !.env.example
+
+# Built web bundle is baked into the image at build time, never committed.
+server/public/
