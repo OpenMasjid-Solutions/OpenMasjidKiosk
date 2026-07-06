@@ -16,6 +16,7 @@ import {
   Download,
   ExternalLink,
   LayoutDashboard,
+  LayoutTemplate,
   MonitorSmartphone,
   Palette,
   Plus,
@@ -30,6 +31,7 @@ import { withBase, stripBase } from './base';
 import { useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
 import { PaymentsSection } from './payments';
 import { DevicesSection } from './devices';
+import { GivingSection } from './giving';
 import { Brand, Clock, Crescent, ProfileMenu, Scene } from './ui';
 
 const SOURCE_URL = 'https://github.com/OpenMasjid-Solutions/OpenMasjidKiosk';
@@ -122,10 +124,11 @@ function LoadingCard() {
 }
 
 // ── Admin shell: top bar + hash-routed tabs + bottom dock ─────────────────────
-type Tab = 'dashboard' | 'devices' | 'analytics' | 'settings';
+type Tab = 'dashboard' | 'devices' | 'giving' | 'analytics' | 'settings';
 const TABS: { id: Tab; label: string; Icon: typeof LayoutDashboard }[] = [
   { id: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard },
   { id: 'devices', label: 'Devices', Icon: MonitorSmartphone },
+  { id: 'giving', label: 'Giving', Icon: LayoutTemplate },
   { id: 'analytics', label: 'Analytics', Icon: TrendingUp },
   { id: 'settings', label: 'Settings', Icon: Settings },
 ];
@@ -176,6 +179,7 @@ function AdminShell({ app, session }: { app: AppInfo | null; session: Session })
   const meta: Record<Tab, { title: string; sub: string }> = {
     dashboard: { title: 'Dashboard', sub: `${session.sso.username ? `Signed in as ${session.sso.username}` : 'Signed in'}${embedded ? ' · via OpenMasjidOS' : ''}` },
     devices: { title: 'Devices', sub: 'The tablets running your giving screen.' },
+    giving: { title: 'Giving screen', sub: 'Design what donors see on the tablet.' },
     analytics: { title: 'Analytics', sub: 'Donations your kiosks have taken.' },
     settings: { title: 'Settings', sub: 'Your account, platform connection and this app.' },
   };
@@ -196,6 +200,7 @@ function AdminShell({ app, session }: { app: AppInfo | null; session: Session })
 
         {tab === 'dashboard' && <DashboardTab session={session} embedded={embedded} />}
         {tab === 'devices' && <DevicesTab />}
+        {tab === 'giving' && <GivingSection />}
         {tab === 'analytics' && <AnalyticsTab />}
         {tab === 'settings' && <SettingsTab app={app} session={session} embedded={embedded} />}
       </main>

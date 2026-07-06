@@ -308,7 +308,9 @@ private fun ReaderControls(
     onReaderPermissionDenied: () -> Unit,
 ) {
     val context = LocalContext.current
-    var selected by remember { mutableStateOf(reader.transport) }
+    // The manual picker is for Bluetooth (or the test reader) only — USB connects itself, so it's
+    // never a manual choice here. Default to Bluetooth regardless of the last transport used.
+    var selected by remember { mutableStateOf(if (reader.transport == ReaderTransport.Simulated) ReaderTransport.Simulated else ReaderTransport.Bluetooth) }
     var pending by remember { mutableStateOf<ReaderTransport?>(null) }
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -393,9 +395,16 @@ private fun ReaderControls(
         reader.conn == ReaderConn.Updating -> Unit // controls hidden while updating
 
         else -> {
-            // Transport picker
+            // USB readers connect on their own; this manual picker is Bluetooth (or the test reader).
+            Text(
+                stringResource(R.string.reader_usb_auto),
+                style = MaterialTheme.typography.bodyMedium,
+                color = InkMutedDark,
+            )
+            Spacer(Modifier.height(12.dp))
+            // Transport picker (Bluetooth + test reader only)
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                val options = listOf(ReaderTransport.Bluetooth, ReaderTransport.Usb, ReaderTransport.Simulated)
+                val options = listOf(ReaderTransport.Bluetooth, ReaderTransport.Simulated)
                 options.forEachIndexed { i, t ->
                     SegmentedButton(
                         selected = selected == t,

@@ -3,6 +3,20 @@
 
 # Changelog
 
+## 0.7.0
+- **Design your giving screen (new “Giving” tab).** Set the masjid name and headline, the six preset
+  amounts, custom-amount on/off with a min & max, monthly on/off, whether to ask for a name/email
+  (off / optional / required), and the thank-you message — with a **live preview** of the tablet as
+  you type. Saving pushes the changes to every paired kiosk within a few seconds (no reinstall).
+- **USB card readers connect on their own.** Plug a USB Stripe reader into the tablet and it pairs
+  automatically on startup — no setup screen — and **reconnects itself the moment it drops** (a
+  knocked cable, a power blip). Bluetooth readers are still set up by hand in the tablet’s settings.
+- **A truly locked kiosk (on a device-owner tablet).** When the tablet is set up as *device owner*
+  (one-time ADB step, see docs/TABLET_SETUP.md), the kiosk now blocks the **notification shade**, the
+  navigation buttons and the Home escape, and re-opens itself if Home is pressed — it can only be
+  left with the **exit PIN**. Screen-pinning (the non-device-owner fallback) can’t fully prevent
+  those, and the app now says so clearly and points you to the device-owner setup.
+
 ## 0.6.0
 - **Monthly donations!** The giving screen now has a **One-time / Monthly** toggle (when you enable
   monthly in the app). A monthly donor taps their amount, enters name + email (required), and taps

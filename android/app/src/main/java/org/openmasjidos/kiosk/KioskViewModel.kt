@@ -166,6 +166,15 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 if (pairing != null) startHeartbeatLoop() else stopHeartbeatLoop()
             }
         }
+        // A USB reader is a fixed part of a wall kiosk, so connect it automatically (and keep it
+        // connected) with no setup — as soon as a card-reader Location is configured. Bluetooth
+        // readers are still paired by hand in the PIN-protected maintenance screen.
+        viewModelScope.launch {
+            repo.config.collect { cfg ->
+                val locationId = cfg?.locationId.orEmpty()
+                if (locationId.isNotBlank()) ReaderManager.enableUsbAutoConnect(locationId)
+            }
+        }
     }
 
     // ---- Card reader (maintenance screen) ----------------------------------------------

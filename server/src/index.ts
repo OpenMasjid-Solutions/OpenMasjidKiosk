@@ -416,6 +416,41 @@ async function main(): Promise<void> {
     return { data: { set: true } };
   });
 
+  // ── Giving-screen designer (amounts/messages the kiosk shows) ────────────────
+  // Everything here is pushed live: setGiving/setAttractTitle bump the config version, so paired
+  // kiosks pick it up on their next heartbeat and re-render. Amounts are integer minor units.
+  app.get('/api/admin/giving', { preHandler: requireAdmin }, async () => ({
+    data: { giving: store.getGiving(), currency: store.getCurrency(), masjidName: store.getMasjid().name, attractTitle: store.getAttractTitle() },
+  }));
+
+  const GivingBody = z
+    .object({
+      presetsMinor: z.array(z.number().int().positive()).max(12).optional(),
+      allowCustom: z.boolean().optional(),
+      customMinMinor: z.number().int().positive().optional(),
+      customMaxMinor: z.number().int().positive().optional(),
+      monthlyEnabled: z.boolean().optional(),
+      namePolicy: z.enum(['off', 'optional', 'required']).optional(),
+      emailPolicy: z.enum(['off', 'optional', 'required']).optional(),
+      thankYouMessage: z.string().max(500).optional(),
+      attractTitle: z.string().max(120).optional(),
+      masjidName: z.string().max(160).optional(),
+    })
+    .strict();
+
+  app.put('/api/admin/giving', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = GivingBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check the giving-screen settings.' });
+    const { attractTitle, masjidName, ...giving } = parsed.data;
+    store.setGiving(giving); // sanitises (≤6 presets, sane bounds, known policies) + bumps configVersion
+    if (attractTitle !== undefined) store.setAttractTitle(attractTitle.trim());
+    if (masjidName !== undefined) {
+      store.setMasjid({ name: masjidName.trim() });
+      store.bumpConfigVersion(); // masjidName is in the kiosk config but setMasjid doesn't bump
+    }
+    return { data: { giving: store.getGiving(), currency: store.getCurrency(), masjidName: store.getMasjid().name, attractTitle: store.getAttractTitle() } };
+  });
+
   // ── Kiosk (device-token) routes ─────────────────────────────────────────────
   /** The device for the request's token, INCLUDING a revoked one (or null if the token is
    *  malformed/unknown). Callers decide how to treat `.revoked`. */

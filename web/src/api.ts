@@ -263,3 +263,36 @@ export const getDeviceLogs = (id: string) =>
  *  syncs it to every kiosk; a non-empty, non-4–8-digit value 400s. */
 export const setKioskPin = (pin: string) =>
   request<{ set: boolean }>('/api/admin/pin', { method: 'PUT', body: JSON.stringify({ pin }) });
+
+// ── Giving-screen designer ──────────────────────────────────────────────────────
+// The amounts/messages the kiosk shows. Amounts are integer MINOR units (no float ever reaches
+// Stripe). Saving pushes live: kiosks pick up the change on their next heartbeat.
+export type PromptPolicy = 'off' | 'optional' | 'required';
+
+export interface GivingConfig {
+  presetsMinor: number[];
+  allowCustom: boolean;
+  customMinMinor: number;
+  customMaxMinor: number;
+  monthlyEnabled: boolean;
+  namePolicy: PromptPolicy;
+  emailPolicy: PromptPolicy;
+  thankYouMessage: string;
+}
+
+/** The full giving-designer state: the giving config + the currency, masjid name and attract
+ *  headline that share the same live-push mechanism. */
+export interface GivingSettings {
+  giving: GivingConfig;
+  currency: string;
+  masjidName: string;
+  attractTitle: string;
+}
+
+/** Fields the designer can save (all optional — send only what changed). */
+export type GivingPatch = Partial<GivingConfig> & { attractTitle?: string; masjidName?: string };
+
+export const getGiving = () => request<GivingSettings>('/api/admin/giving');
+
+export const saveGiving = (body: GivingPatch) =>
+  request<GivingSettings>('/api/admin/giving', { method: 'PUT', body: JSON.stringify(body) });

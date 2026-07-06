@@ -3,14 +3,18 @@
 
 package org.openmasjidos.kiosk
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import org.openmasjidos.kiosk.kiosk.KioskController
+import org.openmasjidos.kiosk.readers.ReaderManager
 import org.openmasjidos.kiosk.ui.KioskRoot
 import org.openmasjidos.kiosk.ui.theme.SakinaTheme
 
@@ -26,10 +30,26 @@ class MainActivity : ComponentActivity() {
 
     private val vm: KioskViewModel by viewModels()
 
+    // A USB reader needs the location permission to be discovered. On a device-owner kiosk it's
+    // granted silently; otherwise we ask once at startup and, on grant, kick the auto-connect.
+    private val readerPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) ReaderManager.retryUsbAutoConnect()
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         KioskController.applyWindow(this)
+        // Device owner: become the persistent HOME so pressing Home always reopens the kiosk (a real
+        // single-app kiosk, not escapable screen-pinning), and silently grant the reader permission.
+        KioskController.provisionHome(this)
+        KioskController.grantReaderPermissions(this)
+        // Non-owner: ask for location once so a USB reader can be discovered (USB has no manual
+        // setup UI). On a device-owner tablet this is already granted above, so no dialog appears.
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            readerPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
 
         val deviceOwner = KioskController.isDeviceOwner(this)
 
@@ -41,10 +61,11 @@ class MainActivity : ComponentActivity() {
                     vm = vm,
                     isDeviceOwner = deviceOwner,
                     onExitKiosk = {
-                        // Real escape hatch for a maintainer: drop lock task and leave the app.
-                        // (If this app is the only HOME launcher and still device owner, the
-                        // system will relaunch it — full exit needs another launcher or the
-                        // device-owner removed; documented in docs/TABLET_SETUP.md.)
+                        // Real escape hatch for a maintainer (only reachable behind a verified PIN):
+                        // drop the persistent HOME + lock task and leave the app. (On a dedicated
+                        // tablet with no other launcher the system may relaunch us; documented in
+                        // docs/TABLET_SETUP.md.)
+                        KioskController.releaseHome(this)
                         KioskController.exitKiosk(this)
                         finishAndRemoveTask()
                     },

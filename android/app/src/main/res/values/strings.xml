@@ -53,6 +53,7 @@
     <string name="reader_transport_bluetooth">Bluetooth</string>
     <string name="reader_transport_usb">USB</string>
     <string name="reader_transport_simulated">Test reader</string>
+    <string name="reader_usb_auto">A USB card reader connects on its own — just plug it in. Use the options below only for a Bluetooth reader.</string>
     <string name="reader_scan">Find a reader</string>
     <string name="reader_stop_scan">Stop looking</string>
     <string name="reader_scanning">Looking for readers nearby…</string>
@@ -104,5 +105,5 @@
     <string name="reader_status_not_connected">Not connected</string>
 
     <!-- Kiosk mode banner -->
-    <string name="kiosk_pinning_hint">This tablet isn\'t set up as a dedicated kiosk yet, so it can still be exited. Follow docs/TABLET_SETUP.md to lock it down fully.</string>
+    <string name="kiosk_pinning_hint">This tablet isn\'t a locked-down kiosk yet. Without one-time device-owner setup, Android still lets someone swipe down the notifications, reach the navigation buttons, and leave the app — it can\'t be fully prevented. To make the kiosk truly un-leavable (no notification shade, no exit without the PIN), follow the device-owner steps in docs/TABLET_SETUP.md.</string>
 </resources>

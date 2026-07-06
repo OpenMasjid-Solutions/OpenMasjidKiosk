@@ -331,6 +331,11 @@ export class Store {
   getAttractTitle(): string {
     return this.getRaw('attract_title') ?? '';
   }
+  /** The headline on the attract screen (kiosks refetch when the config version bumps). */
+  setAttractTitle(title: string): void {
+    this.setRaw('attract_title', title.slice(0, 120));
+    this.bumpConfigVersion();
+  }
 
   // ── Giving config (the amounts/messages the kiosk shows; designer UI is a later slice) ──
   getGiving(): GivingConfig {
