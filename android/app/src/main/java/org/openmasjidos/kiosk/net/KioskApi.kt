@@ -123,6 +123,7 @@ class KioskApi(private val client: OkHttpClient) {
             customMinMinor = cfg.optLong("customMinMinor", 100),
             customMaxMinor = cfg.optLong("customMaxMinor", 1_000_000),
             monthlyEnabled = cfg.optBoolean("monthlyEnabled", false),
+            manualEntryEnabled = cfg.optBoolean("manualEntryEnabled", false),
             namePolicy = cfg.optString("namePolicy", "optional"),
             emailPolicy = cfg.optString("emailPolicy", "optional"),
             thankYouMessage = cfg.optString("thankYouMessage", ""),

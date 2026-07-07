@@ -59,6 +59,7 @@ class DeviceStore(private val context: Context) {
         val CFG_CUSTOM_MIN = longPreferencesKey("cfg_custom_min")
         val CFG_CUSTOM_MAX = longPreferencesKey("cfg_custom_max")
         val CFG_MONTHLY = booleanPreferencesKey("cfg_monthly")
+        val CFG_MANUAL = booleanPreferencesKey("cfg_manual")
         val CFG_NAME_POLICY = stringPreferencesKey("cfg_name_policy")
         val CFG_EMAIL_POLICY = stringPreferencesKey("cfg_email_policy")
         val CFG_THANKYOU = stringPreferencesKey("cfg_thankyou")
@@ -101,6 +102,7 @@ class DeviceStore(private val context: Context) {
                 customMinMinor = p[Keys.CFG_CUSTOM_MIN] ?: 100L,
                 customMaxMinor = p[Keys.CFG_CUSTOM_MAX] ?: 1_000_000L,
                 monthlyEnabled = p[Keys.CFG_MONTHLY] ?: false,
+                manualEntryEnabled = p[Keys.CFG_MANUAL] ?: false,
                 namePolicy = p[Keys.CFG_NAME_POLICY]?.takeIf { it.isNotBlank() } ?: "optional",
                 emailPolicy = p[Keys.CFG_EMAIL_POLICY]?.takeIf { it.isNotBlank() } ?: "optional",
                 thankYouMessage = p[Keys.CFG_THANKYOU].orEmpty(),
@@ -131,6 +133,7 @@ class DeviceStore(private val context: Context) {
             p[Keys.CFG_CUSTOM_MIN] = config.customMinMinor
             p[Keys.CFG_CUSTOM_MAX] = config.customMaxMinor
             p[Keys.CFG_MONTHLY] = config.monthlyEnabled
+            p[Keys.CFG_MANUAL] = config.manualEntryEnabled
             p[Keys.CFG_NAME_POLICY] = config.namePolicy
             p[Keys.CFG_EMAIL_POLICY] = config.emailPolicy
             p[Keys.CFG_THANKYOU] = config.thankYouMessage

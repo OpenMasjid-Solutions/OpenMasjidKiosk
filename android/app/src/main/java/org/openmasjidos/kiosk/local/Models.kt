@@ -40,6 +40,7 @@ data class KioskConfig(
     val customMinMinor: Long = 100,
     val customMaxMinor: Long = 1_000_000,
     val monthlyEnabled: Boolean = false, // slice 7
+    val manualEntryEnabled: Boolean = false, // keyed card entry via Stripe's on-device form
     val namePolicy: String = "optional", // off | optional | required
     val emailPolicy: String = "optional",
     val thankYouMessage: String = "",

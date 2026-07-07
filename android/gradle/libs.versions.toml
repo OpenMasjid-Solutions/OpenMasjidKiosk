@@ -24,6 +24,10 @@ bouncycastle = "1.78.1"      # SCrypt PIN verification (lightweight crypto API, 
 # Slice 5 (card reader): Stripe Terminal SDK for the M2 over Bluetooth AND USB. The umbrella
 # artifact bundles the core + physical-reader (BT/USB) support. minSdk floor is 26 (we're 26).
 stripeterminal = "5.6.0"
+# Stripe Payments SDK (PaymentSheet) for keyed/manual card entry when there's no reader (or as a
+# fallback). Pinned to a version from the same era as our Compose BOM (1.7 / Kotlin 2.0) so it doesn't
+# drag in a newer Compose our compiler can't build. Validated via CI (no local Android build here).
+stripepayments = "20.44.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -45,6 +49,8 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 # Slice 5: Stripe Terminal Android SDK (Bluetooth + USB M2 reader, connection tokens, updates).
 stripe-terminal = { group = "com.stripe", name = "stripeterminal", version.ref = "stripeterminal" }
+# PaymentSheet (prebuilt card-entry sheet) lives in the stripe-android umbrella artifact.
+stripe-payments = { group = "com.stripe", name = "stripe-android", version.ref = "stripepayments" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

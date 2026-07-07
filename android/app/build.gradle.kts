@@ -121,6 +121,10 @@ dependencies {
     // --- Slice 5: Stripe Terminal SDK (M2 reader over Bluetooth + USB) ---
     implementation(libs.stripe.terminal)
 
+    // --- Manual/keyed card entry: Stripe PaymentSheet (card typed into Stripe's own form; the PAN
+    //     is tokenised on-device and never reaches our server, same posture as the reader). ---
+    implementation(libs.stripe.payments)
+
     // Compose tooling (previews) — debug only.
     debugImplementation(libs.androidx.ui.tooling)
 }
