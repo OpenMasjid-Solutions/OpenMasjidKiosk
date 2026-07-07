@@ -3,6 +3,18 @@
 
 # Changelog
 
+## 0.7.4
+- **Manual card entry (type the card, no reader needed).** Turn on **“Allow manual card entry”** in
+  **Admin → Giving screen** and donors can pay by typing their card into Stripe’s secure form —
+  either as a fallback beside the reader (an **“Enter card details”** option on the payment screen)
+  or as the only way to pay when the kiosk has **no reader** at all. The card is entered into Stripe’s
+  own form and tokenised on the device, so your server never sees the card number (same as the
+  reader). Every payment is still verified with Stripe before it’s recorded. Manual entry is one-time
+  only (monthly still needs the reader). *Note: keyed cards cost a little more and carry more fraud
+  risk on an unattended kiosk, so it’s off by default.*
+- **Reader setup: the “Test reader” option is gone**, and there’s clear guidance for running with **no
+  reader** (use manual card entry). USB and Bluetooth readers are unchanged.
+
 ## 0.7.3
 - **Bluetooth readers now stay connected on their own — just like USB.** Once you connect a
   Bluetooth M2 in the tablet's settings, the kiosk remembers it and **reconnects it automatically on
