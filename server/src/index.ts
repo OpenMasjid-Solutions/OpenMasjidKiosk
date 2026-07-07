@@ -355,7 +355,9 @@ async function main(): Promise<void> {
   // ── Devices: pairing, fleet management, kiosk PIN ───────────────────────────
   const pairLimiter = new LoginLimiter(); // brute-force guard for 6-digit pairing codes
 
-  const ONLINE_MS = 120_000;
+  // Kiosks heartbeat every ~10s; treat one as offline after ~3 missed beats (+ a little slack for
+  // jitter) so a fallen/unplugged tablet shows offline in the admin panel within ~35s, not minutes.
+  const ONLINE_MS = 35_000;
   const deviceView = (d: Device) => ({
     ...d,
     online: !!d.lastSeen && Date.now() - Date.parse(d.lastSeen) < ONLINE_MS,

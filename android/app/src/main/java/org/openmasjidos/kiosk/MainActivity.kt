@@ -4,10 +4,13 @@
 package org.openmasjidos.kiosk
 
 import android.Manifest
+import android.app.role.RoleManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -40,6 +43,11 @@ class MainActivity : ComponentActivity() {
             if (granted) ReaderManager.retryUsbAutoConnect()
         }
 
+    // Result of asking to become the default Home app (so pressing Home returns straight to the
+    // kiosk with no launcher chooser). We don't need the result — onResume re-asserts kiosk mode.
+    private val homeRoleLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -53,6 +61,10 @@ class MainActivity : ComponentActivity() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             readerPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+        // Become the default Home app so pressing Home returns straight to the kiosk (no launcher
+        // chooser, no way to pick a different launcher). Device owner already set this persistently;
+        // otherwise ask once. This is how a single-app kiosk stops Home being an escape.
+        requestHomeApp(force = false)
 
         val deviceOwner = KioskController.isDeviceOwner(this)
 
@@ -82,6 +94,7 @@ class MainActivity : ComponentActivity() {
                             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         }
                     },
+                    onSetHomeApp = { requestHomeApp(force = true) },
                 )
             }
         }
@@ -94,6 +107,27 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Idempotent: enters lock task (device owner) / re-applies immersive.
         KioskController.enterKiosk(this)
+    }
+
+    /**
+     * Ask to become the device's default Home app, so pressing Home returns to the kiosk instead of
+     * showing a launcher chooser (or letting the user pick another launcher). [force] = the admin
+     * tapped "Set as Home app" in maintenance; otherwise we only prompt when it isn't already ours.
+     * Device owner sets this persistently elsewhere, so this is a no-op there.
+     */
+    private fun requestHomeApp(force: Boolean) {
+        if (KioskController.isDeviceOwner(this)) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val rm = getSystemService(RoleManager::class.java)
+            if (rm != null && rm.isRoleAvailable(RoleManager.ROLE_HOME)) {
+                if (!force && rm.isRoleHeld(RoleManager.ROLE_HOME)) return
+                val launched = runCatching { homeRoleLauncher.launch(rm.createRequestRoleIntent(RoleManager.ROLE_HOME)); true }.getOrDefault(false)
+                if (launched) return
+            }
+        }
+        // Pre-Q, or if the role request couldn't launch: open the system Home-app picker (only when
+        // the admin explicitly asked, so we never surprise a donor with a settings screen).
+        if (force) runCatching { startActivity(Intent(Settings.ACTION_HOME_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
 
     /**

@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
 /**
  * The heartbeat BACKSTOP.
  *
- * The tablet's live ~45s cadence is driven by a foreground coroutine in the ViewModel while the
+ * The tablet's live ~10s cadence is driven by a foreground coroutine in the ViewModel while the
  * kiosk is on screen (which, for a wall device, is nearly always). WorkManager's minimum periodic
  * interval is 15 minutes, so this worker can't hit 45s — its job is liveness: even if the app is
  * backgrounded or the foreground loop dies, we still check in, pick up config changes, and — most

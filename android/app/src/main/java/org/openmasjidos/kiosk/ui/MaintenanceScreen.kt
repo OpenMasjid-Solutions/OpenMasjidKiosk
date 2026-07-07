@@ -76,6 +76,7 @@ fun MaintenanceScreen(
     onDismissReaderError: () -> Unit,
     onReaderPermissionDenied: () -> Unit,
     onUpdateApp: () -> Unit,
+    onSetHomeApp: () -> Unit,
     onReturn: () -> Unit,
     onRePair: () -> Unit,
     onExit: () -> Unit,
@@ -102,6 +103,18 @@ fun MaintenanceScreen(
             if (showPinningHint) {
                 Spacer(Modifier.height(12.dp))
                 Banner(text = stringResource(R.string.kiosk_pinning_hint), tone = WarningDark)
+                Spacer(Modifier.height(8.dp))
+                // Make Home return to the kiosk (become the default launcher) — the biggest non-owner
+                // improvement, so pressing Home stops showing a launcher chooser.
+                Button(
+                    onClick = onSetHomeApp,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(stringResource(R.string.kiosk_set_home_app)) }
             }
 
             Spacer(Modifier.height(24.dp))

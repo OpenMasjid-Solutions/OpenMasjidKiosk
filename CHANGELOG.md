@@ -3,6 +3,22 @@
 
 # Changelog
 
+## 0.7.2
+- **Fix — the Giving-screen editor now actually reaches the tablets, and the Monthly option shows.**
+  The kiosk was fetching your saved giving screen but then dropping the amounts, monthly setting,
+  name/email choices and thank-you message before saving them locally — so edits never appeared and
+  the One-time/Monthly toggle never showed. The tablet now stores and applies the whole giving
+  screen, and pulls it fresh on every launch, so your changes show within seconds (and after an app
+  update, right away).
+- **Fix — pressing Home no longer lets someone leave or switch launcher.** The kiosk now asks to be
+  the tablet’s default Home app (there’s also a **“Set as Home app”** button in the tablet’s
+  settings), so Home returns straight to the giving screen with no chooser. On a **device-owner**
+  tablet it’s fully locked — Home, recents and the notification shade are all disabled; you can’t
+  even press Home.
+- **Fix — a kiosk shows offline much faster.** Tablets now check in every ~10 seconds and are marked
+  offline after ~35 seconds (about three missed check-ins), and the Devices page refreshes every ~10
+  seconds — instead of taking a couple of minutes.
+
 ## 0.7.1
 - **Fix — updating the app no longer says “App not installed”.** The app is now signed with a
   permanent key, so future updates install straight over the old app with nothing lost. (Until now

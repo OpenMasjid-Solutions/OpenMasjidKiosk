@@ -85,10 +85,11 @@ object KioskController {
         if (owner != null) {
             val (dpm, admin) = owner
             runCatching { dpm.setLockTaskPackages(admin, arrayOf(activity.packageName)) }
-            // Allow Home (→ us) but block the notification shade, recents, the power menu and system
-            // info from within Lock Task. (setLockTaskFeatures is API 28+.)
+            // Lock EVERYTHING down: Home, recents, the notification shade, the power menu and system
+            // info are all disabled in Lock Task — you can't even press Home. (setLockTaskFeatures is
+            // API 28+; LOCK_TASK_FEATURE_NONE is the most restrictive set.)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                runCatching { dpm.setLockTaskFeatures(admin, DevicePolicyManager.LOCK_TASK_FEATURE_HOME) }
+                runCatching { dpm.setLockTaskFeatures(admin, DevicePolicyManager.LOCK_TASK_FEATURE_NONE) }
             }
             // Belt-and-braces: kill the status bar entirely so the notification shade / quick settings
             // can't be pulled down at all while the kiosk runs.

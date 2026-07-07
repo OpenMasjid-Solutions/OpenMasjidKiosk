@@ -161,6 +161,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         // actually scans/connects in maintenance) so the reader section is ready and the heartbeat
         // can report reader status.
         runCatching { ReaderManager.ensureInitialized(appContext, repo) }
+        // Always pull the latest config once on launch (not only when the version bumps): after an app
+        // update this repopulates fields a newer app version persists (e.g. the giving screen), which
+        // an unchanged config version would otherwise never trigger a re-fetch for.
+        viewModelScope.launch { runCatching { repo.fetchConfig() } }
         viewModelScope.launch {
             repo.pairing.collect { pairing ->
                 if (pairing != null) startHeartbeatLoop() else stopHeartbeatLoop()
@@ -512,10 +516,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private companion object {
-        // 15s (not 45s): with no server→tablet push, the heartbeat is also how "identify",
-        // config changes and online status reach the kiosk — 45s made "flash to locate" feel
-        // broken (nothing happened for most of a minute). 15s is still trivial LAN traffic.
-        const val HEARTBEAT_INTERVAL_MS = 15_000L
+        // 10s: the heartbeat is also how "identify", config changes, the update ping and online
+        // status reach the kiosk, and the server marks a kiosk offline after ~3 missed beats (~35s),
+        // so a fallen kiosk shows offline quickly. Still trivial LAN traffic.
+        const val HEARTBEAT_INTERVAL_MS = 10_000L
         // Flash long enough to actually spot across a room and to span heartbeat jitter.
         const val IDENTIFY_MS = 12_000L
         // How long the thank-you screen stays up before returning to attract.

@@ -4,7 +4,7 @@
 /** The Devices (fleet) screen for the admin panel. A volunteer pairs a tablet by generating
  *  a short code, then sees each kiosk's live status (online, battery, reader, app version),
  *  renames or removes them, flashes one to spot it, reads its recent activity, and sets the
- *  PIN staff use to leave the giving screen. Polls every ~15s. Every call fails soft to a
+ *  PIN staff use to leave the giving screen. Polls every ~10s. Every call fails soft to a
  *  friendly inline message — the page never crashes. Matches the admin design language
  *  (glass cards, tokens, RTL-safe logical spacing, reduced-motion respected). */
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
@@ -597,7 +597,8 @@ export function DevicesSection() {
 
   useEffect(() => {
     void load();
-    const iv = setInterval(() => void load(), 15_000);
+    // Poll every 10s so a kiosk going offline (server marks it after ~35s) shows here promptly.
+    const iv = setInterval(() => void load(), 10_000);
     return () => clearInterval(iv);
   }, [load]);
 

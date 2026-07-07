@@ -6,9 +6,11 @@ package org.openmasjidos.kiosk.local
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -48,6 +50,17 @@ class DeviceStore(private val context: Context) {
         val CFG_LOCATION_ID = stringPreferencesKey("cfg_location_id")
         val CFG_ATTRACT_TITLE = stringPreferencesKey("cfg_attract_title")
         val CFG_MASJID_NAME = stringPreferencesKey("cfg_masjid_name")
+        // Giving screen (designed in the admin panel; pushed live). Without these the tablet would
+        // fetch the config but drop the amounts/monthly/policies/message on save → the giving screen
+        // never reflects edits and the monthly toggle never appears.
+        val CFG_PRESETS = stringPreferencesKey("cfg_presets") // CSV of minor-unit amounts, in order
+        val CFG_ALLOW_CUSTOM = booleanPreferencesKey("cfg_allow_custom")
+        val CFG_CUSTOM_MIN = longPreferencesKey("cfg_custom_min")
+        val CFG_CUSTOM_MAX = longPreferencesKey("cfg_custom_max")
+        val CFG_MONTHLY = booleanPreferencesKey("cfg_monthly")
+        val CFG_NAME_POLICY = stringPreferencesKey("cfg_name_policy")
+        val CFG_EMAIL_POLICY = stringPreferencesKey("cfg_email_policy")
+        val CFG_THANKYOU = stringPreferencesKey("cfg_thankyou")
     }
 
     /** Emits the current pairing, or null when the kiosk is not (yet) paired. */
@@ -77,6 +90,14 @@ class DeviceStore(private val context: Context) {
                 locationId = p[Keys.CFG_LOCATION_ID].orEmpty(),
                 attractTitle = p[Keys.CFG_ATTRACT_TITLE]?.takeIf { it.isNotBlank() },
                 masjidName = p[Keys.CFG_MASJID_NAME]?.takeIf { it.isNotBlank() },
+                presetsMinor = p[Keys.CFG_PRESETS].orEmpty().split(",").mapNotNull { it.trim().toLongOrNull() },
+                allowCustom = p[Keys.CFG_ALLOW_CUSTOM] ?: true,
+                customMinMinor = p[Keys.CFG_CUSTOM_MIN] ?: 100L,
+                customMaxMinor = p[Keys.CFG_CUSTOM_MAX] ?: 1_000_000L,
+                monthlyEnabled = p[Keys.CFG_MONTHLY] ?: false,
+                namePolicy = p[Keys.CFG_NAME_POLICY]?.takeIf { it.isNotBlank() } ?: "optional",
+                emailPolicy = p[Keys.CFG_EMAIL_POLICY]?.takeIf { it.isNotBlank() } ?: "optional",
+                thankYouMessage = p[Keys.CFG_THANKYOU].orEmpty(),
             )
         }
 
@@ -99,6 +120,14 @@ class DeviceStore(private val context: Context) {
             p[Keys.CFG_LOCATION_ID] = config.locationId
             p[Keys.CFG_ATTRACT_TITLE] = config.attractTitle.orEmpty()
             p[Keys.CFG_MASJID_NAME] = config.masjidName.orEmpty()
+            p[Keys.CFG_PRESETS] = config.presetsMinor.joinToString(",")
+            p[Keys.CFG_ALLOW_CUSTOM] = config.allowCustom
+            p[Keys.CFG_CUSTOM_MIN] = config.customMinMinor
+            p[Keys.CFG_CUSTOM_MAX] = config.customMaxMinor
+            p[Keys.CFG_MONTHLY] = config.monthlyEnabled
+            p[Keys.CFG_NAME_POLICY] = config.namePolicy
+            p[Keys.CFG_EMAIL_POLICY] = config.emailPolicy
+            p[Keys.CFG_THANKYOU] = config.thankYouMessage
         }
     }
 
