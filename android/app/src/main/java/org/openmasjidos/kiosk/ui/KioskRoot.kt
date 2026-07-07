@@ -15,11 +15,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.stripe.android.PaymentConfiguration
+import com.stripe.android.paymentsheet.PaymentSheet
+import com.stripe.android.paymentsheet.PaymentSheetResult
+import com.stripe.android.paymentsheet.rememberPaymentSheet
 import org.openmasjidos.kiosk.GivingStep
 import org.openmasjidos.kiosk.KioskViewModel
+import org.openmasjidos.kiosk.ManualResult
 import org.openmasjidos.kiosk.Overlay
 import org.openmasjidos.kiosk.Phase
 import org.openmasjidos.kiosk.R
@@ -55,6 +61,32 @@ fun KioskRoot(
         }
     }
 
+    // Manual/keyed card entry: present Stripe's own card sheet (it tokenises the card on-device and
+    // confirms the PaymentIntent directly with Stripe — our code never sees the card number). The VM
+    // then verifies the result server-side before recording, same as the reader.
+    val context = LocalContext.current
+    val paymentSheet = rememberPaymentSheet { result ->
+        vm.onManualResult(
+            when (result) {
+                is PaymentSheetResult.Completed -> ManualResult.Completed
+                is PaymentSheetResult.Canceled -> ManualResult.Canceled
+                is PaymentSheetResult.Failed -> ManualResult.Failed
+            },
+        )
+    }
+    val manual = ui.giving.manual
+    LaunchedEffect(manual?.piId) {
+        if (manual != null) {
+            runCatching { PaymentConfiguration.init(context, manual.publishableKey) }
+            paymentSheet.presentWithPaymentIntent(
+                manual.clientSecret,
+                PaymentSheet.Configuration(
+                    merchantDisplayName = ui.config?.masjidName?.takeIf { it.isNotBlank() } ?: "Donation",
+                ),
+            )
+        }
+    }
+
     Box(modifier = modifier) {
         when {
             // A re-pair lockout overrides everything — fail closed.
@@ -82,6 +114,7 @@ fun KioskRoot(
                         onDonorEmail = vm::setDonorEmail,
                         onSubmitDetails = vm::submitDetails,
                         onRetry = vm::retryGiving,
+                        onEnterManually = vm::enterManually,
                         onCancel = vm::cancelGiving,
                     )
                 } else {

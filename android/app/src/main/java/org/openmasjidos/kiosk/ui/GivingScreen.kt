@@ -70,15 +70,19 @@ fun GivingScreen(
     onDonorEmail: (String) -> Unit,
     onSubmitDetails: () -> Unit,
     onRetry: () -> Unit,
+    onEnterManually: () -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val currency = config?.currency?.ifBlank { "USD" } ?: "USD"
+    // Offer "enter card manually" on the Card step when the admin enabled it (with a reader connected,
+    // it's a fallback; with no reader, the manual sheet has already opened over this step).
+    val manualOnCard = config?.manualEntryEnabled == true
     SceneBox(modifier) {
         when (giving.step) {
             GivingStep.Amount -> AmountStep(giving, config, currency, onSetMonthly, onChooseAmount, onCancel)
             GivingStep.Details -> DetailsStep(giving, config, onDonorName, onDonorEmail, onSubmitDetails, onCancel)
-            GivingStep.Card -> CardStep(giving.amountMinor, currency, readerPrompt, onCancel)
+            GivingStep.Card -> CardStep(giving.amountMinor, currency, readerPrompt, manualOnCard, onEnterManually, onCancel)
             GivingStep.Processing -> ProcessingStep(giving.amountMinor, currency)
             GivingStep.Thanks -> ThanksStep(giving, config, currency, onCancel)
             GivingStep.Error -> ErrorStep(giving.error, onRetry, onCancel)
@@ -304,6 +308,8 @@ private fun androidx.compose.foundation.layout.ColumnScope.CardStep(
     amountMinor: Long,
     currency: String,
     readerPrompt: String?,
+    manualEnabled: Boolean,
+    onEnterManually: () -> Unit,
     onCancel: () -> Unit,
 ) {
     Text(formatMoney(amountMinor, currency), style = MaterialTheme.typography.displayMedium, color = GoldDark)
@@ -316,7 +322,11 @@ private fun androidx.compose.foundation.layout.ColumnScope.CardStep(
         color = InkDark,
         textAlign = TextAlign.Center,
     )
-    Spacer(Modifier.height(28.dp))
+    if (manualEnabled) {
+        Spacer(Modifier.height(20.dp))
+        TextButton(onClick = onEnterManually) { Text("Enter card details instead", color = GoldDark) }
+    }
+    Spacer(Modifier.height(16.dp))
     OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp)) { Text("Cancel", color = InkMutedDark) }
 }
 

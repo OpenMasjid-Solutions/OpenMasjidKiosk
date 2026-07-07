@@ -184,11 +184,12 @@ class KioskRepository(context: Context) {
         donorName: String?,
         donorEmail: String?,
         monthly: Boolean,
+        manual: Boolean,
         idempotencyKey: String,
     ): CreatedPaymentIntent = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: throw IOException("Not paired")
         KioskApi(pinnedClientFor(p.certSha256))
-            .createPaymentIntent(p.serverUrl, p.deviceToken, amountMinor, donorName, donorEmail, monthly, idempotencyKey)
+            .createPaymentIntent(p.serverUrl, p.deviceToken, amountMinor, donorName, donorEmail, monthly, manual, idempotencyKey)
     }
 
     /** After the reader confirms, ask the server to verify + capture with Stripe and record the

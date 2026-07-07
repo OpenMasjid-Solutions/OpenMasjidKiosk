@@ -53,7 +53,7 @@
     <string name="reader_transport_bluetooth">Bluetooth</string>
     <string name="reader_transport_usb">USB</string>
     <string name="reader_transport_simulated">Test reader</string>
-    <string name="reader_usb_auto">A USB card reader connects on its own — just plug it in. Use the options below only for a Bluetooth reader.</string>
+    <string name="reader_usb_auto">A USB card reader connects on its own — just plug it in. Use the button below only for a Bluetooth reader. No reader at all? Turn on “Allow manual card entry” in Admin → Giving screen and donors can type their card.</string>
     <string name="reader_scan">Find a reader</string>
     <string name="reader_stop_scan">Stop looking</string>
     <string name="reader_scanning">Looking for readers nearby…</string>

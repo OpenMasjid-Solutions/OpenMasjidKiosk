@@ -19,8 +19,9 @@ class ApiException(val status: Int, message: String) : IOException(message)
 /** Parsed result of `POST /api/kiosk/pair`. */
 data class PairResponse(val deviceToken: String, val deviceId: String, val configVersion: Int)
 
-/** Parsed result of `POST /api/kiosk/payment-intents`. */
-data class CreatedPaymentIntent(val id: String, val clientSecret: String)
+/** Parsed result of `POST /api/kiosk/payment-intents`. [publishableKey] is present only for a manual
+ *  (keyed) intent — the tablet needs it to drive Stripe's on-device card form. */
+data class CreatedPaymentIntent(val id: String, val clientSecret: String, val publishableKey: String? = null)
 
 /** Parsed result of `POST /api/kiosk/payment-intents/{id}/complete` (server-verified).
  *  [monthlyRequested]/[monthlyCreated] tell the tablet whether an ongoing monthly subscription was
@@ -146,16 +147,22 @@ class KioskApi(private val client: OkHttpClient) {
         donorName: String?,
         donorEmail: String?,
         monthly: Boolean,
+        manual: Boolean,
         idempotencyKey: String,
     ): CreatedPaymentIntent {
         val body = JSONObject()
             .put("amountMinor", amountMinor)
             .put("monthly", monthly)
+            .put("manual", manual)
             .put("idempotencyKey", idempotencyKey)
         if (!donorName.isNullOrBlank()) body.put("donorName", donorName)
         if (!donorEmail.isNullOrBlank()) body.put("donorEmail", donorEmail)
         val json = post(baseUrl, "/api/kiosk/payment-intents", body, token)
-        return CreatedPaymentIntent(json.getString("paymentIntentId"), json.getString("clientSecret"))
+        return CreatedPaymentIntent(
+            json.getString("paymentIntentId"),
+            json.getString("clientSecret"),
+            json.optString("publishableKey", "").takeIf { it.isNotBlank() },
+        )
     }
 
     /** `POST /api/kiosk/payment-intents/{id}/complete` — the server verifies + captures with Stripe

@@ -415,9 +415,10 @@ private fun ReaderControls(
                 color = InkMutedDark,
             )
             Spacer(Modifier.height(12.dp))
-            // Transport picker (Bluetooth + test reader only)
+            // Transport picker (Bluetooth only — USB connects itself; the test reader was removed).
+            // A kiosk with NO reader takes cards by manual entry (enabled in Admin → Giving screen).
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                val options = listOf(ReaderTransport.Bluetooth, ReaderTransport.Simulated)
+                val options = listOf(ReaderTransport.Bluetooth)
                 options.forEachIndexed { i, t ->
                     SegmentedButton(
                         selected = selected == t,

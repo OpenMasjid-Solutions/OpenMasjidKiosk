@@ -46,6 +46,13 @@ enum class GivingStep { Idle, Amount, Details, Card, Processing, Thanks, Error }
 /** Whether a requested monthly subscription was set up (drives the thank-you wording). */
 enum class MonthlyOutcome { None, Created, NotSupported }
 
+/** A one-shot request for the UI to present Stripe's on-device card form (keyed/manual entry).
+ *  When [GivingState.manual] is non-null, KioskRoot presents PaymentSheet and reports the result. */
+data class ManualEntry(val piId: String, val clientSecret: String, val publishableKey: String)
+
+/** Outcome the UI reports back after presenting the manual card form. */
+enum class ManualResult { Completed, Canceled, Failed }
+
 /** State of an in-progress donation. Amounts are integer MINOR units (validated server-side). */
 data class GivingState(
     val step: GivingStep = GivingStep.Idle,
@@ -56,6 +63,8 @@ data class GivingState(
     val busy: Boolean = false,
     val error: String? = null,
     val monthlyOutcome: MonthlyOutcome = MonthlyOutcome.None,
+    /** Non-null → the UI should present Stripe's card form for keyed/manual entry, then report back. */
+    val manual: ManualEntry? = null,
 )
 
 /**
@@ -306,7 +315,13 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     private fun startCollect() {
         val g = local.value.giving
         if (ui.value.reader.conn != ReaderConn.Connected) {
-            updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "The card reader isn’t connected. Please tell a volunteer.") }
+            // No reader connected: if the admin enabled manual entry, take the card by typing it
+            // (Stripe's on-device form) instead of failing. Otherwise tell a volunteer.
+            if (ui.value.config?.manualEntryEnabled == true) {
+                startManualCollect()
+            } else {
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "The card reader isn’t connected. Please tell a volunteer.") }
+            }
             return
         }
         updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null) }
@@ -318,7 +333,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val email = g.donorEmail.trim().ifBlank { null }
             val idem = UUID.randomUUID().toString()
             repo.log("info", "donation_started", "${g.amountMinor} minor · $kind")
-            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, name, email, monthly, idem) }.getOrNull()
+            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, name, email, monthly, manual = false, idem) }.getOrNull()
             if (pi == null) {
                 repo.log("warn", "donation_create_failed", "$kind")
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start the payment. Please try again.") }
@@ -353,6 +368,65 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t complete. If your card was charged it will be refunded.") }
             }
             repo.flushLogs()
+        }
+    }
+
+    /** Enter a card by hand (Stripe's on-device form) instead of the reader. Creates a keyed card
+     *  PaymentIntent, then hands its client secret to the UI (KioskRoot) to present PaymentSheet. */
+    private fun startManualCollect() {
+        val g = local.value.giving
+        updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null, manual = null) }
+        givingJob?.cancel()
+        PaymentController.cancelCollect()
+        ReaderManager.clearPrompt()
+        givingJob = viewModelScope.launch {
+            val name = g.donorName.trim().ifBlank { null }
+            val email = g.donorEmail.trim().ifBlank { null }
+            val idem = UUID.randomUUID().toString()
+            repo.log("info", "donation_started", "${g.amountMinor} minor · manual")
+            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, name, email, monthly = false, manual = true, idem) }.getOrNull()
+            if (pi == null || pi.clientSecret.isBlank() || pi.publishableKey.isNullOrBlank()) {
+                repo.log("warn", "donation_create_failed", "manual")
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start card entry. Please try again.") }
+                repo.flushLogs()
+                return@launch
+            }
+            updateGiving { it.copy(manual = ManualEntry(pi.id, pi.clientSecret, pi.publishableKey)) }
+        }
+    }
+
+    /** From the Card step (with a reader connected) the donor chose to type their card instead. */
+    fun enterManually() {
+        if (ui.value.config?.manualEntryEnabled == true) startManualCollect()
+    }
+
+    /** The UI finished presenting the manual card form — verify with Stripe + record, or handle a
+     *  cancel/failure. Never trusts the sheet's word: a donation is recorded only after /complete. */
+    fun onManualResult(result: ManualResult) {
+        val m = local.value.giving.manual ?: return
+        updateGiving { it.copy(manual = null) }
+        when (result) {
+            ManualResult.Canceled -> updateGiving { GivingState(step = GivingStep.Amount) }
+            ManualResult.Failed -> {
+                repo.log("warn", "donation_manual_failed", m.piId)
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That card didn’t go through — no charge was made. Try again?") }
+                viewModelScope.launch { repo.flushLogs() }
+            }
+            ManualResult.Completed -> {
+                updateGiving { it.copy(step = GivingStep.Processing, busy = true) }
+                viewModelScope.launch {
+                    val res = runCatching { repo.completePaymentIntent(m.piId) }.getOrNull()
+                    if (res?.succeeded == true) {
+                        repo.log("info", "donation_succeeded", "${res.amountMinor} ${res.currency} · manual")
+                        updateGiving { it.copy(step = GivingStep.Thanks, busy = false, monthlyOutcome = MonthlyOutcome.None) }
+                        viewModelScope.launch { delay(THANKS_MS); if (local.value.giving.step == GivingStep.Thanks) updateGiving { GivingState() } }
+                    } else {
+                        repo.log("warn", "donation_not_succeeded", "manual · status=${res?.status ?: "unknown"}")
+                        updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t complete. If your card was charged it will be refunded.") }
+                    }
+                    repo.flushLogs()
+                }
+            }
         }
     }
 
