@@ -21,6 +21,7 @@ import { Store, type Device } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache } from './fabric';
 import { LoginLimiter } from './rateLimit';
+import { toCsv } from './csv';
 import {
   completeCardPresentPaymentIntent,
   createCardPaymentIntent,
@@ -448,6 +449,42 @@ async function main(): Promise<void> {
       store.bumpConfigVersion(); // masjidName is in the kiosk config but setMasjid doesn't bump
     }
     return { data: { giving: store.getGiving(), currency: store.getCurrency(), masjidName: store.getMasjid().name, attractTitle: store.getAttractTitle() } };
+  });
+
+  // ── Donations log, totals + CSV export ──────────────────────────────────────
+  // Donations are recorded ONLY after the server verified the PaymentIntent with Stripe, so the log
+  // reflects real money. Totals count succeeded donations only. Renewals of monthly subscriptions
+  // are charged by Stripe and NOT tracked here (LAN-only, no webhooks) — see them in the Stripe
+  // dashboard; these totals are what the kiosks collected directly.
+  // The log shows the newest 2000 for a snappy page; TOTALS are computed in SQL over the whole table
+  // (store.donationTotals), so they never undercount even with a long history.
+  app.get('/api/admin/donations', { preHandler: requireAdmin }, async () => {
+    return { data: { donations: store.listDonations(), totals: store.donationTotals(), currency: store.getCurrency() } };
+  });
+
+  // CSV export — behind admin auth (it exposes donor PII). Every cell is escaped against CSV formula
+  // injection (donor name/email are attacker-controllable). Amounts are in major units for humans.
+  // Exports the FULL history (limit -1 = no SQLite limit), not just the on-screen page.
+  app.get('/api/admin/donations.csv', { preHandler: requireAdmin }, async (_req, reply) => {
+    const rows: string[][] = [['Date', 'Amount', 'Currency', 'Type', 'Status', 'Donor name', 'Donor email', 'Kiosk', 'PaymentIntent']];
+    for (const d of store.listDonations(-1)) {
+      rows.push([
+        d.createdAt,
+        String(toMajor(d.amountMinor, d.currency)),
+        d.currency,
+        d.kind === 'monthly' ? 'Monthly' : 'One-time',
+        d.status,
+        d.donorName,
+        d.donorEmail,
+        d.deviceName || '',
+        d.paymentIntentId,
+      ]);
+    }
+    reply
+      .header('content-type', 'text/csv; charset=utf-8')
+      .header('content-disposition', 'attachment; filename="donations.csv"')
+      .header('cache-control', 'no-store');
+    return toCsv(rows);
   });
 
   // ── Kiosk (device-token) routes ─────────────────────────────────────────────

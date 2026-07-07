@@ -433,6 +433,15 @@ button.status-pill:hover { filter: brightness(1.08); }
   padding: 0.6rem 0.7rem; border-radius: 12px; background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
 .kp-check { color: var(--color-success); font-weight: 800; }
+
+/* ── Donations log ───────────────────────────────────────────────────────────── */
+.donation-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.donation-row { display: flex; flex-direction: column; gap: 0.15rem; padding-block: 0.6rem; border-block-end: 1px solid var(--color-border); }
+.donation-row:last-child { border-block-end: 0; }
+.donation-row__main { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.donation-amt { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-ink); }
+.donation-row__meta { font-size: 0.82rem; }
+.badge--monthly { background: var(--color-primary-subtle); color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary-subtle); }
 .device-remove-btn:hover { color: var(--color-danger); }
 .device-danger { background: var(--color-danger); color: var(--color-on-primary); }
 .device-danger:hover { background: var(--color-danger); filter: brightness(1.06); }

@@ -293,3 +293,51 @@ export const getGiving = () => request<GivingSettings>('/api/admin/giving');
 
 export const saveGiving = (body: GivingPatch) =>
   request<GivingSettings>('/api/admin/giving', { method: 'PUT', body: JSON.stringify(body) });
+
+// ── Donations log + totals + CSV ────────────────────────────────────────────────
+/** A recorded donation (recorded only after the server verified it with Stripe). Amounts are
+ *  integer MINOR units; `createdAt` is ISO; `deviceName` is '' if that kiosk was removed. */
+export interface Donation {
+  id: string;
+  paymentIntentId: string;
+  deviceId: string;
+  deviceName: string;
+  amountMinor: number;
+  currency: string;
+  kind: string; // 'one_time' | 'monthly'
+  status: string; // 'succeeded' | other
+  donorName: string;
+  donorEmail: string;
+  chargeId: string;
+  createdAt: string;
+}
+
+/** Succeeded-donation totals (integer minor units) + a per-kiosk breakdown. */
+export interface DonationTotals {
+  today: number;
+  thisWeek: number;
+  thisMonth: number;
+  allTime: number;
+  count: number;
+  average: number;
+  byDevice: { deviceId: string; deviceName: string; amountMinor: number; count: number }[];
+}
+
+export interface DonationsData {
+  donations: Donation[];
+  totals: DonationTotals;
+  currency: string;
+}
+
+export const getDonations = () => request<DonationsData>('/api/admin/donations');
+
+/** Fetch the donations CSV as a Blob. Uses fetch (not a plain <a download>) so an expired session
+ *  surfaces an error instead of silently saving the 401 JSON body as "donations.csv". */
+export async function fetchDonationsCsv(): Promise<Blob> {
+  const res = await fetch(withBase('/api/admin/donations.csv'), { headers: { accept: 'text/csv' } });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error || 'Couldn’t export — please sign in again and retry.');
+  }
+  return res.blob();
+}

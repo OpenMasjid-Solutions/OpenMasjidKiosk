@@ -88,6 +88,23 @@ const GIVING_DEFAULTS: GivingConfig = {
   thankYouMessage: 'JazākAllāhu khayran — thank you for your generous donation.',
 };
 
+/** A recorded donation as the admin views it (device name resolved). Amounts are integer minor
+ *  units; `createdAt` is an ISO string. `deviceName` is '' if the kiosk was removed. */
+export interface DonationRecord {
+  id: string;
+  paymentIntentId: string;
+  deviceId: string;
+  deviceName: string;
+  amountMinor: number;
+  currency: string;
+  kind: string; // 'one_time' | 'monthly'
+  status: string; // 'succeeded' | other Stripe status
+  donorName: string;
+  donorEmail: string;
+  chargeId: string;
+  createdAt: string;
+}
+
 /** A paired kiosk (tablet). `token_hash` (not the token) is stored. */
 export interface Device {
   id: string;
@@ -404,6 +421,89 @@ export class Store {
         chargeId: d.chargeId || '',
         createdAt: new Date().toISOString(),
       });
+  }
+
+  private rowToDonation(r: Record<string, unknown>): DonationRecord {
+    return {
+      id: String(r.id),
+      paymentIntentId: String(r.payment_intent_id),
+      deviceId: String(r.device_id),
+      deviceName: String(r.device_name ?? ''),
+      amountMinor: Number(r.amount_minor),
+      currency: String(r.currency),
+      kind: String(r.kind),
+      status: String(r.status),
+      donorName: String(r.donor_name),
+      donorEmail: String(r.donor_email),
+      chargeId: String(r.charge_id),
+      createdAt: String(r.created_at),
+    };
+  }
+
+  /** Recorded donations, newest first, with the kiosk name resolved (LEFT JOIN, so a removed
+   *  kiosk's donations still appear). `limit` caps the on-screen log; pass -1 (SQLite = no limit)
+   *  for the full CSV export. */
+  listDonations(limit = 2000): DonationRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT d.*, dev.name AS device_name
+         FROM donations d LEFT JOIN devices dev ON dev.id = d.device_id
+         ORDER BY d.created_at DESC LIMIT ?`,
+      )
+      .all(limit) as Record<string, unknown>[];
+    return rows.map((r) => this.rowToDonation(r));
+  }
+
+  /** Succeeded-donation totals over the WHOLE table (SQL aggregates — NOT the capped log, so they
+   *  never undercount). Restricted to the CURRENT currency, because summing amounts across different
+   *  currencies would be meaningless; donations in other currencies stay in the log/CSV with their
+   *  own currency but are excluded from these headline figures. All amounts are integer minor units. */
+  donationTotals(): {
+    today: number;
+    thisWeek: number;
+    thisMonth: number;
+    allTime: number;
+    count: number;
+    average: number;
+    byDevice: { deviceId: string; deviceName: string; amountMinor: number; count: number }[];
+  } {
+    const currency = this.getCurrency();
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+    // created_at is a UTC ISO string; ISO sorts lexicographically = chronologically, so a `>=` string
+    // compare against a UTC-ISO cutoff gives correct local-day/week/month windows.
+    const sumSince = (iso: string): number =>
+      Number(
+        (this.db
+          .prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS s FROM donations WHERE status = 'succeeded' AND currency = ? AND created_at >= ?`)
+          .get(currency, iso) as { s: number }).s,
+      );
+    const all = this.db
+      .prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS s, COUNT(*) AS n FROM donations WHERE status = 'succeeded' AND currency = ?`)
+      .get(currency) as { s: number; n: number };
+    const rows = this.db
+      .prepare(
+        `SELECT d.device_id AS deviceId, COALESCE(dev.name, '') AS deviceName,
+                COALESCE(SUM(d.amount_minor), 0) AS amountMinor, COUNT(*) AS count
+         FROM donations d LEFT JOIN devices dev ON dev.id = d.device_id
+         WHERE d.status = 'succeeded' AND d.currency = ?
+         GROUP BY d.device_id ORDER BY amountMinor DESC`,
+      )
+      .all(currency) as { deviceId: string; deviceName: string; amountMinor: number; count: number }[];
+    const count = Number(all.n);
+    return {
+      today: sumSince(startOfToday.toISOString()),
+      thisWeek: sumSince(weekAgo.toISOString()),
+      thisMonth: sumSince(startOfMonth.toISOString()),
+      allTime: Number(all.s),
+      count,
+      average: count ? Math.round(Number(all.s) / count) : 0,
+      byDevice: rows.map((r) => ({ deviceId: r.deviceId || 'unknown', deviceName: r.deviceName || 'Kiosk', amountMinor: Number(r.amountMinor), count: Number(r.count) })),
+    };
   }
 
   /** The versioned config a paired kiosk pulls: the PIN, currency, location, masjid name, and

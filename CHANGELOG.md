@@ -3,6 +3,16 @@
 
 # Changelog
 
+## 0.8.0
+- **Donations log + totals + CSV export (new “Donations” tab).** See every donation your kiosks have
+  taken — amount, kiosk, time, one-time vs monthly, donor (if given) and status — newest first, with
+  running totals for **today / this week / this month / all time**, a **per-kiosk breakdown**, and a
+  one-click **Export CSV**. The dashboard’s Donations tile now shows your real all-time total. (Only
+  successful donations count toward totals; monthly *renewals* are charged by Stripe and shown in your
+  Stripe dashboard, not here — these figures are what the kiosks collected directly.)
+- The CSV is safe to open in Excel/Sheets: donor-supplied fields are escaped against spreadsheet
+  formula injection, and the export (which contains donor details) requires an admin sign-in.
+
 ## 0.7.5
 - **Fix — manual card entry now works** (it was showing “that didn’t go through”). Stripe’s card form
   wasn’t being set up in time; the tablet now initialises it up front (from the publishable key sent

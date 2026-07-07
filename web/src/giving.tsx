@@ -9,54 +9,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, LayoutTemplate, Plus, X } from 'lucide-react';
 import { getGiving, saveGiving, type GivingSettings, type PromptPolicy } from './api';
+import { formatMoney, symbolFor, toMinor, toMajorStr } from './money';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
-
-// ── Currency helpers (mirror the server/tablet: integer minor units, zero-decimal aware) ──────
-const ZERO_DECIMAL = new Set([
-  'JPY', 'KRW', 'VND', 'CLP', 'XAF', 'XOF', 'BIF', 'DJF', 'GNF', 'KMF', 'MGA', 'PYG', 'RWF', 'UGX', 'VUV', 'XPF',
-]);
-const decimals = (ccy: string) => (ZERO_DECIMAL.has(ccy.toUpperCase()) ? 0 : 2);
-const factor = (ccy: string) => 10 ** decimals(ccy);
-
-function symbolFor(ccy: string): string {
-  switch (ccy.toUpperCase()) {
-    case 'USD': case 'CAD': case 'AUD': case 'NZD': return '$';
-    case 'GBP': return '£';
-    case 'EUR': return '€';
-    case 'PKR': return '₨';
-    case 'INR': return '₹';
-    case 'MYR': return 'RM';
-    case 'AED': return 'AED ';
-    case 'SAR': return 'SAR ';
-    default: return '';
-  }
-}
-
-/** Minor units → a display string, e.g. 2500 USD → "$25", 2550 → "$25.50". */
-function formatMoney(minor: number, ccy: string): string {
-  const sym = symbolFor(ccy);
-  const d = decimals(ccy);
-  let body: string;
-  if (d === 0) body = String(Math.round(minor));
-  else if (minor % 100 === 0) body = String(Math.round(minor / 100));
-  else body = (minor / 100).toFixed(2);
-  return sym ? `${sym}${body}` : `${body} ${ccy.toUpperCase()}`;
-}
-
-/** A "major unit" text field (e.g. "5", "10.50") → integer minor units, or 0 if not a valid amount. */
-function toMinor(major: string, ccy: string): number {
-  const n = Number(String(major).trim());
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.round(n * factor(ccy));
-}
-
-/** Integer minor units → an editable major-unit string (no trailing ".00"). */
-function toMajorStr(minor: number, ccy: string): string {
-  const d = decimals(ccy);
-  if (d === 0) return String(minor);
-  return minor % 100 === 0 ? String(minor / 100) : (minor / 100).toFixed(2);
-}
 
 const MAX_PRESETS = 6;
 

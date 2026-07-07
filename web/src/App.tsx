@@ -11,7 +11,6 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import {
   ArrowRight,
   Bell,
-  CalendarDays,
   Coins,
   Download,
   ExternalLink,
@@ -20,18 +19,19 @@ import {
   MonitorSmartphone,
   Palette,
   Plus,
-  ReceiptText,
   Settings,
   ShieldCheck,
   Smartphone,
   TrendingUp,
 } from 'lucide-react';
-import { getAppInfo, getDevices, getSession, login, sendTestNotification, setupAdmin, type AppInfo, type Device, type NotifyTestResult, type Session } from './api';
+import { getAppInfo, getDevices, getDonations, getSession, login, sendTestNotification, setupAdmin, type AppInfo, type Device, type NotifyTestResult, type Session } from './api';
 import { withBase, stripBase } from './base';
+import { formatMoney } from './money';
 import { useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
 import { PaymentsSection } from './payments';
 import { DevicesSection } from './devices';
 import { GivingSection } from './giving';
+import { DonationsSection } from './donations';
 import { Brand, Clock, Crescent, ProfileMenu, Scene } from './ui';
 
 const SOURCE_URL = 'https://github.com/OpenMasjid-Solutions/OpenMasjidKiosk';
@@ -129,7 +129,7 @@ const TABS: { id: Tab; label: string; Icon: typeof LayoutDashboard }[] = [
   { id: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard },
   { id: 'devices', label: 'Devices', Icon: MonitorSmartphone },
   { id: 'giving', label: 'Giving', Icon: LayoutTemplate },
-  { id: 'analytics', label: 'Analytics', Icon: TrendingUp },
+  { id: 'analytics', label: 'Donations', Icon: TrendingUp },
   { id: 'settings', label: 'Settings', Icon: Settings },
 ];
 
@@ -180,7 +180,7 @@ function AdminShell({ app, session }: { app: AppInfo | null; session: Session })
     dashboard: { title: 'Dashboard', sub: `${session.sso.username ? `Signed in as ${session.sso.username}` : 'Signed in'}${embedded ? ' · via OpenMasjidOS' : ''}` },
     devices: { title: 'Devices', sub: 'The tablets running your giving screen.' },
     giving: { title: 'Giving screen', sub: 'Design what donors see on the tablet.' },
-    analytics: { title: 'Analytics', sub: 'Donations your kiosks have taken.' },
+    analytics: { title: 'Donations', sub: 'What your kiosks have taken.' },
     settings: { title: 'Settings', sub: 'Your account, platform connection and this app.' },
   };
 
@@ -201,7 +201,7 @@ function AdminShell({ app, session }: { app: AppInfo | null; session: Session })
         {tab === 'dashboard' && <DashboardTab session={session} embedded={embedded} />}
         {tab === 'devices' && <DevicesTab />}
         {tab === 'giving' && <GivingSection />}
-        {tab === 'analytics' && <AnalyticsTab />}
+        {tab === 'analytics' && <DonationsSection />}
         {tab === 'settings' && <SettingsTab app={app} session={session} embedded={embedded} />}
       </main>
       <Dock tab={tab} setTab={setTab} />
@@ -226,9 +226,13 @@ function DashboardTab({ session, embedded }: { session: Session; embedded: boole
     ? `Signed in as ${session.sso.username}${embedded ? ' · via OpenMasjidOS' : ''}`
     : 'Signed in as the local admin';
   const [devices, setDevices] = useState<Device[] | null>(null);
+  const [raised, setRaised] = useState<{ value: string; sub: string } | null>(null);
   useEffect(() => {
     let alive = true;
     getDevices().then((r) => alive && setDevices(r.devices)).catch(() => alive && setDevices([]));
+    getDonations()
+      .then((r) => alive && setRaised({ value: formatMoney(r.totals.allTime, r.currency), sub: r.totals.count ? `${r.totals.count} all time` : 'None yet' }))
+      .catch(() => alive && setRaised({ value: '—', sub: ' ' }));
     return () => { alive = false; };
   }, []);
   const total = devices?.length ?? null;
@@ -265,7 +269,7 @@ function DashboardTab({ session, embedded }: { session: Session; embedded: boole
 
       <div className="stat-grid stat-grid--two">
         <StatTile icon={<MonitorSmartphone size={17} />} label="Kiosks" value={kiosksValue} sub={kiosksSub} />
-        <StatTile icon={<Coins size={17} />} label="Donations" value="—" sub="Coming soon" />
+        <StatTile icon={<Coins size={17} />} label="Donations" value={raised?.value ?? '—'} sub={raised?.sub ?? 'Loading…'} />
       </div>
     </>
   );
@@ -284,34 +288,6 @@ function DevicesTab() {
         on your tablet.
       </p>
     </>
-  );
-}
-
-// ── Analytics tab ─────────────────────────────────────────────────────────────
-function AnalyticsTab() {
-  const tiles: { icon: ReactNode; label: string; value: string; sub?: string; accent?: boolean }[] = [
-    { icon: <Coins size={17} />, label: 'Total raised', value: '—', accent: true },
-    { icon: <CalendarDays size={17} />, label: 'This month', value: '—' },
-    { icon: <ReceiptText size={17} />, label: 'Donations', value: '0' },
-    { icon: <TrendingUp size={17} />, label: 'Average gift', value: '—' },
-  ];
-  return (
-    <section className="metrics">
-      <div className="stat-grid">
-        {tiles.map((t) => (
-          <StatTile key={t.label} icon={t.icon} label={t.label} value={t.value} sub={t.sub} accent={t.accent} />
-        ))}
-      </div>
-      <section className="glass panel">
-        <div className="empty-state">
-          <div className="empty-emblem" aria-hidden="true">
-            <TrendingUp size={26} />
-          </div>
-          <p className="empty-title">No donations yet</p>
-          <p className="muted">They will appear here once the reader is taking payments.</p>
-        </div>
-      </section>
-    </section>
   );
 }
 
