@@ -123,7 +123,11 @@ dependencies {
 
     // --- Manual/keyed card entry: Stripe PaymentSheet (card typed into Stripe's own form; the PAN
     //     is tokenised on-device and never reaches our server, same posture as the reader). ---
-    implementation(libs.stripe.payments)
+    //     It transitively pulls bcprov-jdk15to18, which duplicates our bcprov-jdk18on (used for the
+    //     PIN). Drop the older one — jdk18on 1.78.1 provides the same classes for both.
+    implementation(libs.stripe.payments) {
+        exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
+    }
 
     // Compose tooling (previews) — debug only.
     debugImplementation(libs.androidx.ui.tooling)
