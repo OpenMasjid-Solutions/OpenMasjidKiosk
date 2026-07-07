@@ -41,8 +41,6 @@ data class HeartbeatResponse(
     val identify: Boolean,
     val latestAppVersion: String,
     val revoked: Boolean,
-    /** One-shot: the admin pressed "Update" in the webui — open the APK link to install. */
-    val openUpdate: Boolean,
 )
 
 /**
@@ -99,7 +97,6 @@ class KioskApi(private val client: OkHttpClient) {
             identify = json.optBoolean("identify", false),
             latestAppVersion = json.optString("latestAppVersion", ""),
             revoked = json.optBoolean("revoked", false),
-            openUpdate = json.optBoolean("openUpdate", false),
         )
     }
 
@@ -125,6 +122,7 @@ class KioskApi(private val client: OkHttpClient) {
             customMaxMinor = cfg.optLong("customMaxMinor", 1_000_000),
             monthlyEnabled = cfg.optBoolean("monthlyEnabled", false),
             manualEntryEnabled = cfg.optBoolean("manualEntryEnabled", false),
+            publishableKey = cfg.optString("publishableKey", ""),
             namePolicy = cfg.optString("namePolicy", "optional"),
             emailPolicy = cfg.optString("emailPolicy", "optional"),
             thankYouMessage = cfg.optString("thankYouMessage", ""),

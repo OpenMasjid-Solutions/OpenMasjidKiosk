@@ -28,7 +28,7 @@ sealed interface PairResult {
 
 /** Outcome of a heartbeat, driving the foreground loop and WorkManager backstop. */
 sealed interface HeartbeatOutcome {
-    data class Ok(val identify: Boolean, val openUpdate: Boolean, val latestAppVersion: String) : HeartbeatOutcome
+    data class Ok(val identify: Boolean, val latestAppVersion: String) : HeartbeatOutcome
     data object Revoked : HeartbeatOutcome       // server removed this device → wipe + re-pair
     data object CertMismatch : HeartbeatOutcome  // pinned cert changed → fail closed, re-pair
     data object NotPaired : HeartbeatOutcome
@@ -148,7 +148,7 @@ class KioskRepository(context: Context) {
             if (resp.configVersion > localVersion) {
                 runCatching { fetchConfig() }
             }
-            HeartbeatOutcome.Ok(resp.identify, resp.openUpdate, resp.latestAppVersion)
+            HeartbeatOutcome.Ok(resp.identify, resp.latestAppVersion)
         } catch (e: IOException) {
             if (PinnedHttp.isCertMismatch(e)) HeartbeatOutcome.CertMismatch
             else HeartbeatOutcome.NetworkError

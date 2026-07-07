@@ -11,7 +11,6 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type Pointer
 import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
-  DownloadCloud,
   Loader2,
   Lock,
   MonitorSmartphone,
@@ -32,7 +31,6 @@ import {
   renameDevice,
   revokeDevice,
   setKioskPin,
-  updateDeviceApp,
   type Device,
   type DeviceLog,
   type PairCode,
@@ -197,7 +195,7 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(device.name);
   const [savingName, setSavingName] = useState(false);
-  const [busy, setBusy] = useState<'identify' | 'remove' | 'update' | null>(null);
+  const [busy, setBusy] = useState<'identify' | 'remove' | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showUpdateHelp, setShowUpdateHelp] = useState(false);
@@ -254,20 +252,6 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
     }
   };
 
-  const update = async () => {
-    setErr('');
-    setNote('');
-    setBusy('update');
-    try {
-      await updateDeviceApp(device.id);
-      setNote('Asked this kiosk to open the update page — finish installing on the tablet (see the steps below).');
-      setShowUpdateHelp(true);
-    } catch (e) {
-      setErr(errMsg(e));
-    } finally {
-      setBusy(null);
-    }
-  };
 
   return (
     <div className="device-row glass-inset">
@@ -335,16 +319,6 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
         <button className="btn btn--ghost btn--sm" onClick={() => setShowLogs(true)}>
           <ScrollText size={14} aria-hidden="true" /> Logs
         </button>
-        {outOfDate && (
-          <button
-            className="btn btn--ghost btn--sm"
-            onClick={() => void update()}
-            disabled={busy !== null || !device.online}
-            title={device.online ? 'Open the update page on this kiosk to install the newest app' : 'The kiosk must be online to receive this'}
-          >
-            <DownloadCloud size={14} aria-hidden="true" /> {busy === 'update' ? 'Sending…' : 'Update'}
-          </button>
-        )}
         {confirming ? (
           <>
             <button className="btn btn--sm device-danger" onClick={() => void remove()} disabled={busy === 'remove'}>
@@ -371,18 +345,13 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
         <div className="update-help">
           <p className="hint" style={{ marginBlockEnd: '0.5rem' }}>
             This kiosk is on <strong>v{device.appVersion}</strong>; the latest is <strong>v{serverVersion}</strong>. Android
-            can't update the app on its own, so a person at the tablet installs it — two ways:
+            won't let the app update itself, so update it <strong>at the tablet</strong>:
           </p>
-          <p className="label" style={{ marginBlockEnd: '0.2rem' }}>From here (easiest)</p>
           <ol className="update-steps">
-            <li>Press <strong>Update</strong> above (the kiosk must be online).</li>
-            <li>On the tablet, its browser opens the newest app. Tap through any security notice for your server, then let it download.</li>
-            <li>Open the downloaded file and tap <strong>Install</strong> (allow the browser to install apps if asked). The kiosk relaunches on the new version.</li>
-          </ol>
-          <p className="label" style={{ marginBlockStart: '0.7rem', marginBlockEnd: '0.2rem' }}>At the tablet</p>
-          <ol className="update-steps">
-            <li>Tap the giving screen <strong>7 times quickly</strong>, then enter the kiosk PIN.</li>
-            <li>In maintenance, tap <strong>Update app</strong> and follow the same download &amp; install steps.</li>
+            <li>On the tablet, tap the giving screen <strong>7 times quickly</strong>, then enter the kiosk PIN.</li>
+            <li>Tap <strong>Update app</strong>. The kiosk leaves kiosk mode and opens the new app in its browser.</li>
+            <li>Tap through any security notice for your server and let it download, then open the file and tap <strong>Install</strong> (allow installs from the browser if asked).</li>
+            <li>The kiosk relaunches on the new version automatically.</li>
           </ol>
         </div>
       )}

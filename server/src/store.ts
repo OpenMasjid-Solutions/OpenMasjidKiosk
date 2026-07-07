@@ -114,9 +114,6 @@ export function rid(prefix: string): string {
 export class Store {
   private readonly db: Database.Database;
   private cachedSecret: Buffer | null = null;
-  // Device ids the admin asked to open the update (APK) link in their browser. In-memory + one-shot
-  // (delivered on the next heartbeat): a pending flag lost on restart just means the admin re-presses.
-  private readonly browserUpdates = new Set<string>();
 
   constructor(dbPath = path.join(config.dataDir, 'kiosk.db')) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -548,15 +545,6 @@ export class Store {
       return true;
     }
     return false;
-  }
-
-  /** Admin pressed "Update" for this kiosk → tell it (once) to open the APK link in the browser. */
-  requestBrowserUpdate(id: string): void {
-    this.browserUpdates.add(id);
-  }
-  /** Read + clear the "open update" flag (the kiosk opens the browser once when it sees it). */
-  consumeBrowserUpdate(id: string): boolean {
-    return this.browserUpdates.delete(id);
   }
 
   // ── Device logs ───────────────────────────────────────────────────────────

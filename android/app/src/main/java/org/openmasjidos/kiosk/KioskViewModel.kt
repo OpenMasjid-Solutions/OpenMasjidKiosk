@@ -5,6 +5,7 @@ package org.openmasjidos.kiosk
 
 import android.app.Application
 import android.os.Build
+import com.stripe.android.PaymentConfiguration
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -202,6 +203,16 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                             ReaderManager.enableAutoConnect(ReaderTransport.Usb, null, locationId)
                         }
                     }
+                }
+        }
+        // Initialise Stripe (for the manual card sheet) EARLY with the publishable key from config —
+        // PaymentSheet fails immediately if PaymentConfiguration wasn't set up before it's presented.
+        viewModelScope.launch {
+            repo.config
+                .map { it?.publishableKey.orEmpty() to (it?.manualEntryEnabled == true) }
+                .distinctUntilChanged()
+                .collect { (pk, manual) ->
+                    if (manual && pk.isNotBlank()) runCatching { PaymentConfiguration.init(appContext, pk) }
                 }
         }
     }
@@ -402,13 +413,14 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The UI finished presenting the manual card form — verify with Stripe + record, or handle a
      *  cancel/failure. Never trusts the sheet's word: a donation is recorded only after /complete. */
-    fun onManualResult(result: ManualResult) {
+    fun onManualResult(result: ManualResult, detail: String? = null) {
         val m = local.value.giving.manual ?: return
         updateGiving { it.copy(manual = null) }
         when (result) {
             ManualResult.Canceled -> updateGiving { GivingState(step = GivingStep.Amount) }
             ManualResult.Failed -> {
-                repo.log("warn", "donation_manual_failed", m.piId)
+                // Log the actual Stripe/PaymentSheet reason (Devices → Logs) so failures are diagnosable.
+                repo.log("warn", "donation_manual_failed", detail?.takeIf { it.isNotBlank() } ?: m.piId)
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That card didn’t go through — no charge was made. Try again?") }
                 viewModelScope.launch { repo.flushLogs() }
             }
@@ -539,13 +551,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 )) {
                     is HeartbeatOutcome.Ok -> {
                         local.update {
-                            it.copy(
-                                lastHeartbeatMs = System.currentTimeMillis(),
-                                online = true,
-                                latestAppVersion = outcome.latestAppVersion,
-                                // Admin pressed "Update" in the webui → open the APK link to install.
-                                openUpdatePending = it.openUpdatePending || outcome.openUpdate,
-                            )
+                            it.copy(lastHeartbeatMs = System.currentTimeMillis(), online = true, latestAppVersion = outcome.latestAppVersion)
                         }
                         if (outcome.identify) flashIdentify()
                     }

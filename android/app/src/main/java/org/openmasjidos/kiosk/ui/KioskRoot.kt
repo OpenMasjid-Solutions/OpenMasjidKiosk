@@ -66,13 +66,11 @@ fun KioskRoot(
     // then verifies the result server-side before recording, same as the reader.
     val context = LocalContext.current
     val paymentSheet = rememberPaymentSheet { result ->
-        vm.onManualResult(
-            when (result) {
-                is PaymentSheetResult.Completed -> ManualResult.Completed
-                is PaymentSheetResult.Canceled -> ManualResult.Canceled
-                is PaymentSheetResult.Failed -> ManualResult.Failed
-            },
-        )
+        when (result) {
+            is PaymentSheetResult.Completed -> vm.onManualResult(ManualResult.Completed)
+            is PaymentSheetResult.Canceled -> vm.onManualResult(ManualResult.Canceled)
+            is PaymentSheetResult.Failed -> vm.onManualResult(ManualResult.Failed, result.error.message)
+        }
     }
     val manual = ui.giving.manual
     LaunchedEffect(manual?.piId) {

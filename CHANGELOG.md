@@ -3,6 +3,17 @@
 
 # Changelog
 
+## 0.7.5
+- **Fix — manual card entry now works** (it was showing “that didn’t go through”). Stripe’s card form
+  wasn’t being set up in time; the tablet now initialises it up front (from the publishable key sent
+  with your settings), so the form opens and takes the card. If a manual payment ever does fail, the
+  exact reason is now written to **Devices → Logs** so it can be diagnosed.
+- **Fix — updating the kiosk from the tablet now actually works.** Because the kiosk is the tablet’s
+  Home app, it couldn’t reach the browser before. Now **7 taps → PIN → Update app** first **leaves
+  kiosk mode**, then opens the new app in the browser to download and install; it relaunches into
+  kiosk on the new version. The admin panel’s remote “Update” button (which couldn’t reliably work)
+  is gone — the **Update available** note now shows these step-by-step tablet instructions instead.
+
 ## 0.7.4
 - **Manual card entry (type the card, no reader needed).** Turn on **“Allow manual card entry”** in
   **Admin → Giving screen** and donors can pay by typing their card into Stripe’s secure form —

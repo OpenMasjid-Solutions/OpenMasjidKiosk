@@ -390,14 +390,9 @@ async function main(): Promise<void> {
     return { data: { ok: true } };
   });
 
-  // Admin: ask this kiosk to open the APK download link in its browser so a person can install the
-  // update (Android can't update an ordinary app itself). Delivered on the kiosk's next heartbeat.
-  app.post('/api/admin/devices/:id/update', { preHandler: requireAdmin }, async (req, reply) => {
-    const id = (req.params as { id: string }).id;
-    if (!store.getDevice(id)) return reply.code(404).send({ error: 'Kiosk not found.' });
-    store.requestBrowserUpdate(id);
-    return { data: { ok: true } };
-  });
+  // (Removed the remote "push update" endpoint: a kiosk is the HOME launcher, so it can't be made to
+  //  open a browser remotely in a reliable way. Updating is done AT the tablet — 7-tap → PIN →
+  //  "Update app" — which ends kiosk mode and opens the APK link. The admin panel just explains that.)
 
 
   app.get('/api/admin/devices/:id/logs', { preHandler: requireAdmin }, async (req) => ({
@@ -518,15 +513,11 @@ async function main(): Promise<void> {
     if (d.revoked) return { data: { configVersion: store.getConfigVersion(), identify: false, latestAppVersion: config.version, revoked: true } };
     const parsed = HeartbeatBody.safeParse(req.body ?? {});
     if (parsed.success) store.updateHeartbeat(d.id, parsed.data);
-    const isForeground = !(parsed.success && parsed.data.foreground === false);
     return {
       data: {
         configVersion: store.getConfigVersion(),
         identify: store.consumeIdentify(d.id),
         latestAppVersion: config.version, // the APK version bundled in this server image (info only)
-        // One-shot: the admin pressed "Update" — the tablet opens the APK link in its browser. Only
-        // consumed by a foreground heartbeat (the backstop can't open a browser), so it's never lost.
-        openUpdate: isForeground ? store.consumeBrowserUpdate(d.id) : false,
         revoked: false,
       },
     };
@@ -535,7 +526,14 @@ async function main(): Promise<void> {
   app.get('/api/kiosk/config', async (req, reply) => {
     const d = authDevice(req, reply);
     if (!d) return;
-    return { data: store.getKioskConfig() };
+    const cfg = store.getKioskConfig();
+    // When manual entry is on, include the publishable key (public) so the tablet can initialise
+    // Stripe's PaymentSheet EARLY — the card form fails if PaymentConfiguration isn't set up first.
+    if (store.getGiving().manualEntryEnabled) {
+      const acct = await resolveAccount();
+      if (acct?.keys.publishableKey) (cfg.config as Record<string, unknown>).publishableKey = acct.keys.publishableKey;
+    }
+    return { data: cfg };
   });
 
   const LogsBody = z.object({

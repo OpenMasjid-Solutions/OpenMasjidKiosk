@@ -86,9 +86,13 @@ class MainActivity : ComponentActivity() {
                         finishAndRemoveTask()
                     },
                     onOpenBrowser = { url ->
-                        // Updating = install the newest APK from the server via the browser (Android
-                        // can't update an ordinary app itself). Drop lock task so the browser + the
-                        // installer can appear; onResume re-locks the kiosk when we return.
+                        // Updating means leaving the app for the browser to download + install the new
+                        // APK. Because we're the HOME launcher with a re-launch-on-leave watchdog, we
+                        // must FULLY END kiosk mode first — otherwise Home/leave bounces straight back
+                        // and the browser can never stay open. (The new version relaunches into kiosk;
+                        // if they cancel, a reboot returns to kiosk.)
+                        exiting = true
+                        KioskController.releaseHome(this)
                         KioskController.exitKiosk(this)
                         runCatching {
                             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -105,8 +109,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Idempotent: enters lock task (device owner) / re-applies immersive.
-        KioskController.enterKiosk(this)
+        // Idempotent: enters lock task (device owner) / re-applies immersive. Skipped once we've
+        // ended kiosk mode for an update (exiting) so the browser/installer isn't yanked away.
+        if (!exiting) KioskController.enterKiosk(this)
     }
 
     /**
