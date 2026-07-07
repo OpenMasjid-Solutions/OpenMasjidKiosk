@@ -84,8 +84,11 @@ jobs:
       - name: Collect APK as openmasjidkiosk.apk
         run: |
           set -e
-          apk=$(find app/build/outputs/apk -name '*.apk' | head -1)
-          if [ -z "$apk" ]; then echo "No APK produced"; exit 1; fi
+          # Never bundle an *-unsigned.apk: an unsigned APK (or one signed with a throwaway per-run
+          # debug key) is exactly what causes "App not installed" on update. Prefer the signed
+          # release APK and fail loudly if release signing didn't happen.
+          apk=$(find app/build/outputs/apk -name '*.apk' ! -name '*unsigned*' | head -1)
+          if [ -z "$apk" ]; then echo "No signed APK produced (check signing secrets)"; exit 1; fi
           echo "Found $apk"
           cp "$apk" "$RUNNER_TEMP/openmasjidkiosk.apk"
 

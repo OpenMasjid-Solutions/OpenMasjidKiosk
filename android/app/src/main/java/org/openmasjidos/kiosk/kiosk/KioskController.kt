@@ -30,10 +30,12 @@ import org.openmasjidos.kiosk.MainActivity
  *     all blocked), and we register as the persistent HOME so Home always lands back on the kiosk.
  *     In this mode the ONLY way out is this app calling [exitKiosk] — which happens solely behind the
  *     verified exit PIN. There is no OS gesture to escape it.
- *  2. NOT DEVICE OWNER: [Activity.startLockTask] degrades to **screen pinning**, which the OS lets a
- *     determined user escape (swipe + confirm) and does NOT block the notification shade. We still
- *     apply it + keep-awake + immersive bars as a best effort, but a truly locked, un-leavable kiosk
- *     REQUIRES device-owner provisioning. The maintenance screen says so when we're not device owner.
+ *  2. NOT DEVICE OWNER: we do NOT use screen pinning (it shows a confirmation, is escapable by a
+ *     swipe+hold, and doesn't block the notification shade). Instead we act like a real single-app
+ *     kiosk — the HOME launcher + a re-launch-on-leave watchdog ([MainActivity.onUserLeaveHint])
+ *     bounce the user back in whenever they press Home/Recents, and we boot straight into the app +
+ *     keep-awake + immersive bars. Android still can't fully block the shade/settings without device
+ *     owner, so a truly un-leavable kiosk REQUIRES it. The maintenance screen says so.
  *
  * We never crash if a call is not permitted — every OS call is guarded.
  */
@@ -79,7 +81,9 @@ object KioskController {
     fun enterKiosk(activity: Activity) {
         applyWindow(activity)
 
-        dpmIfOwner(activity)?.let { (dpm, admin) ->
+        val owner = dpmIfOwner(activity)
+        if (owner != null) {
+            val (dpm, admin) = owner
             runCatching { dpm.setLockTaskPackages(admin, arrayOf(activity.packageName)) }
             // Allow Home (→ us) but block the notification shade, recents, the power menu and system
             // info from within Lock Task. (setLockTaskFeatures is API 28+.)
@@ -89,12 +93,16 @@ object KioskController {
             // Belt-and-braces: kill the status bar entirely so the notification shade / quick settings
             // can't be pulled down at all while the kiosk runs.
             runCatching { dpm.setStatusBarDisabled(admin, true) }
+            val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (am != null && am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_NONE) {
+                runCatching { activity.startLockTask() }
+            }
         }
-
-        val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-        if (am != null && am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_NONE) {
-            runCatching { activity.startLockTask() }
-        }
+        // NOT device owner: we deliberately do NOT screen-pin. Pinning shows a confirmation, is
+        // escapable by a swipe+hold, and is exactly the "app pinning" that doesn't hold. Instead the
+        // HOME launcher + the re-launch-on-leave watchdog (MainActivity.onUserLeaveHint) bounce the
+        // user back into the kiosk whenever they try to leave. A fully un-leavable kiosk that also
+        // blocks the notification shade still requires device-owner provisioning (docs/TABLET_SETUP.md).
     }
 
     /** Leave kiosk lockdown (used by "Exit kiosk" after a verified PIN, and momentarily to open the

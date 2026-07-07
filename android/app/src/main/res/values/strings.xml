@@ -105,5 +105,5 @@
     <string name="reader_status_not_connected">Not connected</string>
 
     <!-- Kiosk mode banner -->
-    <string name="kiosk_pinning_hint">This tablet isn\'t a locked-down kiosk yet. Without one-time device-owner setup, Android still lets someone swipe down the notifications, reach the navigation buttons, and leave the app — it can\'t be fully prevented. To make the kiosk truly un-leavable (no notification shade, no exit without the PIN), follow the device-owner steps in docs/TABLET_SETUP.md.</string>
+    <string name="kiosk_pinning_hint">This tablet isn\'t fully locked down yet. The app returns to the giving screen whenever someone leaves it and reopens on boot, but without one-time device-owner setup Android still lets a determined person briefly reach the notification shade or settings — that can\'t be fully blocked. To make the kiosk truly un-leavable (notification shade off, no exit without the PIN), set this app as the default Home app and follow the device-owner steps in docs/TABLET_SETUP.md.</string>
 </resources>

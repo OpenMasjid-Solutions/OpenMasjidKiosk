@@ -3,6 +3,19 @@
 
 # Changelog
 
+## 0.7.1
+- **Fix — updating the app no longer says “App not installed”.** The app is now signed with a
+  permanent key, so future updates install straight over the old app with nothing lost. (Until now
+  each build was signed with a throwaway key, which Android refuses to update over.) **One-time step:**
+  because the signing key has changed, *this* update needs the current app **uninstalled first**, then
+  install v0.7.1 from the setup page and re-pair. Your donation history is safe — it lives on the
+  server, not the tablet — so you won’t lose analytics. Every update after this one is seamless.
+- **Fix — the kiosk can no longer be left by pressing Home or Recents.** It now works like a proper
+  single-app kiosk: leaving instantly drops you back into the giving screen, and it reopens on boot.
+  (It no longer uses Android’s escapable “screen pinning”.) For a *fully* locked tablet — with the
+  notification shade blocked too — set the app as the default Home app and use the one-time
+  device-owner setup in docs/TABLET_SETUP.md; the app tells you this in its settings.
+
 ## 0.7.0
 - **Design your giving screen (new “Giving” tab).** Set the masjid name and headline, the six preset
   amounts, custom-amount on/off with a min & max, monthly on/off, whether to ask for a name/email

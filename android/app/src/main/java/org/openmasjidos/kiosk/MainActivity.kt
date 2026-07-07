@@ -30,6 +30,9 @@ class MainActivity : ComponentActivity() {
 
     private val vm: KioskViewModel by viewModels()
 
+    /** Set true only for a deliberate departure (PIN-verified exit) so the leave-watchdog lets go. */
+    private var exiting = false
+
     // A USB reader needs the location permission to be discovered. On a device-owner kiosk it's
     // granted silently; otherwise we ask once at startup and, on grant, kick the auto-connect.
     private val readerPermissionLauncher =
@@ -62,9 +65,10 @@ class MainActivity : ComponentActivity() {
                     isDeviceOwner = deviceOwner,
                     onExitKiosk = {
                         // Real escape hatch for a maintainer (only reachable behind a verified PIN):
-                        // drop the persistent HOME + lock task and leave the app. (On a dedicated
-                        // tablet with no other launcher the system may relaunch us; documented in
-                        // docs/TABLET_SETUP.md.)
+                        // let the leave-watchdog go, drop the persistent HOME + lock task, and leave.
+                        // (On a dedicated tablet with no other launcher the system may relaunch us;
+                        // documented in docs/TABLET_SETUP.md.)
+                        exiting = true
                         KioskController.releaseHome(this)
                         KioskController.exitKiosk(this)
                         finishAndRemoveTask()
@@ -88,8 +92,26 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Idempotent: only enters lock task if not already locked/pinned.
+        // Idempotent: enters lock task (device owner) / re-applies immersive.
         KioskController.enterKiosk(this)
+    }
+
+    /**
+     * The kiosk leave-watchdog. Called when the user tries to leave via Home or Recents — bounce
+     * straight back into the kiosk by bringing this activity to the front. This is how a real
+     * single-app kiosk works (re-open the target app on every leave) rather than escapable screen-
+     * pinning. On a device-owner tablet this never even fires (Lock Task blocks Home/Recents). During
+     * a deliberate PIN-verified exit we let go via [exiting].
+     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (exiting) return
+        runCatching {
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            )
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
