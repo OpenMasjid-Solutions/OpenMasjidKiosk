@@ -198,6 +198,29 @@ export async function createCardPresentPaymentIntent(
   return { id: pi.id, clientSecret: pi.client_secret ?? '' };
 }
 
+/** Create a **keyed/manual** (card, not card-present) PaymentIntent. The donor types the card into
+ *  Stripe's own SDK form on the tablet, which tokenises it and confirms this PI directly with Stripe
+ *  — our code/server never sees the card number (same posture as the reader). Automatic capture: the
+ *  SDK confirm settles it, and [completeCardPresentPaymentIntent] verifies `succeeded` before we record. */
+export async function createCardPaymentIntent(
+  secretKey: string,
+  input: CreatePaymentIntentInput,
+  idempotencyKey?: string,
+): Promise<{ id: string; clientSecret: string }> {
+  const pi = await client(secretKey).paymentIntents.create(
+    {
+      amount: input.amountMinor,
+      currency: input.currency.toLowerCase(),
+      payment_method_types: ['card'],
+      description: input.description || undefined,
+      receipt_email: input.receiptEmail || undefined,
+      metadata: input.metadata,
+    },
+    idempotencyKey ? { idempotencyKey } : undefined,
+  );
+  return { id: pi.id, clientSecret: pi.client_secret ?? '' };
+}
+
 export interface CompletedPaymentIntent {
   status: string;
   succeeded: boolean;

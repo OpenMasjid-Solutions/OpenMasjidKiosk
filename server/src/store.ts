@@ -67,6 +67,9 @@ export interface GivingConfig {
   customMinMinor: number;
   customMaxMinor: number;
   monthlyEnabled: boolean;
+  /** Allow keyed/manual card entry (Stripe's on-device card form) — as a fallback beside the reader,
+   *  and the only way to pay in "No reader" mode. Off by default (reader-only is the safest posture). */
+  manualEntryEnabled: boolean;
   namePolicy: 'off' | 'optional' | 'required';
   emailPolicy: 'off' | 'optional' | 'required';
   thankYouMessage: string;
@@ -79,6 +82,7 @@ const GIVING_DEFAULTS: GivingConfig = {
   customMinMinor: 100,
   customMaxMinor: 1_000_000,
   monthlyEnabled: true,
+  manualEntryEnabled: false,
   namePolicy: 'optional',
   emailPolicy: 'optional',
   thankYouMessage: 'JazākAllāhu khayran — thank you for your generous donation.',
@@ -356,6 +360,7 @@ export class Store {
     merged.emailPolicy = pol(merged.emailPolicy);
     merged.allowCustom = merged.allowCustom !== false;
     merged.monthlyEnabled = merged.monthlyEnabled !== false;
+    merged.manualEntryEnabled = merged.manualEntryEnabled === true;
     merged.thankYouMessage = String(merged.thankYouMessage ?? GIVING_DEFAULTS.thankYouMessage).slice(0, 500);
     this.setRaw('giving', JSON.stringify(merged));
     this.bumpConfigVersion();
@@ -421,6 +426,7 @@ export class Store {
         customMinMinor: g.customMinMinor,
         customMaxMinor: g.customMaxMinor,
         monthlyEnabled: g.monthlyEnabled,
+        manualEntryEnabled: g.manualEntryEnabled,
         namePolicy: g.namePolicy,
         emailPolicy: g.emailPolicy,
         thankYouMessage: g.thankYouMessage,

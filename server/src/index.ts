@@ -23,6 +23,7 @@ import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricS
 import { LoginLimiter } from './rateLimit';
 import {
   completeCardPresentPaymentIntent,
+  createCardPaymentIntent,
   createCardPresentPaymentIntent,
   createConnectionToken,
   createLocation,
@@ -432,6 +433,7 @@ async function main(): Promise<void> {
       customMinMinor: z.number().int().positive().optional(),
       customMaxMinor: z.number().int().positive().optional(),
       monthlyEnabled: z.boolean().optional(),
+      manualEntryEnabled: z.boolean().optional(),
       namePolicy: z.enum(['off', 'optional', 'required']).optional(),
       emailPolicy: z.enum(['off', 'optional', 'required']).optional(),
       thankYouMessage: z.string().max(500).optional(),
@@ -578,6 +580,8 @@ async function main(): Promise<void> {
     donorEmail: z.string().trim().max(200).optional(),
     // Recurring monthly donation (sets up a Subscription from the card-present charge).
     monthly: z.boolean().optional(),
+    // Keyed/manual card entry (Stripe's on-device card form) instead of the reader.
+    manual: z.boolean().optional(),
     // Per-attempt key so a network retry can't create a second PI (Stripe idempotency).
     idempotencyKey: z.string().trim().min(8).max(255).optional(),
   });
@@ -595,10 +599,17 @@ async function main(): Promise<void> {
     const { amountMinor, donorName, idempotencyKey } = parsed.data;
     const donorEmail = (parsed.data.donorEmail ?? '').trim();
     const monthly = parsed.data.monthly === true;
+    const manual = parsed.data.manual === true;
     if (!store.isAllowedAmount(amountMinor)) return reply.code(400).send({ error: 'That amount isn’t available.' });
+    // Keyed/manual entry must be enabled by the admin (gate on the tablet AND here).
+    if (manual && !store.getGiving().manualEntryEnabled) {
+      return reply.code(400).send({ error: 'Manual card entry isn’t available right now.' });
+    }
     // Monthly giving needs name + email (to create the Customer/Subscription and send receipts).
-    // Enforced on the tablet AND here — never trust the client.
+    // Enforced on the tablet AND here — never trust the client. (Monthly is card-present only; the
+    // reusable card comes from the reader, so it can't be combined with keyed entry.)
     if (monthly) {
+      if (manual) return reply.code(400).send({ error: 'Monthly giving needs the card reader.' });
       if (!store.getGiving().monthlyEnabled) return reply.code(400).send({ error: 'Monthly giving isn’t available right now.' });
       if (!donorName || !donorName.trim()) return reply.code(400).send({ error: 'Monthly giving needs a name.' });
       if (!looksLikeEmail(donorEmail)) return reply.code(400).send({ error: 'Monthly giving needs a valid email for the receipt.' });
@@ -607,19 +618,23 @@ async function main(): Promise<void> {
     if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     const currency = store.getCurrency();
     const preset = store.getGiving().presetsMinor.includes(amountMinor) ? 'preset' : 'custom';
+    const metadata = { app: 'kiosk', deviceId: d.id, kind: monthly ? 'monthly' : 'one_time', entry: manual ? 'manual' : 'reader', preset, donorName: donorName ?? '', donorEmail };
+    const piInput = {
+      amountMinor,
+      currency,
+      description: `${monthly ? 'Monthly donation' : 'Donation'} — ${store.getMasjid().name || 'OpenMasjid Kiosk'}`,
+      receiptEmail: donorEmail || undefined, // Stripe emails a receipt on success (if enabled)
+      metadata,
+    };
     try {
-      const pi = await createCardPresentPaymentIntent(
-        acct.keys.secretKey,
-        {
-          amountMinor,
-          currency,
-          description: `${monthly ? 'Monthly donation' : 'Donation'} — ${store.getMasjid().name || 'OpenMasjid Kiosk'}`,
-          receiptEmail: donorEmail || undefined, // Stripe emails a receipt on success (if enabled)
-          metadata: { app: 'kiosk', deviceId: d.id, kind: monthly ? 'monthly' : 'one_time', preset, donorName: donorName ?? '', donorEmail },
-        },
-        idempotencyKey,
-      );
-      return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret } };
+      // Manual = a keyed (card) PaymentIntent the tablet confirms via Stripe's on-device card form;
+      // otherwise a card-present PaymentIntent the M2 reader collects. Both are verified server-side
+      // in /complete before a donation is recorded. The tablet needs the publishable key for the
+      // manual (Stripe SDK) form — it's public and safe to return.
+      const pi = manual
+        ? await createCardPaymentIntent(acct.keys.secretKey, piInput, idempotencyKey)
+        : await createCardPresentPaymentIntent(acct.keys.secretKey, piInput, idempotencyKey);
+      return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, publishableKey: manual ? acct.keys.publishableKey : undefined } };
     } catch {
       return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
     }

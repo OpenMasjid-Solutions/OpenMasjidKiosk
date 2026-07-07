@@ -72,6 +72,7 @@ export function GivingSection() {
   const [customMin, setCustomMin] = useState('');
   const [customMax, setCustomMax] = useState('');
   const [monthlyEnabled, setMonthlyEnabled] = useState(true);
+  const [manualEntryEnabled, setManualEntryEnabled] = useState(false);
   const [namePolicy, setNamePolicy] = useState<PromptPolicy>('optional');
   const [emailPolicy, setEmailPolicy] = useState<PromptPolicy>('optional');
   const [thankYou, setThankYou] = useState('');
@@ -91,6 +92,7 @@ export function GivingSection() {
     setCustomMin(toMajorStr(s.giving.customMinMinor, s.currency));
     setCustomMax(toMajorStr(s.giving.customMaxMinor, s.currency));
     setMonthlyEnabled(s.giving.monthlyEnabled);
+    setManualEntryEnabled(s.giving.manualEntryEnabled);
     setNamePolicy(s.giving.namePolicy);
     setEmailPolicy(s.giving.emailPolicy);
     setThankYou(s.giving.thankYouMessage);
@@ -139,6 +141,7 @@ export function GivingSection() {
         customMinMinor: min,
         customMaxMinor: max,
         monthlyEnabled,
+        manualEntryEnabled,
         namePolicy,
         emailPolicy,
         thankYouMessage: thankYou,
@@ -224,6 +227,13 @@ export function GivingSection() {
         )}
 
         <Toggle label="Offer monthly giving" hint="Adds a One-time / Monthly choice (monthly needs a name + email)." checked={monthlyEnabled} onChange={setMonthlyEnabled} />
+
+        <Toggle
+          label="Allow manual card entry"
+          hint="Let donors type their card (Stripe's secure form) instead of the reader — and it's the way to take cards with no reader. Note: keyed cards cost more and carry more fraud risk on an unattended kiosk."
+          checked={manualEntryEnabled}
+          onChange={setManualEntryEnabled}
+        />
 
         <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
           <PolicyField id="g-name" label="Ask for a name" value={namePolicy} onChange={setNamePolicy} />

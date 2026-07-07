@@ -275,6 +275,8 @@ export interface GivingConfig {
   customMinMinor: number;
   customMaxMinor: number;
   monthlyEnabled: boolean;
+  /** Allow keyed/manual card entry (Stripe's on-device card form) as well as / instead of the reader. */
+  manualEntryEnabled: boolean;
   namePolicy: PromptPolicy;
   emailPolicy: PromptPolicy;
   thankYouMessage: string;
