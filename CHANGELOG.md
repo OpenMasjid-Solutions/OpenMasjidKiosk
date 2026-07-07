@@ -3,6 +3,16 @@
 
 # Changelog
 
+## 0.7.3
+- **Bluetooth readers now stay connected on their own — just like USB.** Once you connect a
+  Bluetooth M2 in the tablet's settings, the kiosk remembers it and **reconnects it automatically on
+  boot and whenever it drops** (a Bluetooth blip, the reader sleeping, a reboot). No more re-pairing
+  by hand each time.
+- **Clearer help for the “Bluetooth unexpectedly disconnected” error.** This almost always has one of
+  two simple causes, so the kiosk now says exactly what to do: (1) **don't** pair the reader in the
+  tablet's own Bluetooth settings — if you did, tap **Forget** there — and connect it only from the
+  app; (2) **charge the reader to at least 50%** (its first connection may install a required update).
+
 ## 0.7.2
 - **Fix — the Giving-screen editor now actually reaches the tablets, and the Monthly option shows.**
   The kiosk was fetching your saved giving screen but then dropping the amounts, monthly setting,

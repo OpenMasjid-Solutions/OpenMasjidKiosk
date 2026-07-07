@@ -199,6 +199,14 @@ class KioskRepository(context: Context) {
     }
 
 
+    // ---- Reader memory (auto-reconnect the same reader on boot) ────────────────────────
+
+    /** Remember (blank transport = forget) the reader to auto-reconnect on boot. */
+    suspend fun saveLastReader(transport: String, serial: String?) = store.saveLastReader(transport, serial)
+
+    /** The last-connected reader as (transport, serial?) — or null if none. */
+    suspend fun getLastReader(): Pair<String, String?>? = store.getLastReader()
+
     // ---- PIN ---------------------------------------------------------------------------
 
     /** Offline scrypt verification of the exit PIN against the last-synced config hash. */

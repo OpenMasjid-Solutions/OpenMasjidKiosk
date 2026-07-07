@@ -15,6 +15,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.io.IOException
 
@@ -61,6 +62,11 @@ class DeviceStore(private val context: Context) {
         val CFG_NAME_POLICY = stringPreferencesKey("cfg_name_policy")
         val CFG_EMAIL_POLICY = stringPreferencesKey("cfg_email_policy")
         val CFG_THANKYOU = stringPreferencesKey("cfg_thankyou")
+
+        // The reader the admin last connected, so it auto-reconnects on boot. USB stores just the
+        // transport ("Usb"); Bluetooth also stores the serial so we reconnect that exact reader.
+        val LAST_READER_TRANSPORT = stringPreferencesKey("last_reader_transport")
+        val LAST_READER_SERIAL = stringPreferencesKey("last_reader_serial")
     }
 
     /** Emits the current pairing, or null when the kiosk is not (yet) paired. */
@@ -129,6 +135,21 @@ class DeviceStore(private val context: Context) {
             p[Keys.CFG_EMAIL_POLICY] = config.emailPolicy
             p[Keys.CFG_THANKYOU] = config.thankYouMessage
         }
+    }
+
+    /** Remember (or, with a blank transport, forget) the reader to auto-reconnect on boot. */
+    suspend fun saveLastReader(transport: String, serial: String?) {
+        store.edit { p ->
+            p[Keys.LAST_READER_TRANSPORT] = transport
+            p[Keys.LAST_READER_SERIAL] = serial.orEmpty()
+        }
+    }
+
+    /** The last-connected reader as (transport, serial?) — or null if none remembered. */
+    suspend fun getLastReader(): Pair<String, String?>? {
+        val p = store.data.first()
+        val t = p[Keys.LAST_READER_TRANSPORT]?.takeIf { it.isNotBlank() } ?: return null
+        return t to p[Keys.LAST_READER_SERIAL]?.takeIf { it.isNotBlank() }
     }
 
     /**

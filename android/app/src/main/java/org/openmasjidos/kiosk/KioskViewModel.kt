@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -170,14 +172,28 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 if (pairing != null) startHeartbeatLoop() else stopHeartbeatLoop()
             }
         }
-        // A USB reader is a fixed part of a wall kiosk, so connect it automatically (and keep it
-        // connected) with no setup — as soon as a card-reader Location is configured. Bluetooth
-        // readers are still paired by hand in the PIN-protected maintenance screen.
+        // Keep the kiosk's reader connected with no setup, as soon as a card-reader Location is
+        // configured: a USB reader is plug-and-play; a Bluetooth reader the admin connected once is
+        // remembered and auto-reconnected (on boot + on drop) by its serial.
+        //
+        // Re-arm ONLY when the card-reader location actually changes (distinctUntilChanged) — NOT on
+        // every config write. Otherwise an unrelated write (a giving edit, or disconnect()'s own
+        // "forget the reader" write) would re-emit the config flow and immediately re-enable
+        // auto-connect right after the admin tapped Disconnect, reconnecting the reader they just let go.
         viewModelScope.launch {
-            repo.config.collect { cfg ->
-                val locationId = cfg?.locationId.orEmpty()
-                if (locationId.isNotBlank()) ReaderManager.enableUsbAutoConnect(locationId)
-            }
+            repo.config
+                .map { it?.locationId.orEmpty() }
+                .distinctUntilChanged()
+                .collect { locationId ->
+                    if (locationId.isNotBlank()) {
+                        val last = repo.getLastReader()
+                        if (last != null && last.first == ReaderTransport.Bluetooth.name) {
+                            ReaderManager.enableAutoConnect(ReaderTransport.Bluetooth, last.second, locationId)
+                        } else {
+                            ReaderManager.enableAutoConnect(ReaderTransport.Usb, null, locationId)
+                        }
+                    }
+                }
         }
     }
 

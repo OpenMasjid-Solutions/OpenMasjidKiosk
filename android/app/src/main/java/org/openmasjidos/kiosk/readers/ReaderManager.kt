@@ -32,10 +32,14 @@ import com.stripe.stripeterminal.external.models.ReaderInputOptions
 import com.stripe.stripeterminal.external.models.ReaderSoftwareUpdate
 import com.stripe.stripeterminal.external.models.TerminalException
 import com.stripe.stripeterminal.log.LogLevel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.openmasjidos.kiosk.net.KioskRepository
 
@@ -89,8 +93,10 @@ object ReaderManager {
     @Volatile private var repo: KioskRepository? = null
     /** App context, kept so the auto-connect path can check its own runtime permissions. */
     @Volatile private var appContext: Context? = null
-    /** Log the "USB needs location permission" warning only once, not every retry. */
-    private var loggedUsbPermWarning = false
+    /** Log the "needs location permission" warning only once, not every retry. */
+    private var loggedPermWarning = false
+    /** Fire-and-forget scope for persisting the remembered reader (so boot can reconnect it). */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Readers from the current discovery round, kept so [connect] can resolve a serial → Reader. */
     private var lastDiscovered: List<Reader> = emptyList()
@@ -99,16 +105,19 @@ object ReaderManager {
     /** Which transport the current/last connection used — drives whether a drop auto-reconnects. */
     @Volatile private var connectedTransport: ReaderTransport? = null
 
-    // ---- USB auto-connect (no settings needed; BLE is set up manually in maintenance) ----------
-    // A USB reader is a fixed part of a wall kiosk, so it should just connect on startup and re-
-    // connect itself whenever it drops — with no one tapping anything. BLE readers, being pairable
-    // per-device, stay a manual step in the PIN-protected settings.
-    @Volatile private var autoUsbEnabled = false
+    // ---- Auto-connect: keep the kiosk's reader connected with no interaction --------------------
+    // A USB reader is plug-and-play (connect the one that's attached). A Bluetooth reader, once the
+    // admin connects it in settings, is REMEMBERED (by serial) and gets the same treatment: connect
+    // it on boot and reconnect it whenever it drops. The remembered choice is persisted so a reboot
+    // reconnects the right reader.
+    @Volatile private var autoEnabled = false
+    @Volatile private var autoTransport: ReaderTransport = ReaderTransport.Usb
+    @Volatile private var autoSerial: String? = null // Bluetooth: the specific reader to reconnect
     @Volatile private var autoLocationId = ""
     @Volatile private var autoConnecting = false // guards against double-connecting within a round
     private var autoFailures = 0                  // for reconnect backoff after repeated failures
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val usbReconnectRunnable = Runnable { tryUsbAutoConnect() }
+    private val reconnectRunnable = Runnable { tryAutoConnect() }
 
     /** Bumped on every scan start AND every cancel. A discovery round's listener/callback captures
      *  its generation and ignores late events once a newer round (or a cancel/connect) has moved on,
@@ -210,11 +219,17 @@ object ReaderManager {
                 _state.update {
                     it.copy(discovered = readers.map { r -> DiscoveredReader(r.serialNumber ?: "", labelFor(r)) })
                 }
-                // USB startup path: connect the first reader we see, once, with no interaction.
-                if (auto && !autoConnecting && readers.isNotEmpty() && autoLocationId.isNotBlank()) {
-                    autoConnecting = true
-                    repo?.log("info", "reader_auto_connect", readers.first().serialNumber ?: "")
-                    connectReaderInternal(readers.first(), autoLocationId, transport)
+                // Auto path: connect once, with no interaction. USB connects the attached reader;
+                // Bluetooth connects the remembered one (by serial) so we don't grab a stranger's.
+                if (auto && !autoConnecting && autoLocationId.isNotBlank()) {
+                    val target = autoSerial?.takeIf { it.isNotBlank() }
+                        ?.let { s -> readers.firstOrNull { it.serialNumber == s } }
+                        ?: if (transport == ReaderTransport.Usb) readers.firstOrNull() else null
+                    if (target != null) {
+                        autoConnecting = true
+                        repo?.log("info", "reader_auto_connect", target.serialNumber ?: "")
+                        connectReaderInternal(target, autoLocationId, transport)
+                    }
                 }
             }
         }
@@ -234,7 +249,7 @@ object ReaderManager {
                     if (gen != discoveryGen) return
                     repo?.log("error", "reader_scan_failed", e.errorMessage)
                     _state.update { it.copy(conn = ReaderConn.Error, error = friendly(e)) }
-                    if (auto && autoUsbEnabled) scheduleUsbReconnect(fresh = false)
+                    if (auto && autoEnabled) scheduleReconnect(fresh = false)
                 }
             },
         )
@@ -268,7 +283,8 @@ object ReaderManager {
 
     /** Connect the discovered reader with [serial] to [locationId] (Terminal readers must belong
      *  to a Location — configured in Admin → Payments and pushed to the kiosk in its config). Used
-     *  by the manual (Bluetooth) settings flow; USB connects itself (see [enableUsbAutoConnect]). */
+     *  by the manual (Bluetooth) settings flow; auto-connect uses [enableAutoConnect]. A successful
+     *  connect here is remembered so the reader auto-reconnects on boot + on drop. */
     fun connect(serial: String, locationId: String) {
         if (locationId.isBlank()) {
             _state.update { it.copy(error = "No card-reader location set. Ask an admin to finish Payments setup.") }
@@ -303,6 +319,15 @@ object ReaderManager {
                     autoConnecting = false
                     autoFailures = 0
                     repo?.log("info", "reader_connected", reader.serialNumber ?: "")
+                    // Remember this reader (real transports only, not the test reader) so it auto-
+                    // reconnects on drop and on boot — Bluetooth is tracked by serial, USB by "attached".
+                    if (transport != ReaderTransport.Simulated) {
+                        autoEnabled = true
+                        autoTransport = transport
+                        autoSerial = if (transport == ReaderTransport.Bluetooth) reader.serialNumber else null
+                        val r = repo
+                        scope.launch { runCatching { r?.saveLastReader(transport.name, reader.serialNumber) } }
+                    }
                     _state.update {
                         it.copy(conn = ReaderConn.Connected, connectedLabel = labelFor(reader), discovered = emptyList(), error = null)
                     }
@@ -312,80 +337,87 @@ object ReaderManager {
                     autoConnecting = false
                     repo?.log("error", "reader_connect_failed", e.errorMessage)
                     _state.update { it.copy(conn = ReaderConn.Error, error = friendly(e)) }
-                    // Auto path: keep trying so a USB reader eventually comes up on its own (backoff).
-                    if (autoUsbEnabled && transport == ReaderTransport.Usb) scheduleUsbReconnect(fresh = false)
+                    // Auto path: keep trying so the reader eventually comes up on its own (backoff).
+                    if (autoEnabled && transport == autoTransport) scheduleReconnect(fresh = false)
                 }
             },
         )
     }
 
     /**
-     * Turn on USB auto-connect: connect any USB reader now and re-connect it whenever it drops, with
-     * no UI. Called on startup once a card-reader [locationId] is known (Payments set up). Safe to
-     * call repeatedly — it no-ops when already connected/connecting.
+     * Turn on auto-connect for [transport] (USB = the attached reader; Bluetooth = the remembered
+     * one, by [serial]): connect it now and reconnect it whenever it drops, with no UI. Called on
+     * startup once a card-reader [locationId] is known (Payments set up). Safe to call repeatedly —
+     * it no-ops when already connected/connecting.
      */
-    fun enableUsbAutoConnect(locationId: String) {
-        val changed = autoLocationId != locationId
-        autoUsbEnabled = true
+    fun enableAutoConnect(transport: ReaderTransport, serial: String?, locationId: String) {
+        val changed = autoTransport != transport || autoSerial != serial || autoLocationId != locationId
+        autoEnabled = true
+        autoTransport = transport
+        autoSerial = serial?.takeIf { it.isNotBlank() }
         autoLocationId = locationId
-        if (changed) autoFailures = 0
-        tryUsbAutoConnect()
+        if (changed) { autoFailures = 0; loggedPermWarning = false }
+        tryAutoConnect()
     }
 
-    /** Re-attempt USB auto-connect (e.g. after the location permission was just granted). */
-    fun retryUsbAutoConnect() {
+    /** Re-attempt auto-connect (e.g. after the location/Bluetooth permission was just granted). */
+    fun retryAutoConnect() {
         autoFailures = 0
-        loggedUsbPermWarning = false
-        tryUsbAutoConnect()
+        loggedPermWarning = false
+        tryAutoConnect()
     }
 
-    /** USB discovery needs the same runtime permission as any discovery (location). Since USB has no
-     *  manual permission-request UI, the device-owner setup grants it silently; a non-owner tablet is
-     *  asked once at startup. If it's still missing we must NOT start discovery (it would fail and spin
-     *  a retry loop) — fail soft and wait to be re-armed by [retryUsbAutoConnect]. */
-    private fun hasUsbPermission(): Boolean {
+    /** Discovery needs runtime permission (location for USB; +Bluetooth on 31+). Device-owner setup
+     *  grants it silently; a non-owner tablet is asked at startup / when scanning BLE in settings. If
+     *  it's still missing we must NOT start discovery (it would fail and spin a retry loop) — fail
+     *  soft and wait to be re-armed by [retryAutoConnect]. */
+    private fun hasAutoPermission(): Boolean {
         val ctx = appContext ?: return false
-        return readerPermissions(ReaderTransport.Usb).all {
+        return readerPermissions(autoTransport).all {
             ContextCompat.checkSelfPermission(ctx, it) == PackageManager.PERMISSION_GRANTED
         }
     }
 
-    private fun tryUsbAutoConnect() {
-        if (!autoUsbEnabled || autoLocationId.isBlank()) return
+    private fun tryAutoConnect() {
+        if (!autoEnabled || autoLocationId.isBlank()) return
         if (!Terminal.isInitialized()) return
         if (Terminal.getInstance().connectedReader != null) return
         when (_state.value.conn) {
             ReaderConn.Connecting, ReaderConn.Updating, ReaderConn.Connected -> return
-            // Don't hijack a manual Bluetooth scan the admin started in settings.
-            ReaderConn.Discovering -> if (_state.value.transport != ReaderTransport.Usb) return
+            // Don't hijack a manual scan the admin started in settings for a different transport.
+            ReaderConn.Discovering -> if (_state.value.transport != autoTransport) return
             else -> Unit
         }
-        if (!hasUsbPermission()) {
+        if (!hasAutoPermission()) {
             // No permission yet → don't scan (and don't schedule a retry — that would loop forever).
-            // Re-armed by retryUsbAutoConnect() when the permission is granted, or on next config change.
-            if (!loggedUsbPermWarning) {
-                loggedUsbPermWarning = true
-                repo?.log("warn", "reader_usb_no_permission", "grant location so the USB reader can connect")
+            // Re-armed by retryAutoConnect() when the permission is granted, or on next config change.
+            if (!loggedPermWarning) {
+                loggedPermWarning = true
+                repo?.log("warn", "reader_no_permission", "grant location/Bluetooth so the reader can connect")
             }
             return
         }
-        startDiscovery(ReaderTransport.Usb, auto = true)
+        startDiscovery(autoTransport, auto = true)
     }
 
-    /** Schedule a USB reconnect. [fresh] (an unexpected drop) retries fast; repeated connect
-     *  failures back off (1.5s → capped 30s) so a wedged reader can't spin a tight loop. */
-    private fun scheduleUsbReconnect(fresh: Boolean) {
-        if (!autoUsbEnabled) return
+    /** Schedule a reconnect. [fresh] (an unexpected drop) retries fast; repeated connect failures
+     *  back off (1.5s → capped 30s) so a wedged reader can't spin a tight loop. */
+    private fun scheduleReconnect(fresh: Boolean) {
+        if (!autoEnabled) return
         autoFailures = if (fresh) 0 else (autoFailures + 1).coerceAtMost(4)
         val delay = (1_500L shl autoFailures).coerceAtMost(30_000L)
-        mainHandler.removeCallbacks(usbReconnectRunnable)
-        mainHandler.postDelayed(usbReconnectRunnable, delay)
+        mainHandler.removeCallbacks(reconnectRunnable)
+        mainHandler.postDelayed(reconnectRunnable, delay)
     }
 
     fun disconnect() {
-        // Deliberate disconnect (admin, in settings): clear the transport FIRST so the resulting
-        // onDisconnect callback doesn't treat it as a USB drop and immediately auto-reconnect.
+        // Deliberate disconnect (admin, in settings): stop auto-connect and clear the transport FIRST
+        // so the resulting onDisconnect callback doesn't treat it as a drop and immediately reconnect.
+        autoEnabled = false
+        autoSerial = null
         connectedTransport = null
+        mainHandler.removeCallbacks(reconnectRunnable)
+        scope.launch { runCatching { repo?.saveLastReader("", null) } } // forget the remembered reader
         if (!Terminal.isInitialized() || Terminal.getInstance().connectedReader == null) {
             connectedSerial = null
             _state.update { it.copy(conn = ReaderConn.NotConnected, connectedLabel = null, battery = null) }
@@ -448,11 +480,12 @@ object ReaderManager {
         override fun onDisconnect(reason: DisconnectReason) {
             repo?.log("warn", "reader_disconnected", reason.toString())
             connectedSerial = null
-            val wasUsb = connectedTransport == ReaderTransport.Usb
+            val wasAuto = connectedTransport == autoTransport
             connectedTransport = null
             _state.update { it.copy(conn = ReaderConn.NotConnected, connectedLabel = null, battery = null) }
-            // USB is a fixed kiosk fitting — repair the moment it drops (cable jiggle, power blip).
-            if (autoUsbEnabled && wasUsb) scheduleUsbReconnect(fresh = true)
+            // The reader is a fixed kiosk fitting — repair the moment it drops (cable jiggle, BT blip,
+            // power dip). Applies to whichever transport we're auto-managing (USB or the paired BLE).
+            if (autoEnabled && wasAuto) scheduleReconnect(fresh = true)
         }
 
         override fun onReaderReconnectStarted(reader: Reader, cancelReconnect: Cancelable, reason: DisconnectReason) {
@@ -466,11 +499,11 @@ object ReaderManager {
 
         override fun onReaderReconnectFailed(reader: Reader) {
             connectedSerial = null
-            val wasUsb = connectedTransport == ReaderTransport.Usb
+            val wasAuto = connectedTransport == autoTransport
             connectedTransport = null
             _state.update { it.copy(conn = ReaderConn.NotConnected, connectedLabel = null, error = "The reader disconnected. Reconnecting…") }
-            // The SDK's own auto-reconnect gave up — re-discover + reconnect ourselves (USB only).
-            if (autoUsbEnabled && wasUsb) scheduleUsbReconnect(fresh = true)
+            // The SDK's own auto-reconnect gave up — re-discover + reconnect ourselves.
+            if (autoEnabled && wasAuto) scheduleReconnect(fresh = true)
         }
 
         // During a payment the reader tells us what to show the donor ("Insert or tap card",
@@ -513,8 +546,21 @@ object ReaderManager {
         return if (serial != null) "Card reader ($serial)" else "Card reader"
     }
 
-    private fun friendly(e: TerminalException): String =
-        e.errorMessage.ifBlank { "Something went wrong with the reader. Try again." }
+    private fun friendly(e: TerminalException): String {
+        val msg = e.errorMessage
+        val low = msg.lowercase()
+        // The M2's most common Bluetooth failure — "Bluetooth unexpectedly disconnected during
+        // operation" — is almost always one of two operational causes, so guide the admin to the fix
+        // rather than showing a bare error. (Stripe: don't pair via Android Bluetooth settings; a
+        // first-connect firmware update needs ≥50% battery.)
+        if ("bluetooth" in low && ("disconnect" in low || "shutdown" in low || "unexpected" in low)) {
+            return "The Bluetooth reader dropped. Two things fix this almost every time: 1) do NOT pair " +
+                "the reader in the tablet's Bluetooth settings — if you did, tap Forget there — and connect " +
+                "it only from here; 2) charge the reader to at least 50% (its first connection may install a " +
+                "required update). Then keep it close and tap Find again."
+        }
+        return msg.ifBlank { "Something went wrong with the reader. Try again." }
+    }
 
     /** Turn an SDK ReaderDisplayMessage enum name (e.g. "INSERT_OR_SWIPE_CARD") into readable text
      *  without hard-coding the enum values (which vary by SDK version). */

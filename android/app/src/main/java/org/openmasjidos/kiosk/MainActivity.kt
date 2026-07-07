@@ -40,7 +40,7 @@ class MainActivity : ComponentActivity() {
     // granted silently; otherwise we ask once at startup and, on grant, kick the auto-connect.
     private val readerPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) ReaderManager.retryUsbAutoConnect()
+            if (granted) ReaderManager.retryAutoConnect()
         }
 
     // Result of asking to become the default Home app (so pressing Home returns straight to the
