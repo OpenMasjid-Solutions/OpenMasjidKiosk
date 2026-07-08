@@ -406,6 +406,7 @@ object ReaderManager {
     // The serial we're (re)trying to connect manually, so a retry can re-find it after a clean scan.
     @Volatile private var connectRetrySerial: String? = null
     @Volatile private var manualConnectRetries = 0
+    private const val MAX_MANUAL_CONNECT_RETRIES = 2
 
     /** Retry a manual connect the clean way: run a fresh short discovery for [serial], then connect
      *  the newly-found object (never a cached one). Used after a transient Bluetooth connect drop. */
