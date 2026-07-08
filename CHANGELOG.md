@@ -3,6 +3,17 @@
 
 # Changelog
 
+## 0.8.1
+- **Manual card entry: the real failure reason is now shown.** When a keyed payment can't even start,
+  the exact Stripe reason is written to **Devices → Logs** (`payment_create_failed`) instead of a
+  generic message. The most common cause is that **online card payments aren't switched on for your
+  Stripe account** — being set up for the in-person reader (Terminal) is separate. Enable it in the
+  Stripe Dashboard → **Settings → Payment methods → Cards**, then retry. (The keyed-payment setup was
+  also aligned to Stripe's recommended configuration.)
+- **Fix — “Exit kiosk” now actually leaves to the tablet’s normal launcher.** On a device-owner
+  tablet it hands the Home role back to the device’s own launcher; otherwise it opens Android’s
+  Home-app picker so you can switch. (Before, Home just reopened the kiosk.)
+
 ## 0.8.0
 - **Donations log + totals + CSV export (new “Donations” tab).** See every donation your kiosks have
   taken — amount, kiosk, time, one-time vs monthly, donor (if given) and status — newest first, with

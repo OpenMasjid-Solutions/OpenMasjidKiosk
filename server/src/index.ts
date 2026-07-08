@@ -670,7 +670,14 @@ async function main(): Promise<void> {
         ? await createCardPaymentIntent(acct.keys.secretKey, piInput, idempotencyKey)
         : await createCardPresentPaymentIntent(acct.keys.secretKey, piInput, idempotencyKey);
       return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, publishableKey: manual ? acct.keys.publishableKey : undefined } };
-    } catch {
+    } catch (err) {
+      // Surface the REAL Stripe reason (e.g. `payment_method_unactivated` — online Cards not enabled
+      // on the account) in Admin → Devices → Logs, not just the container log. Previously swallowed,
+      // which is why keyed-entry failures were undiagnosable.
+      const e = err as { code?: string; type?: string; message?: string };
+      const why = `${e.code ?? e.type ?? ''} ${e.message ?? ''}`.trim().slice(0, 300);
+      log.warn(`payment-intent create failed (${manual ? 'manual' : 'reader'}): ${why}`);
+      store.addLogs(d.id, [{ level: 'warn', event: 'payment_create_failed', detail: `${manual ? 'manual' : 'reader'} · ${why}` }]);
       return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
     }
   });

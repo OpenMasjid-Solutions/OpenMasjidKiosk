@@ -126,6 +126,26 @@ object KioskController {
     }
 
     /**
+     * Fully leave kiosk mode (the maintenance "Exit kiosk" button). Stops Lock Task, re-enables the
+     * status bar, and — as device owner — drops our forced-HOME so the device's OWN launcher takes
+     * over again. Returns true if we were device owner and handed the HOME role back (caller then
+     * navigates to HOME); false if not device owner (Android won't let an app change the default
+     * launcher itself, so the caller opens the Home-app picker instead). onResume won't re-lock
+     * because the caller sets its `exiting` guard.
+     */
+    fun exitKioskFully(activity: Activity): Boolean {
+        val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        if (am != null && am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
+            runCatching { activity.stopLockTask() }
+        }
+        val owner = dpmIfOwner(activity) ?: return false
+        val (dpm, admin) = owner
+        runCatching { dpm.setStatusBarDisabled(admin, false) }
+        runCatching { dpm.clearPackagePersistentPreferredActivities(admin, activity.packageName) }
+        return true
+    }
+
+    /**
      * Device owner: silently grant the reader's discovery permission (location, and Bluetooth on
      * 31+) so a USB reader auto-connects with no dialog on a locked-down kiosk. No-op if not device
      * owner — a non-owner tablet is asked for location once at startup instead (see MainActivity).

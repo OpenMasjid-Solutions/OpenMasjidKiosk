@@ -211,7 +211,10 @@ export async function createCardPaymentIntent(
     {
       amount: input.amountMinor,
       currency: input.currency.toLowerCase(),
-      payment_method_types: ['card'],
+      // Mirror the proven OpenMasjidDonations pattern: let Stripe offer the account's enabled methods
+      // (Cards, Link, …) but NEVER a redirect method — the kiosk can't handle a browser redirect, and
+      // this keeps PaymentSheet to on-device forms. (Was explicit ['card'].)
+      automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
       description: input.description || undefined,
       receipt_email: input.receiptEmail || undefined,
       metadata: input.metadata,

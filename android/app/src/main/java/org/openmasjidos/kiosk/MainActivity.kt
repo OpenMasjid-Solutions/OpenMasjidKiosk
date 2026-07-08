@@ -76,13 +76,20 @@ class MainActivity : ComponentActivity() {
                     vm = vm,
                     isDeviceOwner = deviceOwner,
                     onExitKiosk = {
-                        // Real escape hatch for a maintainer (only reachable behind a verified PIN):
-                        // let the leave-watchdog go, drop the persistent HOME + lock task, and leave.
-                        // (On a dedicated tablet with no other launcher the system may relaunch us;
-                        // documented in docs/TABLET_SETUP.md.)
+                        // Real escape hatch for a maintainer (only reachable behind a verified PIN).
+                        // Stop the leave-watchdog + Lock Task, drop our forced-HOME, then hand off to
+                        // the device's OWN launcher so we actually leave (Home no longer reopens us).
                         exiting = true
-                        KioskController.releaseHome(this)
-                        KioskController.exitKiosk(this)
+                        if (KioskController.exitKioskFully(this)) {
+                            // Device owner: our forced-HOME is cleared → send to the system launcher.
+                            runCatching {
+                                startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                        } else {
+                            // Not device owner: Android won't let an app change the default launcher,
+                            // so open the Home-app picker for the maintainer to switch it themselves.
+                            runCatching { startActivity(Intent(Settings.ACTION_HOME_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                        }
                         finishAndRemoveTask()
                     },
                     onOpenBrowser = { url ->
