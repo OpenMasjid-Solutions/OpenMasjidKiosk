@@ -3,6 +3,30 @@
 
 # Changelog
 
+## 0.9.0
+- **Multiple giving campaigns, shown as tabs.** The kiosk no longer starts on a “Tap to donate”
+  screen — it opens straight on your **main campaign’s** giving screen (amounts, one-time/monthly).
+  Add more appeals (e.g. Zakat, Building Fund) in the new **Campaigns** admin tab; each becomes its
+  own tab across the top of the kiosk, with **its own colour, background image, logo, amounts,
+  monthly option, cover-fees option and thank-you message**. The first tab is your always-shown main
+  campaign.
+- **Auto-return to the main campaign.** When a donor opens another appeal and then walks away, the
+  kiosk returns to the main campaign after 45 seconds of no touches — shown as a small, wordless
+  countdown ring. Any touch resets it, and it never interrupts a donation in progress.
+- **Per-campaign Stripe accounts.** A campaign can settle to a different Stripe account. Note: the
+  physical card reader is tied to your primary account, so a campaign pointed at a *different* account
+  is taken by **keyed (typed) card entry** rather than the reader — the admin panel says so clearly.
+- **Cover the card fee (optional).** Turn this on for a campaign and donors can choose to add the
+  estimated card fee so your masjid receives their full gift.
+- **Manual card entry, improved.** When **no reader** is connected the kiosk now automatically takes
+  cards by keyed entry; when a reader **is** connected, an admin toggle decides whether the “Enter
+  card details” button appears on the card screen.
+- **Bluetooth reader — connection hardened.** The app now fully stops scanning and binds to the
+  freshest reader before connecting (the common cause of “Bluetooth unexpectedly disconnected during
+  operation”), retries a transient drop with a clean re-scan, and logs the exact Stripe error **code**
+  to Devices → Logs so a stubborn reader is finally diagnosable.
+- Donations are now tagged by campaign in the log and CSV export.
+
 ## 0.8.2
 - **Fix — “Exit kiosk” really leaves now, even when the kiosk is the tablet’s Home app.** On a
   locked-down (device-owner) tablet the kiosk *is* the launcher, so simply going Home came straight
