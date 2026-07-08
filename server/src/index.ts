@@ -11,13 +11,16 @@
  *  donations log arrive in later slices. */
 import path from 'node:path';
 import fs from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import crypto from 'node:crypto';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
 import { z } from 'zod';
 import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
-import { Store, type Device } from './store';
+import { Store, grossUpForFees, type Device } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache } from './fabric';
 import { LoginLimiter } from './rateLimit';
@@ -62,6 +65,15 @@ async function main(): Promise<void> {
   });
 
   await app.register(fastifyCookie);
+  // Campaign images (background/cover/logo) are uploaded here. One small file per request; the
+  // 5 MiB cap is generous for a wallpaper but bounded. Registered separately from the 1 MiB JSON
+  // body limit above.
+  await app.register(fastifyMultipart, { limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 4 } });
+
+  // Uploaded images live in the data volume and are served read-only at /uploads/*.
+  const uploadsDir = path.join(config.dataDir, 'uploads');
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  await app.register(fastifyStatic, { root: uploadsDir, prefix: '/uploads/', decorateReply: false, index: false });
 
   // ── Gently upgrade insecure browser hits to HTTPS ────────────────────────────
   // The platform terminates TLS and serves us over HTTPS on a dedicated port (setting
@@ -227,6 +239,25 @@ async function main(): Promise<void> {
     }
     const local = store.getLocalStripe();
     if (stripeConfigured(local)) return { keys: local, source: 'local', id: 'local', label: 'Locally-entered keys' };
+    return null;
+  };
+
+  type ResolvedAccount = { keys: StripeKeys; source: 'fabric' | 'local'; id: string; label: string };
+  /** Resolve a SPECIFIC Stripe account (a campaign's chosen account). '' = the primary account
+   *  (resolveAccount). 'local' = the standalone-entered keys. Otherwise a Fabric-vaulted account id.
+   *  Fails closed (null) if a specific account is requested but can't be resolved — we never silently
+   *  route money to the wrong account. The secret key stays in memory only. */
+  const resolveAccountById = async (accountId: string): Promise<ResolvedAccount | null> => {
+    const id = (accountId || '').trim();
+    if (!id) return resolveAccount();
+    if (id === 'local') {
+      const local = store.getLocalStripe();
+      return stripeConfigured(local) ? { keys: local, source: 'local', id: 'local', label: 'Locally-entered keys' } : null;
+    }
+    if (ssoConfigured()) {
+      const fab = await fetchFabricStripe(id);
+      if (fab && stripeConfigured(fab)) return { keys: { publishableKey: fab.publishableKey, secretKey: fab.secretKey }, source: 'fabric', id: fab.id, label: fab.label };
+    }
     return null;
   };
 
@@ -451,6 +482,109 @@ async function main(): Promise<void> {
     return { data: { giving: store.getGiving(), currency: store.getCurrency(), masjidName: store.getMasjid().name, attractTitle: store.getAttractTitle() } };
   });
 
+  // ── Campaigns (giving appeals shown as kiosk tabs) ───────────────────────────
+  // Each campaign has its own amounts, colour, background, thank-you, monthly/cover-fees, and
+  // (optionally) its own Stripe account. Changes bump the config version → kiosks pick them up
+  // on the next heartbeat. Amounts are integer MINOR units (same as the giving API).
+  const CampaignBody = z
+    .object({
+      title: z.string().max(120).optional(),
+      description: z.string().max(1000).optional(),
+      accentColor: z.string().max(9).optional(),
+      backgroundImage: z.string().max(500).optional(),
+      coverImage: z.string().max(500).optional(),
+      logo: z.string().max(500).optional(),
+      presetsMinor: z.array(z.number().int().positive()).max(12).optional(),
+      allowCustom: z.boolean().optional(),
+      customMinMinor: z.number().int().positive().optional(),
+      customMaxMinor: z.number().int().positive().optional(),
+      monthlyEnabled: z.boolean().optional(),
+      coverFees: z.boolean().optional(),
+      thankYouMessage: z.string().max(500).optional(),
+      stripeAccountId: z.string().max(120).optional(),
+      live: z.boolean().optional(),
+    })
+    .strict();
+
+  // The Stripe accounts a campaign can settle to (for the per-campaign picker), plus which one is
+  // the primary (reader) account — a campaign on a different account is taken by keyed entry.
+  const campaignAccounts = async () => {
+    const embedded = ssoConfigured();
+    const accounts = embedded ? await fetchFabricStripeAccounts() : [];
+    const primary = await resolveAccount();
+    return { accounts, primaryAccountId: primary?.id ?? '', hasLocal: stripeConfigured(store.getLocalStripe()) };
+  };
+
+  app.get('/api/admin/campaigns', { preHandler: requireAdmin }, async () => ({
+    data: { campaigns: store.listCampaigns(), currency: store.getCurrency(), ...(await campaignAccounts()) },
+  }));
+
+  app.post('/api/admin/campaigns', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = CampaignBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check the campaign settings.' });
+    if (!parsed.data.title || !parsed.data.title.trim()) return reply.code(400).send({ error: 'Please give the campaign a title.' });
+    return { data: { campaign: store.createCampaign(parsed.data) } };
+  });
+
+  app.put('/api/admin/campaigns/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = CampaignBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check the campaign settings.' });
+    const c = store.updateCampaign((req.params as { id: string }).id, parsed.data);
+    if (!c) return reply.code(404).send({ error: 'Campaign not found.' });
+    return { data: { campaign: c } };
+  });
+
+  app.delete('/api/admin/campaigns/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const ok = store.deleteCampaign((req.params as { id: string }).id);
+    if (!ok) return reply.code(400).send({ error: 'The main campaign can’t be deleted. Make another campaign the main one first.' });
+    return { data: { ok: true } };
+  });
+
+  app.post('/api/admin/campaigns/reorder', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ ids: z.array(z.string().max(120)).max(50) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please provide the campaign order.' });
+    store.reorderCampaigns(parsed.data.ids);
+    return { data: { campaigns: store.listCampaigns() } };
+  });
+
+  app.post('/api/admin/campaigns/:id/main', { preHandler: requireAdmin }, async (req, reply) => {
+    const ok = store.setMainCampaign((req.params as { id: string }).id);
+    if (!ok) return reply.code(404).send({ error: 'Campaign not found.' });
+    return { data: { campaigns: store.listCampaigns() } };
+  });
+
+  // Upload a campaign image (background / cover / logo). Admin-only. PNG/JPG/WEBP/GIF, ≤5 MiB —
+  // NO SVG (script-injection surface). The file gets a random name (no traversal) and is served
+  // read-only from /uploads/*. Returns its URL for the campaign field.
+  const IMG_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+  app.post('/api/admin/upload', { preHandler: requireAdmin }, async (req, reply) => {
+    let data: Awaited<ReturnType<typeof req.file>>;
+    try {
+      data = await req.file();
+    } catch {
+      return reply.code(413).send({ error: 'That image is too large (max 5 MB).' });
+    }
+    if (!data) return reply.code(400).send({ error: 'Please choose an image file.' });
+    const ext = IMG_EXT[data.mimetype];
+    if (!ext) {
+      data.file.resume(); // drain so the connection doesn't hang
+      return reply.code(400).send({ error: 'Please upload a PNG, JPG, WEBP or GIF image.' });
+    }
+    const name = `img_${crypto.randomBytes(8).toString('hex')}.${ext}`;
+    const dest = path.join(uploadsDir, name);
+    try {
+      await pipeline(data.file, fs.createWriteStream(dest));
+    } catch {
+      fs.rm(dest, { force: true }, () => {});
+      return reply.code(413).send({ error: 'That image is too large (max 5 MB).' });
+    }
+    if (data.file.truncated) {
+      fs.rm(dest, { force: true }, () => {});
+      return reply.code(413).send({ error: 'That image is too large (max 5 MB).' });
+    }
+    return { data: { url: `/uploads/${name}` } };
+  });
+
   // ── Donations log, totals + CSV export ──────────────────────────────────────
   // Donations are recorded ONLY after the server verified the PaymentIntent with Stripe, so the log
   // reflects real money. Totals count succeeded donations only. Renewals of monthly subscriptions
@@ -466,13 +600,14 @@ async function main(): Promise<void> {
   // injection (donor name/email are attacker-controllable). Amounts are in major units for humans.
   // Exports the FULL history (limit -1 = no SQLite limit), not just the on-screen page.
   app.get('/api/admin/donations.csv', { preHandler: requireAdmin }, async (_req, reply) => {
-    const rows: string[][] = [['Date', 'Amount', 'Currency', 'Type', 'Status', 'Donor name', 'Donor email', 'Kiosk', 'PaymentIntent']];
+    const rows: string[][] = [['Date', 'Amount', 'Currency', 'Type', 'Campaign', 'Status', 'Donor name', 'Donor email', 'Kiosk', 'PaymentIntent']];
     for (const d of store.listDonations(-1)) {
       rows.push([
         d.createdAt,
         String(toMajor(d.amountMinor, d.currency)),
         d.currency,
         d.kind === 'monthly' ? 'Monthly' : 'One-time',
+        d.campaignTitle,
         d.status,
         d.donorName,
         d.donorEmail,
@@ -563,13 +698,13 @@ async function main(): Promise<void> {
   app.get('/api/kiosk/config', async (req, reply) => {
     const d = authDevice(req, reply);
     if (!d) return;
-    const cfg = store.getKioskConfig();
-    // When manual entry is on, include the publishable key (public) so the tablet can initialise
-    // Stripe's PaymentSheet EARLY — the card form fails if PaymentConfiguration isn't set up first.
-    if (store.getGiving().manualEntryEnabled) {
-      const acct = await resolveAccount();
-      if (acct?.keys.publishableKey) (cfg.config as Record<string, unknown>).publishableKey = acct.keys.publishableKey;
-    }
+    // Resolve the primary (reader) account once: its id decides which campaigns are reader-capable,
+    // and its publishable key lets the tablet initialise Stripe's PaymentSheet EARLY (the keyed-entry
+    // card form fails if PaymentConfiguration isn't set up first). The publishable key is public/safe;
+    // a cross-account campaign's keyed PI returns its own key and the tablet re-inits just-in-time.
+    const acct = await resolveAccount();
+    const cfg = store.getKioskConfig(acct?.id ?? '');
+    if (acct?.keys.publishableKey) (cfg.config as Record<string, unknown>).publishableKey = acct.keys.publishableKey;
     return { data: cfg };
   });
 
@@ -611,12 +746,16 @@ async function main(): Promise<void> {
 
   const PaymentIntentBody = z.object({
     amountMinor: z.number().int().positive(),
+    // Which campaign (appeal) this donation is for. Omitted/invalid → the main campaign.
+    campaignId: z.string().max(120).optional(),
     donorName: z.string().trim().max(120).optional(),
     donorEmail: z.string().trim().max(200).optional(),
     // Recurring monthly donation (sets up a Subscription from the card-present charge).
     monthly: z.boolean().optional(),
     // Keyed/manual card entry (Stripe's on-device card form) instead of the reader.
     manual: z.boolean().optional(),
+    // Donor opted to cover the estimated card fee (only honoured if the campaign allows it).
+    coverFees: z.boolean().optional(),
     // Per-attempt key so a network retry can't create a second PI (Stripe idempotency).
     idempotencyKey: z.string().trim().min(8).max(255).optional(),
   });
@@ -635,29 +774,54 @@ async function main(): Promise<void> {
     const donorEmail = (parsed.data.donorEmail ?? '').trim();
     const monthly = parsed.data.monthly === true;
     const manual = parsed.data.manual === true;
-    if (!store.isAllowedAmount(amountMinor)) return reply.code(400).send({ error: 'That amount isn’t available.' });
-    // Keyed/manual entry must be enabled by the admin (gate on the tablet AND here).
-    if (manual && !store.getGiving().manualEntryEnabled) {
-      return reply.code(400).send({ error: 'Manual card entry isn’t available right now.' });
+    // Resolve the campaign (fall back to the main campaign for an old tablet or an unknown id).
+    const campaign = (parsed.data.campaignId ? store.getCampaign(parsed.data.campaignId) : null) ?? store.getMainCampaign();
+    if (!campaign) return reply.code(400).send({ error: 'Giving isn’t set up yet.' });
+    if (!campaign.live && !campaign.isMain) return reply.code(400).send({ error: 'That appeal isn’t available.' });
+    // Amount is validated against THIS campaign's presets/custom bounds — never trust the tablet.
+    if (!store.isAllowedAmountForCampaign(campaign, amountMinor)) return reply.code(400).send({ error: 'That amount isn’t available.' });
+    // Resolve the campaign's Stripe account (its own, or the primary/reader account when unset).
+    const acct = await resolveAccountById(campaign.stripeAccountId);
+    if (!acct) return reply.code(400).send({ error: 'This appeal’s Stripe account isn’t available.' });
+    const primary = await resolveAccount();
+    const readerCapable = !campaign.stripeAccountId || (!!primary && campaign.stripeAccountId === primary.id);
+    // The physical reader is locked to the primary account, so a cross-account campaign is keyed-only.
+    if (!manual && !readerCapable) {
+      return reply.code(400).send({ error: 'This appeal is taken by keyed card entry, not the reader.' });
     }
-    // Monthly giving needs name + email (to create the Customer/Subscription and send receipts).
-    // Enforced on the tablet AND here — never trust the client. (Monthly is card-present only; the
-    // reusable card comes from the reader, so it can't be combined with keyed entry.)
+    // Monthly giving needs name + email and the card reader (the reusable card comes from a
+    // card-present charge — it can't be set up from keyed entry or a cross-account campaign).
     if (monthly) {
       if (manual) return reply.code(400).send({ error: 'Monthly giving needs the card reader.' });
-      if (!store.getGiving().monthlyEnabled) return reply.code(400).send({ error: 'Monthly giving isn’t available right now.' });
+      if (!readerCapable) return reply.code(400).send({ error: 'Monthly giving needs the card reader.' });
+      if (!campaign.monthlyEnabled) return reply.code(400).send({ error: 'Monthly giving isn’t available for this appeal.' });
       if (!donorName || !donorName.trim()) return reply.code(400).send({ error: 'Monthly giving needs a name.' });
       if (!looksLikeEmail(donorEmail)) return reply.code(400).send({ error: 'Monthly giving needs a valid email for the receipt.' });
     }
-    const acct = await resolveAccount();
-    if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     const currency = store.getCurrency();
-    const preset = store.getGiving().presetsMinor.includes(amountMinor) ? 'preset' : 'custom';
-    const metadata = { app: 'kiosk', deviceId: d.id, kind: monthly ? 'monthly' : 'one_time', entry: manual ? 'manual' : 'reader', preset, donorName: donorName ?? '', donorEmail };
+    // Cover-fees: only if the campaign offers it AND the donor opted in. The masjid nets ≈ the base;
+    // the donor pays the grossed-up total. Computed server-side (the tablet only displays it).
+    const coverFees = parsed.data.coverFees === true && campaign.coverFees;
+    const chargeMinor = coverFees ? grossUpForFees(amountMinor) : amountMinor;
+    const preset = campaign.presetsMinor.includes(amountMinor) ? 'preset' : 'custom';
+    const metadata = {
+      app: 'kiosk',
+      deviceId: d.id,
+      campaignId: campaign.id,
+      campaign: campaign.title.slice(0, 120),
+      kind: monthly ? 'monthly' : 'one_time',
+      entry: manual ? 'manual' : 'reader',
+      preset,
+      coverFees: coverFees ? '1' : '0',
+      baseMinor: String(amountMinor),
+      stripeAccountId: acct.id, // so /complete uses the SAME account this PI was created on
+      donorName: donorName ?? '',
+      donorEmail,
+    };
     const piInput = {
-      amountMinor,
+      amountMinor: chargeMinor,
       currency,
-      description: `${monthly ? 'Monthly donation' : 'Donation'} — ${store.getMasjid().name || 'OpenMasjid Kiosk'}`,
+      description: `${monthly ? 'Monthly donation' : 'Donation'} — ${campaign.title || store.getMasjid().name || 'OpenMasjid Kiosk'}`,
       receiptEmail: donorEmail || undefined, // Stripe emails a receipt on success (if enabled)
       metadata,
     };
@@ -669,7 +833,8 @@ async function main(): Promise<void> {
       const pi = manual
         ? await createCardPaymentIntent(acct.keys.secretKey, piInput, idempotencyKey)
         : await createCardPresentPaymentIntent(acct.keys.secretKey, piInput, idempotencyKey);
-      return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, publishableKey: manual ? acct.keys.publishableKey : undefined } };
+      store.rememberPiAccount(pi.id, acct.id); // so /complete verifies with the same account
+      return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, chargeMinor, coverFees, publishableKey: manual ? acct.keys.publishableKey : undefined } };
     } catch (err) {
       // Surface the REAL Stripe reason (e.g. `payment_method_unactivated` — online Cards not enabled
       // on the account) in Admin → Devices → Logs, not just the container log. Previously swallowed,
@@ -689,7 +854,9 @@ async function main(): Promise<void> {
     if (!d) return;
     const id = (req.params as { id: string }).id;
     if (!/^pi_[A-Za-z0-9_]+$/.test(id)) return reply.code(400).send({ error: 'That payment wasn’t valid.' });
-    const acct = await resolveAccount();
+    // Verify with the SAME account the PI was created on (a cross-account campaign settles elsewhere).
+    // If the mapping was lost (a restart between create and complete), fall back to the primary account.
+    const acct = await resolveAccountById(store.getPiAccount(id));
     if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     try {
       const result = await completeCardPresentPaymentIntent(acct.keys.secretKey, id);
@@ -700,17 +867,17 @@ async function main(): Promise<void> {
       // Subscription's first automatic charge is a month out (never double-charged). If the card
       // can't be reused (generated_card absent), the one-time gift still stands — we just report
       // that monthly couldn't be arranged so the tablet can say so kindly.
+      const campaignLabel = meta.campaign || store.getMasjid().name || 'OpenMasjid Kiosk';
       let monthly = { requested: wantsMonthly, created: false };
       if (result.succeeded && wantsMonthly && result.generatedCard) {
         try {
-          const masjidName = store.getMasjid().name || 'OpenMasjid Kiosk';
           const sub = await createMonthlySubscription(acct.keys.secretKey, {
             amountMinor: result.amountMinor,
             currency: result.currency,
             paymentMethod: result.generatedCard,
             name: meta.donorName || undefined,
             email: meta.donorEmail || undefined,
-            productName: `Monthly donation — ${masjidName}`,
+            productName: `Monthly donation — ${campaignLabel}`,
             deviceId: d.id,
             anchorSec: result.createdSec, // deterministic across retries (idempotency-safe)
             idempotencyKey: id,
@@ -723,6 +890,8 @@ async function main(): Promise<void> {
       store.recordDonation({
         paymentIntentId: id,
         deviceId: d.id,
+        campaignId: meta.campaignId || '',
+        campaignTitle: meta.campaign || '',
         amountMinor: result.amountMinor,
         currency: result.currency,
         kind: meta.kind || 'one_time',

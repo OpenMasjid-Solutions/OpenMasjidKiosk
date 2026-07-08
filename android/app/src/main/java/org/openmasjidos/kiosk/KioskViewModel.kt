@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.local.Diagnostics
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.local.PairingRecord
@@ -40,9 +41,13 @@ enum class Phase { Loading, Unpaired, Paired }
 /** Overlay shown on top of the attract screen in the Paired phase. */
 enum class Overlay { None, Pin, Maintenance }
 
-/** The donor-facing giving flow (Paired phase). Idle = the attract screen. Processing = the card
- *  was read and we're verifying with the server (so the tap is acknowledged immediately). */
+/** The donor-facing giving flow (Paired phase). The kiosk now boots straight into [Amount] (no
+ *  attract screen); [Idle] is retained only as a defensive default. Processing = the card was read
+ *  and we're verifying with the server (so the tap is acknowledged immediately). */
 enum class GivingStep { Idle, Amount, Details, Card, Processing, Thanks, Error }
+
+/** How long a non-main campaign tab may sit idle before the kiosk returns to the main tab. */
+const val KIOSK_AUTO_RETURN_MS = 45_000L
 
 /** Whether a requested monthly subscription was set up (drives the thank-you wording). */
 enum class MonthlyOutcome { None, Created, NotSupported }
@@ -54,11 +59,14 @@ data class ManualEntry(val piId: String, val clientSecret: String, val publishab
 /** Outcome the UI reports back after presenting the manual card form. */
 enum class ManualResult { Completed, Canceled, Failed }
 
-/** State of an in-progress donation. Amounts are integer MINOR units (validated server-side). */
+/** State of an in-progress donation. Amounts are integer MINOR units (validated server-side).
+ *  The resting state is [GivingStep.Amount] — the kiosk idles on the giving screen (no attract). */
 data class GivingState(
-    val step: GivingStep = GivingStep.Idle,
+    val step: GivingStep = GivingStep.Amount,
     val amountMinor: Long = 0L,
     val monthly: Boolean = false,
+    /** Donor opted to cover the estimated card fee (only offered when the campaign allows it). */
+    val coverFees: Boolean = false,
     val donorName: String = "",
     val donorEmail: String = "",
     val busy: Boolean = false,
@@ -108,6 +116,15 @@ data class UiState(
     // reader setup/diagnostics without a PIN, but "Exit kiosk" is gated on this.
     val exitAllowed: Boolean = false,
     val giving: GivingState = GivingState(),
+    /** The live campaigns the kiosk shows as tabs (main first). Derived from [config]. */
+    val campaigns: List<Campaign> = emptyList(),
+    /** The campaign whose giving screen is currently shown (the selected tab). */
+    val selectedCampaignId: String = "",
+    /** The resolved active campaign (selected, or the main one). */
+    val activeCampaign: Campaign? = null,
+    /** When non-null, a non-main tab is idling and will return to the main tab at this monotonic
+     *  wall-clock deadline's *start* — the UI draws a visual-only countdown ring from here + [KIOSK_AUTO_RETURN_MS]. */
+    val autoReturnStartedMs: Long? = null,
     /** When non-null, the UI should open this URL (the server's APK download) in the browser so a
      *  person can install the update, then call [KioskViewModel.consumeOpenUpdate]. */
     val openUpdateUrl: String? = null,
@@ -138,6 +155,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         val online: Boolean = false,
         val maintUnlockedViaPin: Boolean = false,
         val giving: GivingState = GivingState(),
+        /** The selected campaign tab ('' = fall back to the main campaign). */
+        val selectedCampaignId: String = "",
+        /** When a non-main tab is idling, when its return-to-main countdown started (null = off). */
+        val autoReturnStartedMs: Long? = null,
         val latestAppVersion: String = "",
         // Set when the admin (webui) or a maintainer (7-tap menu) asks this kiosk to update; the UI
         // opens the APK link in the browser to install (Android can't update an ordinary app itself).
@@ -147,6 +168,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     private val local = MutableStateFlow(Local(form = PairingForm(name = Build.MODEL ?: "Kiosk")))
 
     val ui: StateFlow<UiState> = combine(repo.pairing, repo.config, local, ReaderManager.state) { pairing, config, l, reader ->
+        // Campaigns shown as tabs (main first — the server already orders them that way).
+        val campaigns = config?.campaigns.orEmpty()
+        val active = campaigns.firstOrNull { it.id == l.selectedCampaignId } ?: config?.mainCampaign
         UiState(
             phase = if (pairing == null) Phase.Unpaired else Phase.Paired,
             config = config,
@@ -159,6 +183,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             reader = reader,
             exitAllowed = l.maintUnlockedViaPin,
             giving = l.giving,
+            campaigns = campaigns,
+            selectedCampaignId = active?.id.orEmpty(),
+            activeCampaign = active,
+            autoReturnStartedMs = l.autoReturnStartedMs,
             openUpdateUrl = if (l.openUpdatePending && pairing != null)
                 pairing.serverUrl.trimEnd('/') + "/download/openmasjidkiosk.apk" else null,
         )
@@ -272,22 +300,90 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun updateGiving(f: (GivingState) -> GivingState) = local.update { it.copy(giving = f(it.giving)) }
 
-    /** Donor tapped "Tap to donate" on the attract screen. */
-    fun beginGiving() = updateGiving { GivingState(step = GivingStep.Amount) }
+    private var autoReturnJob: Job? = null
 
-    /** Return to the attract screen; also cancels any in-progress card collection. */
+    /** The active campaign (the selected tab, or the main campaign). */
+    private fun activeCampaign(): Campaign? {
+        val cfg = ui.value.config ?: return null
+        return cfg.campaignById(local.value.selectedCampaignId) ?: cfg.mainCampaign
+    }
+
+    /** Download a campaign background/logo (cached). Returns null → the UI uses the default look. */
+    suspend fun image(url: String) = repo.image(url)
+
+    /** Switch to a campaign tab: reset the flow to a fresh amount screen for that campaign and
+     *  (re)arm the return-to-main countdown when it's not the main tab. */
+    fun selectCampaign(id: String) {
+        if (id == local.value.selectedCampaignId && local.value.giving.step == GivingStep.Amount) {
+            onUserActivity(); return
+        }
+        givingJob?.cancel()
+        PaymentController.cancelCollect()
+        ReaderManager.clearPrompt()
+        local.update { it.copy(selectedCampaignId = id, giving = GivingState()) }
+        rescheduleAutoReturn()
+    }
+
+    /** Any donor touch on a non-main tab resets its return-to-main countdown. */
+    fun onUserActivity() {
+        if (local.value.giving.step == GivingStep.Amount) rescheduleAutoReturn()
+    }
+
+    /** Return the giving flow to the resting amount screen (after cancel / thank-you / error). */
+    private fun resetGiving() {
+        updateGiving { GivingState() }
+        rescheduleAutoReturn()
+    }
+
+    /** Cancel the flow and go back to the amount screen. */
     fun cancelGiving() {
         givingJob?.cancel()
         PaymentController.cancelCollect()
         ReaderManager.clearPrompt()
-        updateGiving { GivingState() }
+        resetGiving()
+    }
+
+    /** Arm/re-arm the "return to the main campaign after inactivity" timer — only on a non-main tab
+     *  while idling on the amount screen. Starting a donation or selecting the main tab cancels it. */
+    private fun rescheduleAutoReturn() {
+        autoReturnJob?.cancel()
+        val active = activeCampaign()
+        val onNonMain = active != null && !active.isMain
+        val idling = local.value.giving.step == GivingStep.Amount
+        if (!onNonMain || !idling) {
+            if (local.value.autoReturnStartedMs != null) local.update { it.copy(autoReturnStartedMs = null) }
+            return
+        }
+        local.update { it.copy(autoReturnStartedMs = System.currentTimeMillis()) }
+        autoReturnJob = viewModelScope.launch {
+            delay(KIOSK_AUTO_RETURN_MS)
+            val main = ui.value.config?.mainCampaign
+            // Only return if we're still idling on the same non-main tab (no donation started meanwhile).
+            if (main != null && local.value.selectedCampaignId != main.id && local.value.giving.step == GivingStep.Amount) {
+                selectCampaign(main.id)
+            }
+        }
+    }
+
+    private fun cancelAutoReturn() {
+        autoReturnJob?.cancel()
+        if (local.value.autoReturnStartedMs != null) local.update { it.copy(autoReturnStartedMs = null) }
     }
 
     fun setDonorName(v: String) = updateGiving { it.copy(donorName = v.take(120)) }
     fun setDonorEmail(v: String) = updateGiving { it.copy(donorEmail = v.take(200)) }
 
-    /** Choose one-time vs monthly on the amount screen (only when the admin enabled monthly). */
-    fun setMonthly(monthly: Boolean) = updateGiving { it.copy(monthly = monthly, error = null) }
+    /** Choose one-time vs monthly on the amount screen (only when the campaign enabled monthly). */
+    fun setMonthly(monthly: Boolean) {
+        onUserActivity()
+        updateGiving { it.copy(monthly = monthly, error = null) }
+    }
+
+    /** Toggle covering the estimated card fee (only offered when the campaign allows it). */
+    fun setCoverFees(v: Boolean) {
+        onUserActivity()
+        updateGiving { it.copy(coverFees = v) }
+    }
 
     /** Pick an amount (minor units). Goes to the details step when the admin asks for name/email —
      *  or always for monthly (which requires name + email) — otherwise straight to the card. */
@@ -296,6 +392,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         val cfg = ui.value.config
         val monthly = local.value.giving.monthly
         val wantsDetails = monthly || (cfg?.namePolicy ?: "off") != "off" || (cfg?.emailPolicy ?: "off") != "off"
+        cancelAutoReturn() // a donation is starting — don't yank the donor back to the main tab
         updateGiving { it.copy(amountMinor = amountMinor, error = null, step = if (wantsDetails) GivingStep.Details else GivingStep.Card) }
         if (!wantsDetails) startCollect()
     }
@@ -320,21 +417,35 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** From the error screen, try the same amount again. */
-    fun retryGiving() = updateGiving { GivingState(step = GivingStep.Amount) }
+    /** From the error screen, try again (back to the amount screen for this campaign). */
+    fun retryGiving() = resetGiving()
 
     private fun startCollect() {
         val g = local.value.giving
-        if (ui.value.reader.conn != ReaderConn.Connected) {
-            // No reader connected: if the admin enabled manual entry, take the card by typing it
-            // (Stripe's on-device form) instead of failing. Otherwise tell a volunteer.
-            if (ui.value.config?.manualEntryEnabled == true) {
-                startManualCollect()
-            } else {
-                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "The card reader isn’t connected. Please tell a volunteer.") }
-            }
+        val campaign = activeCampaign()
+        if (campaign == null) {
+            updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Giving isn’t set up yet.") }
             return
         }
+        val readerConnected = ui.value.reader.conn == ReaderConn.Connected
+        if (g.monthly) {
+            // Monthly needs the reader — the reusable card comes from a card-present charge, so it
+            // can't be set up by keyed entry or on a cross-account campaign.
+            if (!campaign.readerCapable || !readerConnected) {
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Monthly giving needs the card reader. Please give a one-time gift, or ask a volunteer.") }
+                return
+            }
+            startReaderCollect(campaign)
+            return
+        }
+        // Keyed entry when the campaign can't use the reader (a different Stripe account) OR no reader
+        // is connected; otherwise collect on the reader (the keyed button is a fallback on the card step).
+        if (!campaign.readerCapable || !readerConnected) startManualCollect() else startReaderCollect(campaign)
+    }
+
+    /** Collect on the M2 reader (card-present), verify server-side, record, thank the donor. */
+    private fun startReaderCollect(campaign: Campaign) {
+        val g = local.value.giving
         updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null) }
         givingJob?.cancel()
         val monthly = g.monthly
@@ -343,8 +454,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val name = g.donorName.trim().ifBlank { null }
             val email = g.donorEmail.trim().ifBlank { null }
             val idem = UUID.randomUUID().toString()
-            repo.log("info", "donation_started", "${g.amountMinor} minor · $kind")
-            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, name, email, monthly, manual = false, idem) }.getOrNull()
+            repo.log("info", "donation_started", "${g.amountMinor} minor · $kind · ${campaign.title}")
+            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, campaign.id, name, email, monthly, manual = false, coverFees = g.coverFees, idem) }.getOrNull()
             if (pi == null) {
                 repo.log("warn", "donation_create_failed", "$kind")
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start the payment. Please try again.") }
@@ -372,7 +483,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 updateGiving { it.copy(step = GivingStep.Thanks, busy = false, monthlyOutcome = outcome) }
                 viewModelScope.launch {
                     delay(THANKS_MS)
-                    if (local.value.giving.step == GivingStep.Thanks) updateGiving { GivingState() }
+                    if (local.value.giving.step == GivingStep.Thanks) resetGiving()
                 }
             } else {
                 repo.log("warn", "donation_not_succeeded", "$kind · status=${result?.status ?: "unknown"}")
@@ -386,6 +497,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
      *  PaymentIntent, then hands its client secret to the UI (KioskRoot) to present PaymentSheet. */
     private fun startManualCollect() {
         val g = local.value.giving
+        val campaign = activeCampaign()
         updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null, manual = null) }
         givingJob?.cancel()
         PaymentController.cancelCollect()
@@ -394,8 +506,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val name = g.donorName.trim().ifBlank { null }
             val email = g.donorEmail.trim().ifBlank { null }
             val idem = UUID.randomUUID().toString()
-            repo.log("info", "donation_started", "${g.amountMinor} minor · manual")
-            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, name, email, monthly = false, manual = true, idem) }.getOrNull()
+            repo.log("info", "donation_started", "${g.amountMinor} minor · manual · ${campaign?.title ?: ""}")
+            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, campaign?.id, name, email, monthly = false, manual = true, coverFees = g.coverFees, idem) }.getOrNull()
             if (pi == null || pi.clientSecret.isBlank() || pi.publishableKey.isNullOrBlank()) {
                 repo.log("warn", "donation_create_failed", "manual")
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start card entry. Please try again.") }
@@ -406,10 +518,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** From the Card step (with a reader connected) the donor chose to type their card instead. */
-    fun enterManually() {
-        if (ui.value.config?.manualEntryEnabled == true) startManualCollect()
-    }
+    /** From the Card step (with a reader connected) the donor chose to type their card instead. The
+     *  button is only shown when manual entry is enabled, so this just starts the keyed flow. */
+    fun enterManually() = startManualCollect()
 
     /** The UI finished presenting the manual card form — verify with Stripe + record, or handle a
      *  cancel/failure. Never trusts the sheet's word: a donation is recorded only after /complete. */
@@ -417,7 +528,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         val m = local.value.giving.manual ?: return
         updateGiving { it.copy(manual = null) }
         when (result) {
-            ManualResult.Canceled -> updateGiving { GivingState(step = GivingStep.Amount) }
+            ManualResult.Canceled -> resetGiving()
             ManualResult.Failed -> {
                 // Log the actual Stripe/PaymentSheet reason (Devices → Logs) so failures are diagnosable.
                 repo.log("warn", "donation_manual_failed", detail?.takeIf { it.isNotBlank() } ?: m.piId)
@@ -431,7 +542,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                     if (res?.succeeded == true) {
                         repo.log("info", "donation_succeeded", "${res.amountMinor} ${res.currency} · manual")
                         updateGiving { it.copy(step = GivingStep.Thanks, busy = false, monthlyOutcome = MonthlyOutcome.None) }
-                        viewModelScope.launch { delay(THANKS_MS); if (local.value.giving.step == GivingStep.Thanks) updateGiving { GivingState() } }
+                        viewModelScope.launch { delay(THANKS_MS); if (local.value.giving.step == GivingStep.Thanks) resetGiving() }
                     } else {
                         repo.log("warn", "donation_not_succeeded", "manual · status=${res?.status ?: "unknown"}")
                         updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t complete. If your card was charged it will be refunded.") }

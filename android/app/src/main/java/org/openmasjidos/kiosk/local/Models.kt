@@ -24,28 +24,60 @@ data class PairingRecord(
 )
 
 /**
- * The versioned config pushed by the server (`GET /api/kiosk/config`). Later slices add
- * amounts, messages, wallpaper, accent, etc.; slice 4 only needs what unlock + attract use.
+ * One giving campaign (an "appeal") the kiosk shows as a browser-style tab. Each has its own
+ * amounts, colour, background, thank-you and monthly/cover-fees options — designed in the admin
+ * panel. Exactly one is the [isMain] campaign (the always-present first tab the kiosk idles on).
+ *
+ * [readerCapable] is computed by the server: false means this campaign settles to a DIFFERENT
+ * Stripe account than the reader is bound to, so it must be taken by keyed (typed) card entry.
+ */
+data class Campaign(
+    val id: String,
+    val title: String,
+    val description: String = "",
+    /** '#rrggbb' or '' to inherit the kiosk default accent. */
+    val accentColor: String = "",
+    /** Full-screen background image URL ('/uploads/…' or 'https://…') or '' for the default scene. */
+    val backgroundImage: String = "",
+    val coverImage: String = "",
+    val logo: String = "",
+    val presetsMinor: List<Long> = emptyList(),
+    val allowCustom: Boolean = true,
+    val customMinMinor: Long = 100,
+    val customMaxMinor: Long = 1_000_000,
+    val monthlyEnabled: Boolean = false,
+    val coverFees: Boolean = false,
+    /** '' inherits the global default thank-you. */
+    val thankYouMessage: String = "",
+    val isMain: Boolean = false,
+    val readerCapable: Boolean = true,
+)
+
+/**
+ * The versioned config pushed by the server (`GET /api/kiosk/config`): the exit PIN, currency,
+ * Terminal location, masjid name, the GLOBAL giving policy (manual entry, name/email prompts, the
+ * cover-fee estimate), and the ordered list of [campaigns] the kiosk shows as tabs (main first).
  */
 data class KioskConfig(
     val version: Int,
     val pinHash: String,          // scrypt hash string; verified OFFLINE (see ScryptPin)
     val currency: String,
     val locationId: String,
-    val attractTitle: String?,
     val masjidName: String?,
-    // ── Giving screen (slice 6) ──
-    val presetsMinor: List<Long> = emptyList(),
-    val allowCustom: Boolean = true,
-    val customMinMinor: Long = 100,
-    val customMaxMinor: Long = 1_000_000,
-    val monthlyEnabled: Boolean = false, // slice 7
     val manualEntryEnabled: Boolean = false, // keyed card entry via Stripe's on-device form
     val publishableKey: String = "",     // Stripe publishable key (public), for the manual card sheet
     val namePolicy: String = "optional", // off | optional | required
     val emailPolicy: String = "optional",
-    val thankYouMessage: String = "",
-)
+    val feeBps: Int = 290,               // cover-fees estimate: 2.9%
+    val feeFixedMinor: Long = 30,        //                    + a small fixed fee
+    val mainCampaignId: String = "",
+    val campaigns: List<Campaign> = emptyList(),
+) {
+    /** The main campaign (first tab) — or the first campaign, or null if none synced yet. */
+    val mainCampaign: Campaign? get() = campaigns.firstOrNull { it.isMain } ?: campaigns.firstOrNull()
+
+    fun campaignById(id: String?): Campaign? = id?.let { cid -> campaigns.firstOrNull { it.id == cid } }
+}
 
 /** A snapshot of device health sent on each heartbeat and shown on the maintenance screen. */
 data class Diagnostics(

@@ -247,7 +247,7 @@ object ReaderManager {
                 }
                 override fun onFailure(e: TerminalException) {
                     if (gen != discoveryGen) return
-                    repo?.log("error", "reader_scan_failed", e.errorMessage)
+                    repo?.log("error", "reader_scan_failed", "${e.errorCode} · ${e.errorMessage}")
                     _state.update { it.copy(conn = ReaderConn.Error, error = friendly(e)) }
                     if (auto && autoEnabled) scheduleReconnect(fresh = false)
                 }
@@ -276,6 +276,34 @@ object ReaderManager {
         discoveryCancelable = null
     }
 
+    /** Cancel any in-flight discovery and invoke [onDone] only AFTER it has actually stopped (plus a
+     *  small settle delay so the BLE stack is quiet), with a hard fallback so we never hang. Used
+     *  before connect — connecting while a scan is still tearing down drops the reader. */
+    private fun cancelDiscoveryThen(onDone: () -> Unit) {
+        discoveryGen++ // invalidate any in-flight round's listener/callback
+        val c = discoveryCancelable
+        discoveryCancelable = null
+        var done = false
+        val finish = {
+            if (!done) {
+                done = true
+                onDone()
+            }
+        }
+        if (c == null || c.isCompleted) {
+            mainHandler.postDelayed({ finish() }, 250)
+            return
+        }
+        runCatching {
+            c.cancel(object : Callback {
+                override fun onSuccess() { mainHandler.postDelayed({ finish() }, 250) }
+                override fun onFailure(e: TerminalException) { mainHandler.postDelayed({ finish() }, 250) }
+            })
+        }.onFailure { mainHandler.postDelayed({ finish() }, 250) }
+        // Hard fallback: proceed even if the cancel callback never fires.
+        mainHandler.postDelayed({ finish() }, 1_500)
+    }
+
     /** Surface a message on the reader card (used by the UI when a permission is denied). */
     fun reportError(message: String) = _state.update { it.copy(error = message) }
 
@@ -295,14 +323,29 @@ object ReaderManager {
             _state.update { it.copy(error = "That reader is no longer nearby. Scan again.") }
             return
         }
-        connectReaderInternal(reader, locationId, _state.value.transport)
+        connectReaderInternal(reader, locationId, _state.value.transport, manual = true)
     }
 
-    /** Shared connect: used by the manual picker and the USB auto-connect path. */
-    private fun connectReaderInternal(reader: Reader, locationId: String, transport: ReaderTransport) {
-        cancelDiscovery()
+    /** Shared connect: used by the manual picker and the USB/BLE auto-connect path.
+     *
+     *  IMPORTANT: we FULLY STOP discovery and wait for it to finish BEFORE calling connectReader.
+     *  Connecting to the M2 while a BLE scan is still tearing down is the textbook trigger for
+     *  "Bluetooth unexpectedly disconnected during operation" (Stripe issue #83/#348), and it's
+     *  deterministic because the old code cancelled fire-and-forget and connected on the next line.
+     *  We also re-bind to the FRESHEST discovered object for this serial (Stripe: never connect a
+     *  stale reader object). */
+    private fun connectReaderInternal(reader: Reader, locationId: String, transport: ReaderTransport, manual: Boolean = false) {
         repo?.log("info", "reader_connect_start", reader.serialNumber ?: "")
         _state.update { it.copy(conn = ReaderConn.Connecting, error = null) }
+        val targetSerial = reader.serialNumber
+        cancelDiscoveryThen {
+            // Re-resolve to the newest object for this serial (discovery may have re-reported it).
+            val fresh = targetSerial?.let { s -> lastDiscovered.firstOrNull { it.serialNumber == s } } ?: reader
+            doConnectReader(fresh, locationId, transport, manual)
+        }
+    }
+
+    private fun doConnectReader(reader: Reader, locationId: String, transport: ReaderTransport, manual: Boolean) {
         // SDK 5.6.0 names the reader-listener param per transport (both take a MobileReaderListener).
         val config = if (transport == ReaderTransport.Usb) {
             UsbConnectionConfiguration(locationId, autoReconnectOnUnexpectedDisconnect = true, usbReaderListener = readerListener)
@@ -318,6 +361,7 @@ object ReaderManager {
                     connectedTransport = transport
                     autoConnecting = false
                     autoFailures = 0
+                    manualConnectRetries = 0
                     repo?.log("info", "reader_connected", reader.serialNumber ?: "")
                     // Remember this reader (real transports only, not the test reader) so it auto-
                     // reconnects on drop and on boot — Bluetooth is tracked by serial, USB by "attached".
@@ -325,6 +369,7 @@ object ReaderManager {
                         autoEnabled = true
                         autoTransport = transport
                         autoSerial = if (transport == ReaderTransport.Bluetooth) reader.serialNumber else null
+                        autoLocationId = locationId
                         val r = repo
                         scope.launch { runCatching { r?.saveLastReader(transport.name, reader.serialNumber) } }
                     }
@@ -335,13 +380,79 @@ object ReaderManager {
 
                 override fun onFailure(e: TerminalException) {
                     autoConnecting = false
-                    repo?.log("error", "reader_connect_failed", e.errorMessage)
+                    // Log the errorCode too (not just the message) so a BLUETOOTH_DISCONNECTED can be
+                    // told apart from an update/location/permission failure in Devices → Logs.
+                    repo?.log("error", "reader_connect_failed", "${e.errorCode} · ${e.errorMessage}")
+                    // A first connect that drops with a transient Bluetooth error usually succeeds on a
+                    // clean retry (fresh discovery, no stale object). Retry a couple of times before
+                    // surfacing the error + operational guidance to the admin.
+                    if (manual && isRetriableConnectError(e) && manualConnectRetries < MAX_MANUAL_CONNECT_RETRIES) {
+                        manualConnectRetries++
+                        repo?.log("warn", "reader_connect_retry", "attempt $manualConnectRetries")
+                        _state.update { it.copy(conn = ReaderConn.Discovering, error = null) }
+                        val serial = connectRetrySerial ?: reader.serialNumber
+                        mainHandler.postDelayed({ rediscoverAndConnect(serial, locationId, transport) }, 2_000L * manualConnectRetries)
+                        return
+                    }
+                    manualConnectRetries = 0
                     _state.update { it.copy(conn = ReaderConn.Error, error = friendly(e)) }
                     // Auto path: keep trying so the reader eventually comes up on its own (backoff).
                     if (autoEnabled && transport == autoTransport) scheduleReconnect(fresh = false)
                 }
             },
         )
+    }
+
+    // The serial we're (re)trying to connect manually, so a retry can re-find it after a clean scan.
+    @Volatile private var connectRetrySerial: String? = null
+    @Volatile private var manualConnectRetries = 0
+
+    /** Retry a manual connect the clean way: run a fresh short discovery for [serial], then connect
+     *  the newly-found object (never a cached one). Used after a transient Bluetooth connect drop. */
+    private fun rediscoverAndConnect(serial: String?, locationId: String, transport: ReaderTransport) {
+        if (serial.isNullOrBlank() || !Terminal.isInitialized()) {
+            _state.update { it.copy(conn = ReaderConn.Error, error = "Couldn’t reach the reader. Scan again.") }
+            return
+        }
+        if (Terminal.getInstance().connectedReader != null) return
+        connectRetrySerial = serial
+        cancelDiscoveryThen {
+            val gen = ++discoveryGen
+            _state.update { it.copy(conn = ReaderConn.Discovering, error = null) }
+            val config = if (transport == ReaderTransport.Usb) UsbDiscoveryConfiguration(12, isSimulated = false)
+            else BluetoothDiscoveryConfiguration(12, isSimulated = false)
+            var connecting = false
+            val listener = object : DiscoveryListener {
+                override fun onUpdateDiscoveredReaders(readers: List<Reader>) {
+                    if (gen != discoveryGen) return
+                    lastDiscovered = readers
+                    val target = readers.firstOrNull { it.serialNumber == serial }
+                    if (target != null && !connecting) {
+                        connecting = true
+                        connectReaderInternal(target, locationId, transport, manual = true)
+                    }
+                }
+            }
+            discoveryCancelable = Terminal.getInstance().discoverReaders(config, listener, object : Callback {
+                override fun onSuccess() {
+                    if (gen == discoveryGen && !connecting && _state.value.conn == ReaderConn.Discovering) {
+                        _state.update { it.copy(conn = ReaderConn.Error, error = "The reader didn’t answer. Move it closer, make sure it’s on, and try again.") }
+                    }
+                }
+                override fun onFailure(e: TerminalException) {
+                    if (gen != discoveryGen) return
+                    repo?.log("error", "reader_scan_failed", "${e.errorCode} · ${e.errorMessage}")
+                    _state.update { it.copy(conn = ReaderConn.Error, error = friendly(e)) }
+                }
+            })
+        }
+    }
+
+    /** A connect drop we should retry cleanly (a transient Bluetooth teardown), vs a hard error we
+     *  should surface (auth, location off, permission). */
+    private fun isRetriableConnectError(e: TerminalException): Boolean {
+        val s = "${e.errorCode} ${e.errorMessage}".lowercase()
+        return "bluetooth" in s || "disconnect" in s || "unexpected" in s || "timeout" in s || "timed out" in s
     }
 
     /**

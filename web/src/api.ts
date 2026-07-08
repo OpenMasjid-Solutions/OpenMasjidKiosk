@@ -294,6 +294,101 @@ export const getGiving = () => request<GivingSettings>('/api/admin/giving');
 export const saveGiving = (body: GivingPatch) =>
   request<GivingSettings>('/api/admin/giving', { method: 'PUT', body: JSON.stringify(body) });
 
+// ── Campaigns (giving appeals shown as kiosk tabs) ────────────────────────────────
+// Each appeal is its own giving screen: its amounts, colour, images, thank-you, monthly /
+// cover-fees, and (optionally) its own Stripe account. The MAIN campaign is always shown on
+// the kiosk (even when `live` is off) and can't be deleted. Amounts are integer MINOR units.
+export interface Campaign {
+  id: string;
+  title: string;
+  description: string;
+  /** '#rrggbb', or '' to inherit the default accent. */
+  accentColor: string;
+  /** '/uploads/…' | 'https://…' | '' — this tab's full-screen background. */
+  backgroundImage: string;
+  coverImage: string;
+  logo: string;
+  presetsMinor: number[];
+  allowCustom: boolean;
+  customMinMinor: number;
+  customMaxMinor: number;
+  monthlyEnabled: boolean;
+  coverFees: boolean;
+  /** '' inherits the global default thank-you. */
+  thankYouMessage: string;
+  /** '' = the primary (reader) Stripe account. */
+  stripeAccountId: string;
+  live: boolean;
+  isMain: boolean;
+  sortOrder: number;
+  createdAt: string;
+}
+
+/** The editable subset sent when creating/updating a campaign (title required on create). */
+export type CampaignPatch = Partial<
+  Pick<
+    Campaign,
+    | 'title'
+    | 'description'
+    | 'accentColor'
+    | 'backgroundImage'
+    | 'coverImage'
+    | 'logo'
+    | 'presetsMinor'
+    | 'allowCustom'
+    | 'customMinMinor'
+    | 'customMaxMinor'
+    | 'monthlyEnabled'
+    | 'coverFees'
+    | 'thankYouMessage'
+    | 'stripeAccountId'
+    | 'live'
+  >
+>;
+
+/** Everything the Campaigns editor renders from: the campaigns (already sorted main first), the
+ *  currency, and the Stripe accounts a campaign can settle to (empty when standalone). */
+export interface CampaignsData {
+  campaigns: Campaign[];
+  currency: string;
+  accounts: StripeAccountRef[];
+  /** The reader (primary) account id; a campaign on a different account is keyed-entry only. */
+  primaryAccountId: string;
+  /** A Stripe account is configured on this device (the standalone fallback). */
+  hasLocal: boolean;
+}
+
+export const getCampaigns = () => request<CampaignsData>('/api/admin/campaigns');
+
+export const createCampaign = (patch: CampaignPatch) =>
+  request<{ campaign: Campaign }>('/api/admin/campaigns', { method: 'POST', body: JSON.stringify(patch) });
+
+export const updateCampaign = (id: string, patch: CampaignPatch) =>
+  request<{ campaign: Campaign }>(`/api/admin/campaigns/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(patch) });
+
+export const deleteCampaign = (id: string) =>
+  request<{ ok: true }>(`/api/admin/campaigns/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+export const reorderCampaigns = (ids: string[]) =>
+  request<{ campaigns: Campaign[] }>('/api/admin/campaigns/reorder', { method: 'POST', body: JSON.stringify({ ids }) });
+
+export const setMainCampaign = (id: string) =>
+  request<{ campaigns: Campaign[] }>(`/api/admin/campaigns/${encodeURIComponent(id)}/main`, { method: 'POST' });
+
+/** Upload ONE image (background / cover / logo) and get back its '/uploads/…' URL. Uses fetch +
+ *  FormData (the server wants multipart, not JSON) and unwraps { data: { url } }, throwing the
+ *  friendly { error } on failure (too big, wrong type, or an expired session). */
+export async function uploadImage(file: File): Promise<string> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(withBase('/api/admin/upload'), { method: 'POST', body: form });
+  const body = (await res.json().catch(() => ({}))) as { data?: { url: string }; error?: string };
+  if (!res.ok || body.error || !body.data) {
+    throw new Error(body.error || 'That image couldn’t be uploaded — please try another.');
+  }
+  return body.data.url;
+}
+
 // ── Donations log + totals + CSV ────────────────────────────────────────────────
 /** A recorded donation (recorded only after the server verified it with Stripe). Amounts are
  *  integer MINOR units; `createdAt` is ISO; `deviceName` is '' if that kiosk was removed. */

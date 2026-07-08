@@ -20,8 +20,15 @@ class ApiException(val status: Int, message: String) : IOException(message)
 data class PairResponse(val deviceToken: String, val deviceId: String, val configVersion: Int)
 
 /** Parsed result of `POST /api/kiosk/payment-intents`. [publishableKey] is present only for a manual
- *  (keyed) intent — the tablet needs it to drive Stripe's on-device card form. */
-data class CreatedPaymentIntent(val id: String, val clientSecret: String, val publishableKey: String? = null)
+ *  (keyed) intent — the tablet needs it to drive Stripe's on-device card form. [chargeMinor] is what
+ *  will actually be charged (base + any cover-fee, computed server-side). */
+data class CreatedPaymentIntent(
+    val id: String,
+    val clientSecret: String,
+    val publishableKey: String? = null,
+    val chargeMinor: Long = 0L,
+    val coverFees: Boolean = false,
+)
 
 /** Parsed result of `POST /api/kiosk/payment-intents/{id}/complete` (server-verified).
  *  [monthlyRequested]/[monthlyCreated] tell the tablet whether an ongoing monthly subscription was
@@ -105,27 +112,41 @@ class KioskApi(private val client: OkHttpClient) {
         val json = get(baseUrl, "/api/kiosk/config", token)
         val version = json.optInt("version", 0)
         val cfg = json.optJSONObject("config") ?: JSONObject()
-        val presetsArr = cfg.optJSONArray("presetsMinor")
-        val presets = buildList {
-            if (presetsArr != null) for (i in 0 until presetsArr.length()) add(presetsArr.optLong(i))
+        var campaigns = CampaignJson.parseList(cfg.optJSONArray("campaigns"))
+        // Backward-compat: an older server that still sends a single flat giving screen (no
+        // `campaigns`) → synthesise one main campaign so the tablet still works.
+        if (campaigns.isEmpty() && cfg.has("presetsMinor")) {
+            val presetsArr = cfg.optJSONArray("presetsMinor")
+            val presets = buildList { if (presetsArr != null) for (i in 0 until presetsArr.length()) add(presetsArr.optLong(i)) }
+            campaigns = listOf(
+                Campaign(
+                    id = "main",
+                    title = cfg.optString("masjidName", "").ifBlank { "General Fund" },
+                    presetsMinor = presets,
+                    allowCustom = cfg.optBoolean("allowCustom", true),
+                    customMinMinor = cfg.optLong("customMinMinor", 100),
+                    customMaxMinor = cfg.optLong("customMaxMinor", 1_000_000),
+                    monthlyEnabled = cfg.optBoolean("monthlyEnabled", false),
+                    thankYouMessage = cfg.optString("thankYouMessage", ""),
+                    isMain = true,
+                    readerCapable = true,
+                ),
+            )
         }
         return KioskConfig(
             version = version,
             pinHash = cfg.optString("pinHash", ""),
             currency = cfg.optString("currency", ""),
             locationId = cfg.optString("locationId", ""),
-            attractTitle = cfg.optString("attractTitle", "").takeIf { it.isNotBlank() },
             masjidName = cfg.optString("masjidName", "").takeIf { it.isNotBlank() },
-            presetsMinor = presets,
-            allowCustom = cfg.optBoolean("allowCustom", true),
-            customMinMinor = cfg.optLong("customMinMinor", 100),
-            customMaxMinor = cfg.optLong("customMaxMinor", 1_000_000),
-            monthlyEnabled = cfg.optBoolean("monthlyEnabled", false),
             manualEntryEnabled = cfg.optBoolean("manualEntryEnabled", false),
             publishableKey = cfg.optString("publishableKey", ""),
             namePolicy = cfg.optString("namePolicy", "optional"),
             emailPolicy = cfg.optString("emailPolicy", "optional"),
-            thankYouMessage = cfg.optString("thankYouMessage", ""),
+            feeBps = cfg.optInt("feeBps", 290),
+            feeFixedMinor = cfg.optLong("feeFixedMinor", 30),
+            mainCampaignId = cfg.optString("mainCampaignId", ""),
+            campaigns = campaigns,
         )
     }
 
@@ -142,17 +163,21 @@ class KioskApi(private val client: OkHttpClient) {
         baseUrl: String,
         token: String,
         amountMinor: Long,
+        campaignId: String?,
         donorName: String?,
         donorEmail: String?,
         monthly: Boolean,
         manual: Boolean,
+        coverFees: Boolean,
         idempotencyKey: String,
     ): CreatedPaymentIntent {
         val body = JSONObject()
             .put("amountMinor", amountMinor)
             .put("monthly", monthly)
             .put("manual", manual)
+            .put("coverFees", coverFees)
             .put("idempotencyKey", idempotencyKey)
+        if (!campaignId.isNullOrBlank()) body.put("campaignId", campaignId)
         if (!donorName.isNullOrBlank()) body.put("donorName", donorName)
         if (!donorEmail.isNullOrBlank()) body.put("donorEmail", donorEmail)
         val json = post(baseUrl, "/api/kiosk/payment-intents", body, token)
@@ -160,6 +185,8 @@ class KioskApi(private val client: OkHttpClient) {
             json.getString("paymentIntentId"),
             json.getString("clientSecret"),
             json.optString("publishableKey", "").takeIf { it.isNotBlank() },
+            json.optLong("chargeMinor", amountMinor),
+            json.optBoolean("coverFees", false),
         )
     }
 

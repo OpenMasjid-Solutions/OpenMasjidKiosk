@@ -49,21 +49,18 @@ class DeviceStore(private val context: Context) {
         val CFG_PIN_HASH = stringPreferencesKey("cfg_pin_hash")
         val CFG_CURRENCY = stringPreferencesKey("cfg_currency")
         val CFG_LOCATION_ID = stringPreferencesKey("cfg_location_id")
-        val CFG_ATTRACT_TITLE = stringPreferencesKey("cfg_attract_title")
         val CFG_MASJID_NAME = stringPreferencesKey("cfg_masjid_name")
-        // Giving screen (designed in the admin panel; pushed live). Without these the tablet would
-        // fetch the config but drop the amounts/monthly/policies/message on save → the giving screen
-        // never reflects edits and the monthly toggle never appears.
-        val CFG_PRESETS = stringPreferencesKey("cfg_presets") // CSV of minor-unit amounts, in order
-        val CFG_ALLOW_CUSTOM = booleanPreferencesKey("cfg_allow_custom")
-        val CFG_CUSTOM_MIN = longPreferencesKey("cfg_custom_min")
-        val CFG_CUSTOM_MAX = longPreferencesKey("cfg_custom_max")
-        val CFG_MONTHLY = booleanPreferencesKey("cfg_monthly")
+        // Global giving policy + campaigns (the per-appeal giving screens). Campaigns are stored as a
+        // JSON string; without persisting them the tablet would fetch the config but drop the amounts/
+        // colours/messages on save, so the kiosk would never reflect edits.
         val CFG_MANUAL = booleanPreferencesKey("cfg_manual")
         val CFG_PUBKEY = stringPreferencesKey("cfg_pubkey")
         val CFG_NAME_POLICY = stringPreferencesKey("cfg_name_policy")
         val CFG_EMAIL_POLICY = stringPreferencesKey("cfg_email_policy")
-        val CFG_THANKYOU = stringPreferencesKey("cfg_thankyou")
+        val CFG_FEE_BPS = intPreferencesKey("cfg_fee_bps")
+        val CFG_FEE_FIXED = longPreferencesKey("cfg_fee_fixed")
+        val CFG_MAIN_CAMPAIGN = stringPreferencesKey("cfg_main_campaign")
+        val CFG_CAMPAIGNS = stringPreferencesKey("cfg_campaigns") // JSON array of campaigns
 
         // The reader the admin last connected, so it auto-reconnects on boot. USB stores just the
         // transport ("Usb"); Bluetooth also stores the serial so we reconnect that exact reader.
@@ -96,18 +93,15 @@ class DeviceStore(private val context: Context) {
                 pinHash = p[Keys.CFG_PIN_HASH].orEmpty(),
                 currency = p[Keys.CFG_CURRENCY].orEmpty(),
                 locationId = p[Keys.CFG_LOCATION_ID].orEmpty(),
-                attractTitle = p[Keys.CFG_ATTRACT_TITLE]?.takeIf { it.isNotBlank() },
                 masjidName = p[Keys.CFG_MASJID_NAME]?.takeIf { it.isNotBlank() },
-                presetsMinor = p[Keys.CFG_PRESETS].orEmpty().split(",").mapNotNull { it.trim().toLongOrNull() },
-                allowCustom = p[Keys.CFG_ALLOW_CUSTOM] ?: true,
-                customMinMinor = p[Keys.CFG_CUSTOM_MIN] ?: 100L,
-                customMaxMinor = p[Keys.CFG_CUSTOM_MAX] ?: 1_000_000L,
-                monthlyEnabled = p[Keys.CFG_MONTHLY] ?: false,
                 manualEntryEnabled = p[Keys.CFG_MANUAL] ?: false,
                 publishableKey = p[Keys.CFG_PUBKEY].orEmpty(),
                 namePolicy = p[Keys.CFG_NAME_POLICY]?.takeIf { it.isNotBlank() } ?: "optional",
                 emailPolicy = p[Keys.CFG_EMAIL_POLICY]?.takeIf { it.isNotBlank() } ?: "optional",
-                thankYouMessage = p[Keys.CFG_THANKYOU].orEmpty(),
+                feeBps = p[Keys.CFG_FEE_BPS] ?: 290,
+                feeFixedMinor = p[Keys.CFG_FEE_FIXED] ?: 30L,
+                mainCampaignId = p[Keys.CFG_MAIN_CAMPAIGN].orEmpty(),
+                campaigns = CampaignJson.parseString(p[Keys.CFG_CAMPAIGNS]),
             )
         }
 
@@ -128,18 +122,15 @@ class DeviceStore(private val context: Context) {
             p[Keys.CFG_PIN_HASH] = config.pinHash
             p[Keys.CFG_CURRENCY] = config.currency
             p[Keys.CFG_LOCATION_ID] = config.locationId
-            p[Keys.CFG_ATTRACT_TITLE] = config.attractTitle.orEmpty()
             p[Keys.CFG_MASJID_NAME] = config.masjidName.orEmpty()
-            p[Keys.CFG_PRESETS] = config.presetsMinor.joinToString(",")
-            p[Keys.CFG_ALLOW_CUSTOM] = config.allowCustom
-            p[Keys.CFG_CUSTOM_MIN] = config.customMinMinor
-            p[Keys.CFG_CUSTOM_MAX] = config.customMaxMinor
-            p[Keys.CFG_MONTHLY] = config.monthlyEnabled
             p[Keys.CFG_MANUAL] = config.manualEntryEnabled
             p[Keys.CFG_PUBKEY] = config.publishableKey
             p[Keys.CFG_NAME_POLICY] = config.namePolicy
             p[Keys.CFG_EMAIL_POLICY] = config.emailPolicy
-            p[Keys.CFG_THANKYOU] = config.thankYouMessage
+            p[Keys.CFG_FEE_BPS] = config.feeBps
+            p[Keys.CFG_FEE_FIXED] = config.feeFixedMinor
+            p[Keys.CFG_MAIN_CAMPAIGN] = config.mainCampaignId
+            p[Keys.CFG_CAMPAIGNS] = CampaignJson.toJsonString(config.campaigns)
         }
     }
 

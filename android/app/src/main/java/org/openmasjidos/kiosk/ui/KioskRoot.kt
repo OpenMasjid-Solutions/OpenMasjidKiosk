@@ -23,7 +23,6 @@ import com.stripe.android.PaymentConfiguration
 import com.stripe.android.paymentsheet.PaymentSheet
 import com.stripe.android.paymentsheet.PaymentSheetResult
 import com.stripe.android.paymentsheet.rememberPaymentSheet
-import org.openmasjidos.kiosk.GivingStep
 import org.openmasjidos.kiosk.KioskViewModel
 import org.openmasjidos.kiosk.ManualResult
 import org.openmasjidos.kiosk.Overlay
@@ -101,32 +100,10 @@ fun KioskRoot(
                 onSubmit = vm::pair,
             )
 
-            else -> { // Paired
-                if (ui.giving.step != GivingStep.Idle) {
-                    GivingScreen(
-                        giving = ui.giving,
-                        config = ui.config,
-                        readerPrompt = ui.reader.prompt,
-                        onSetMonthly = vm::setMonthly,
-                        onChooseAmount = vm::chooseAmount,
-                        onDonorName = vm::setDonorName,
-                        onDonorEmail = vm::setDonorEmail,
-                        onSubmitDetails = vm::submitDetails,
-                        onRetry = vm::retryGiving,
-                        onEnterManually = vm::enterManually,
-                        onCancel = vm::cancelGiving,
-                    )
-                } else {
-                    AttractScreen(
-                        masjidName = ui.config?.masjidName,
-                        attractTitle = ui.config?.attractTitle,
-                        identify = ui.identify,
-                        onTapToDonate = vm::beginGiving,
-                        onSecretTap = vm::onSecretTap,
-                    )
-                }
+            else -> { // Paired — boot straight into the giving home (campaign tabs; no attract screen)
+                GivingHome(vm = vm, ui = ui)
                 when (ui.overlay) {
-                    Overlay.None -> Unit // maintenance is reached by 7 rapid taps on the attract screen
+                    Overlay.None -> Unit // maintenance is reached by 7 rapid taps on the top header strip
                     Overlay.Pin -> PinPad(
                         state = ui.pin,
                         onSubmit = vm::submitPin,

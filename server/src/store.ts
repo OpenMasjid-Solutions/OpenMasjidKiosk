@@ -88,13 +88,84 @@ const GIVING_DEFAULTS: GivingConfig = {
   thankYouMessage: 'JazākAllāhu khayran — thank you for your generous donation.',
 };
 
-/** A recorded donation as the admin views it (device name resolved). Amounts are integer minor
- *  units; `createdAt` is an ISO string. `deviceName` is '' if the kiosk was removed. */
+/** A giving campaign (an "appeal") the kiosk shows as a tab — its own amounts, colour,
+ *  background, thank-you, monthly/cover-fees options and (optionally) its own Stripe account.
+ *  Exactly one campaign is the **main** one (the always-present first tab). Amounts are integer
+ *  MINOR units. Colours are '#rrggbb' or '' (inherit the default). Images are URLs (an uploaded
+ *  '/uploads/…' path, or an external https URL) or '' (use the default look / masjid logo). */
+export interface Campaign {
+  id: string;
+  title: string;
+  description: string;
+  /** Accent colour hex ('#rrggbb') or '' to inherit the kiosk default (cyan). */
+  accentColor: string;
+  /** Full-screen background image URL for this campaign's tab, or '' for the default scene. */
+  backgroundImage: string;
+  /** Optional banner image shown on the giving card, or ''. */
+  coverImage: string;
+  /** Per-campaign logo URL shown at the top, or '' to use the masjid logo/emblem. */
+  logo: string;
+  presetsMinor: number[];
+  allowCustom: boolean;
+  customMinMinor: number;
+  customMaxMinor: number;
+  monthlyEnabled: boolean;
+  /** Offer donors the option to add an estimated card fee so the masjid nets the full amount. */
+  coverFees: boolean;
+  /** Per-campaign thank-you; '' inherits the global default message. */
+  thankYouMessage: string;
+  /** Which Stripe account this campaign settles to. '' = the kiosk's primary account (the one the
+   *  reader connects to). A different id routes the money elsewhere — but the physical reader is
+   *  locked to the primary account, so a cross-account campaign is taken by keyed entry. */
+  stripeAccountId: string;
+  /** Visible to donors (shown as a tab). The main campaign is always shown regardless. */
+  live: boolean;
+  /** The main campaign: the always-present first tab the kiosk idles on. Exactly one is main. */
+  isMain: boolean;
+  sortOrder: number;
+  createdAt: string;
+}
+
+/** Defaults for a freshly-created campaign (seeded from the global giving defaults). */
+const CAMPAIGN_DEFAULTS: Omit<Campaign, 'id' | 'title' | 'sortOrder' | 'createdAt' | 'isMain'> = {
+  description: '',
+  accentColor: '',
+  backgroundImage: '',
+  coverImage: '',
+  logo: '',
+  presetsMinor: [...GIVING_DEFAULTS.presetsMinor],
+  allowCustom: true,
+  customMinMinor: GIVING_DEFAULTS.customMinMinor,
+  customMaxMinor: GIVING_DEFAULTS.customMaxMinor,
+  monthlyEnabled: true,
+  coverFees: false,
+  thankYouMessage: '',
+  stripeAccountId: '',
+  live: true,
+};
+
+// Cover-fees is an ESTIMATE (real Stripe fees vary by country, account and card type). A generic
+// online-card estimate: 2.9% + a small fixed fee, grossed up so the masjid nets roughly the base
+// amount. The donor sees the computed total before paying; the server re-computes it authoritatively.
+export const FEE_BPS = 290; // 2.9%
+export const FEE_FIXED_MINOR = 30; // 30 minor units (≈ 30¢ / 30p)
+
+/** Gross up a base amount so that, after the estimated card fee, the masjid nets ≈ the base. */
+export function grossUpForFees(baseMinor: number): number {
+  if (!Number.isInteger(baseMinor) || baseMinor <= 0) return baseMinor;
+  const total = Math.ceil((baseMinor + FEE_FIXED_MINOR) / (1 - FEE_BPS / 10000));
+  return Math.max(baseMinor, total);
+}
+
+/** A recorded donation as the admin views it (device + campaign names resolved). Amounts are
+ *  integer minor units; `createdAt` is an ISO string. `deviceName` is '' if the kiosk was removed. */
 export interface DonationRecord {
   id: string;
   paymentIntentId: string;
   deviceId: string;
   deviceName: string;
+  campaignId: string;
+  campaignTitle: string;
   amountMinor: number;
   currency: string;
   kind: string; // 'one_time' | 'monthly'
@@ -183,6 +254,8 @@ export class Store {
         id TEXT PRIMARY KEY,
         payment_intent_id TEXT NOT NULL DEFAULT '',
         device_id TEXT NOT NULL DEFAULT '',
+        campaign_id TEXT NOT NULL DEFAULT '',
+        campaign_title TEXT NOT NULL DEFAULT '',
         amount_minor INTEGER NOT NULL,
         currency TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'one_time',
@@ -194,7 +267,42 @@ export class Store {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_donations_pi ON donations(payment_intent_id);
       CREATE INDEX IF NOT EXISTS idx_donations_created ON donations(created_at);
+      CREATE INDEX IF NOT EXISTS idx_donations_campaign ON donations(campaign_id);
+
+      CREATE TABLE IF NOT EXISTS campaigns (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        accent_color TEXT NOT NULL DEFAULT '',
+        background_image TEXT NOT NULL DEFAULT '',
+        cover_image TEXT NOT NULL DEFAULT '',
+        logo TEXT NOT NULL DEFAULT '',
+        presets_minor TEXT NOT NULL DEFAULT '[]',
+        allow_custom INTEGER NOT NULL DEFAULT 1,
+        custom_min_minor INTEGER NOT NULL DEFAULT 100,
+        custom_max_minor INTEGER NOT NULL DEFAULT 1000000,
+        monthly_enabled INTEGER NOT NULL DEFAULT 1,
+        cover_fees INTEGER NOT NULL DEFAULT 0,
+        thank_you_message TEXT NOT NULL DEFAULT '',
+        stripe_account_id TEXT NOT NULL DEFAULT '',
+        live INTEGER NOT NULL DEFAULT 1,
+        is_main INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_campaigns_sort ON campaigns(sort_order, created_at);
+
+      CREATE TABLE IF NOT EXISTS pi_accounts (
+        pi TEXT PRIMARY KEY,
+        account TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
     `);
+    // Migrate older donation rows (pre-campaigns) to carry the new columns.
+    for (const col of ['campaign_id', 'campaign_title']) {
+      const exists = (this.db.prepare(`PRAGMA table_info(donations)`).all() as { name: string }[]).some((c) => c.name === col);
+      if (!exists) this.db.exec(`ALTER TABLE donations ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`);
+    }
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
       fs.chmodSync(dbPath, 0o600);
@@ -202,6 +310,9 @@ export class Store {
       /* best-effort (e.g. Windows dev) */
     }
     log.info(`data store ready at ${dbPath}`);
+    // Ensure a main campaign always exists (seeded from the giving defaults on first run, or
+    // migrating an existing single-giving install into its first campaign).
+    this.ensureMainCampaign();
   }
 
   private getRaw(key: string): string | null {
@@ -390,10 +501,253 @@ export class Store {
     return g.allowCustom && amountMinor >= g.customMinMinor && amountMinor <= g.customMaxMinor;
   }
 
+  // ── Campaigns (giving appeals, shown as kiosk tabs) ─────────────────────────
+  private rowToCampaign(r: Record<string, unknown>): Campaign {
+    let presets: number[] = [];
+    try {
+      const arr = JSON.parse(String(r.presets_minor ?? '[]'));
+      if (Array.isArray(arr)) presets = arr.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
+    } catch {
+      /* keep [] */
+    }
+    return {
+      id: String(r.id),
+      title: String(r.title),
+      description: String(r.description),
+      accentColor: String(r.accent_color),
+      backgroundImage: String(r.background_image),
+      coverImage: String(r.cover_image),
+      logo: String(r.logo),
+      presetsMinor: presets,
+      allowCustom: !!r.allow_custom,
+      customMinMinor: Number(r.custom_min_minor),
+      customMaxMinor: Number(r.custom_max_minor),
+      monthlyEnabled: !!r.monthly_enabled,
+      coverFees: !!r.cover_fees,
+      thankYouMessage: String(r.thank_you_message),
+      stripeAccountId: String(r.stripe_account_id),
+      live: !!r.live,
+      isMain: !!r.is_main,
+      sortOrder: Number(r.sort_order),
+      createdAt: String(r.created_at),
+    };
+  }
+
+  /** Clamp/normalise campaign fields (server-authoritative — never trust the client). */
+  private sanitizeCampaign(c: Campaign): Campaign {
+    const hex = (v: string): string => (/^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : '');
+    const img = (v: string): string => {
+      const s = String(v ?? '').trim().slice(0, 500);
+      if (!s) return '';
+      if (/^\/uploads\/[A-Za-z0-9._-]+$/.test(s)) return s; // our own uploaded file
+      if (/^https?:\/\/[^"'\\\s]+$/i.test(s)) return s; // external URL (no quotes/space)
+      return '';
+    };
+    const presets = (Array.isArray(c.presetsMinor) ? c.presetsMinor : [])
+      .map((n) => Math.round(Number(n)))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .slice(0, 6);
+    const min = Math.max(1, Math.round(Number(c.customMinMinor) || GIVING_DEFAULTS.customMinMinor));
+    const max = Math.max(min, Math.round(Number(c.customMaxMinor) || GIVING_DEFAULTS.customMaxMinor));
+    return {
+      ...c,
+      title: String(c.title ?? '').trim().slice(0, 120) || 'Donations',
+      description: String(c.description ?? '').slice(0, 1000),
+      accentColor: hex(String(c.accentColor ?? '')),
+      backgroundImage: img(String(c.backgroundImage ?? '')),
+      coverImage: img(String(c.coverImage ?? '')),
+      logo: img(String(c.logo ?? '')),
+      presetsMinor: presets,
+      allowCustom: c.allowCustom !== false,
+      customMinMinor: min,
+      customMaxMinor: max,
+      monthlyEnabled: c.monthlyEnabled !== false,
+      coverFees: c.coverFees === true,
+      thankYouMessage: String(c.thankYouMessage ?? '').slice(0, 500),
+      stripeAccountId: String(c.stripeAccountId ?? '').trim().slice(0, 120),
+      live: c.live !== false,
+    };
+  }
+
+  private writeCampaign(c: Campaign): void {
+    this.db
+      .prepare(
+        `INSERT INTO campaigns (id, title, description, accent_color, background_image, cover_image, logo,
+           presets_minor, allow_custom, custom_min_minor, custom_max_minor, monthly_enabled, cover_fees,
+           thank_you_message, stripe_account_id, live, is_main, sort_order, created_at)
+         VALUES (@id, @title, @description, @accentColor, @backgroundImage, @coverImage, @logo,
+           @presetsJson, @allowCustom, @customMinMinor, @customMaxMinor, @monthlyEnabled, @coverFees,
+           @thankYouMessage, @stripeAccountId, @live, @isMain, @sortOrder, @createdAt)
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, description=excluded.description,
+           accent_color=excluded.accent_color, background_image=excluded.background_image,
+           cover_image=excluded.cover_image, logo=excluded.logo, presets_minor=excluded.presets_minor,
+           allow_custom=excluded.allow_custom, custom_min_minor=excluded.custom_min_minor,
+           custom_max_minor=excluded.custom_max_minor, monthly_enabled=excluded.monthly_enabled,
+           cover_fees=excluded.cover_fees, thank_you_message=excluded.thank_you_message,
+           stripe_account_id=excluded.stripe_account_id, live=excluded.live, is_main=excluded.is_main,
+           sort_order=excluded.sort_order`,
+      )
+      .run({
+        id: c.id,
+        title: c.title,
+        description: c.description,
+        accentColor: c.accentColor,
+        backgroundImage: c.backgroundImage,
+        coverImage: c.coverImage,
+        logo: c.logo,
+        presetsJson: JSON.stringify(c.presetsMinor),
+        allowCustom: c.allowCustom ? 1 : 0,
+        customMinMinor: c.customMinMinor,
+        customMaxMinor: c.customMaxMinor,
+        monthlyEnabled: c.monthlyEnabled ? 1 : 0,
+        coverFees: c.coverFees ? 1 : 0,
+        thankYouMessage: c.thankYouMessage,
+        stripeAccountId: c.stripeAccountId,
+        live: c.live ? 1 : 0,
+        isMain: c.isMain ? 1 : 0,
+        sortOrder: c.sortOrder,
+        createdAt: c.createdAt,
+      });
+  }
+
+  /** All campaigns, MAIN first, then by sort order (created_at breaks ties). */
+  listCampaigns(): Campaign[] {
+    return (
+      this.db.prepare('SELECT * FROM campaigns ORDER BY is_main DESC, sort_order ASC, created_at ASC').all() as Record<string, unknown>[]
+    ).map((r) => this.rowToCampaign(r));
+  }
+
+  getCampaign(id: string): Campaign | null {
+    const r = this.db.prepare('SELECT * FROM campaigns WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return r ? this.rowToCampaign(r) : null;
+  }
+
+  getMainCampaign(): Campaign | null {
+    const r = this.db.prepare('SELECT * FROM campaigns WHERE is_main = 1 LIMIT 1').get() as Record<string, unknown> | undefined;
+    return r ? this.rowToCampaign(r) : null;
+  }
+
+  /** Ensure exactly one main campaign exists. On first run (no campaigns) seed one from the
+   *  global giving defaults so an existing install keeps its single giving screen seamlessly. */
+  ensureMainCampaign(): Campaign {
+    const existing = this.getMainCampaign();
+    if (existing) return existing;
+    const any = this.db.prepare('SELECT COUNT(*) AS n FROM campaigns').get() as { n: number };
+    if (any.n > 0) {
+      // Campaigns exist but none is main (shouldn't happen) — promote the first.
+      const first = this.listCampaigns()[0];
+      this.db.prepare('UPDATE campaigns SET is_main = 1 WHERE id = ?').run(first.id);
+      return this.getCampaign(first.id)!;
+    }
+    const g = this.getGiving();
+    const seeded: Campaign = this.sanitizeCampaign({
+      ...CAMPAIGN_DEFAULTS,
+      id: rid('cmp'),
+      title: this.getMasjid().name || 'General Fund',
+      presetsMinor: g.presetsMinor,
+      allowCustom: g.allowCustom,
+      customMinMinor: g.customMinMinor,
+      customMaxMinor: g.customMaxMinor,
+      monthlyEnabled: g.monthlyEnabled,
+      thankYouMessage: '',
+      isMain: true,
+      sortOrder: 0,
+      createdAt: new Date().toISOString(),
+    });
+    this.writeCampaign(seeded);
+    this.bumpConfigVersion();
+    return seeded;
+  }
+
+  createCampaign(input: Partial<Campaign>): Campaign {
+    const maxSort = (this.db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM campaigns').get() as { m: number }).m;
+    const c = this.sanitizeCampaign({
+      ...CAMPAIGN_DEFAULTS,
+      ...clean(input as Record<string, unknown>),
+      id: rid('cmp'),
+      isMain: false, // only the seed/main-switch sets this
+      sortOrder: maxSort + 1,
+      createdAt: new Date().toISOString(),
+    } as Campaign);
+    this.writeCampaign(c);
+    this.bumpConfigVersion();
+    return c;
+  }
+
+  updateCampaign(id: string, patch: Partial<Campaign>): Campaign | null {
+    const cur = this.getCampaign(id);
+    if (!cur) return null;
+    // id / isMain / sortOrder / createdAt are not editable via a field patch.
+    const { id: _i, isMain: _m, sortOrder: _s, createdAt: _c, ...editable } = patch;
+    void _i; void _m; void _s; void _c;
+    const merged = this.sanitizeCampaign({ ...cur, ...clean(editable as Record<string, unknown>) } as Campaign);
+    merged.isMain = cur.isMain; // preserve
+    merged.sortOrder = cur.sortOrder;
+    merged.createdAt = cur.createdAt;
+    this.writeCampaign(merged);
+    this.bumpConfigVersion();
+    return merged;
+  }
+
+  /** Delete a campaign. The main campaign can never be deleted (returns false). */
+  deleteCampaign(id: string): boolean {
+    const c = this.getCampaign(id);
+    if (!c || c.isMain) return false;
+    this.db.prepare('DELETE FROM campaigns WHERE id = ?').run(id);
+    this.bumpConfigVersion();
+    return true;
+  }
+
+  /** Reorder campaigns by the given id order (the main campaign stays first regardless). */
+  reorderCampaigns(ids: string[]): void {
+    const tx = this.db.transaction((order: string[]) => {
+      order.forEach((id, i) => this.db.prepare('UPDATE campaigns SET sort_order = ? WHERE id = ? AND is_main = 0').run(i + 1, id));
+    });
+    tx(ids);
+    this.bumpConfigVersion();
+  }
+
+  /** Make `id` the main campaign (the always-shown first tab). The previous main becomes a normal
+   *  live campaign. */
+  setMainCampaign(id: string): boolean {
+    const c = this.getCampaign(id);
+    if (!c) return false;
+    const tx = this.db.transaction(() => {
+      this.db.prepare('UPDATE campaigns SET is_main = 0').run();
+      this.db.prepare('UPDATE campaigns SET is_main = 1, live = 1 WHERE id = ?').run(id);
+    });
+    tx();
+    this.bumpConfigVersion();
+    return true;
+  }
+
+  /** Server-side amount guard for a specific campaign (never trust the tablet): an allowed amount
+   *  is one of the campaign's presets, or — when custom is enabled — within its [min,max]. */
+  isAllowedAmountForCampaign(c: Campaign, amountMinor: number): boolean {
+    if (!Number.isInteger(amountMinor) || amountMinor <= 0) return false;
+    if (c.presetsMinor.includes(amountMinor)) return true;
+    return c.allowCustom && amountMinor >= c.customMinMinor && amountMinor <= c.customMaxMinor;
+  }
+
+  /** Remember which Stripe account a PaymentIntent was created on, so /complete verifies it with
+   *  the SAME account's key (campaigns can settle to different accounts). Best-effort: prunes old
+   *  rows; if lost (e.g. a restart between create and complete), the caller falls back to primary. */
+  rememberPiAccount(pi: string, account: string): void {
+    this.db.prepare('INSERT OR REPLACE INTO pi_accounts (pi, account, created_at) VALUES (?, ?, ?)').run(pi, account, new Date().toISOString());
+    // Keep the table small — a PI is completed within seconds, so 7 days is generous.
+    this.db.prepare("DELETE FROM pi_accounts WHERE created_at < ?").run(new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString());
+  }
+  getPiAccount(pi: string): string {
+    const r = this.db.prepare('SELECT account FROM pi_accounts WHERE pi = ?').get(pi) as { account?: string } | undefined;
+    return r?.account ?? '';
+  }
+
   // ── Donations (recorded ONLY after the server verifies the PI with Stripe) ──────
   recordDonation(d: {
     paymentIntentId: string;
     deviceId: string;
+    campaignId?: string;
+    campaignTitle?: string;
     amountMinor: number;
     currency: string;
     kind: string;
@@ -404,14 +758,16 @@ export class Store {
   }): void {
     this.db
       .prepare(
-        `INSERT INTO donations (id, payment_intent_id, device_id, amount_minor, currency, kind, status, donor_name, donor_email, charge_id, created_at)
-         VALUES (@id, @paymentIntentId, @deviceId, @amountMinor, @currency, @kind, @status, @donorName, @donorEmail, @chargeId, @createdAt)
+        `INSERT INTO donations (id, payment_intent_id, device_id, campaign_id, campaign_title, amount_minor, currency, kind, status, donor_name, donor_email, charge_id, created_at)
+         VALUES (@id, @paymentIntentId, @deviceId, @campaignId, @campaignTitle, @amountMinor, @currency, @kind, @status, @donorName, @donorEmail, @chargeId, @createdAt)
          ON CONFLICT(id) DO UPDATE SET status = excluded.status, charge_id = excluded.charge_id`,
       )
       .run({
         id: d.paymentIntentId,
         paymentIntentId: d.paymentIntentId,
         deviceId: d.deviceId,
+        campaignId: d.campaignId || '',
+        campaignTitle: d.campaignTitle || '',
         amountMinor: d.amountMinor,
         currency: d.currency,
         kind: d.kind,
@@ -429,6 +785,8 @@ export class Store {
       paymentIntentId: String(r.payment_intent_id),
       deviceId: String(r.device_id),
       deviceName: String(r.device_name ?? ''),
+      campaignId: String(r.campaign_id ?? ''),
+      campaignTitle: String(r.campaign_title ?? ''),
       amountMinor: Number(r.amount_minor),
       currency: String(r.currency),
       kind: String(r.kind),
@@ -506,10 +864,36 @@ export class Store {
     };
   }
 
-  /** The versioned config a paired kiosk pulls: the PIN, currency, location, masjid name, and
-   *  the giving screen (amounts, custom bounds, monthly, name/email policy, thank-you). */
-  getKioskConfig(): { version: number; config: Record<string, unknown> } {
+  /** The versioned config a paired kiosk pulls: the PIN, currency, location, masjid name, the
+   *  global giving settings (manual-entry policy, name/email prompts, default thank-you, cover-fee
+   *  estimate), and the ordered list of live CAMPAIGNS (main first) it shows as tabs. Each campaign
+   *  carries `readerCapable` — whether the physical reader (locked to the primary account) can take
+   *  it, or it must use keyed entry (a cross-account campaign). Pass the primary account id so this
+   *  can be computed; '' treats every campaign as reader-capable (single-account kiosks). */
+  getKioskConfig(primaryAccountId = ''): { version: number; config: Record<string, unknown> } {
     const g = this.getGiving();
+    const main = this.getMainCampaign();
+    const campaigns = this.listCampaigns()
+      .filter((c) => c.live || c.isMain) // main is always shown; others only when live
+      .map((c) => ({
+        id: c.id,
+        title: c.title,
+        description: c.description,
+        accentColor: c.accentColor,
+        backgroundImage: c.backgroundImage,
+        coverImage: c.coverImage,
+        logo: c.logo,
+        presetsMinor: c.presetsMinor,
+        allowCustom: c.allowCustom,
+        customMinMinor: c.customMinMinor,
+        customMaxMinor: c.customMaxMinor,
+        monthlyEnabled: c.monthlyEnabled,
+        coverFees: c.coverFees,
+        thankYouMessage: c.thankYouMessage || g.thankYouMessage,
+        isMain: c.isMain,
+        // The reader is bound to the primary account; a campaign on another account is keyed-only.
+        readerCapable: !c.stripeAccountId || c.stripeAccountId === primaryAccountId,
+      }));
     return {
       version: this.getConfigVersion(),
       config: {
@@ -517,16 +901,15 @@ export class Store {
         currency: this.getCurrency(),
         locationId: this.getLocation()?.id ?? '',
         masjidName: this.getMasjid().name,
-        attractTitle: this.getAttractTitle(),
-        presetsMinor: g.presetsMinor,
-        allowCustom: g.allowCustom,
-        customMinMinor: g.customMinMinor,
-        customMaxMinor: g.customMaxMinor,
-        monthlyEnabled: g.monthlyEnabled,
+        // Global giving policy (per-campaign amounts/monthly/thank-you live on each campaign).
         manualEntryEnabled: g.manualEntryEnabled,
         namePolicy: g.namePolicy,
         emailPolicy: g.emailPolicy,
-        thankYouMessage: g.thankYouMessage,
+        // Cover-fee estimate so the tablet can display the same total the server will charge.
+        feeBps: FEE_BPS,
+        feeFixedMinor: FEE_FIXED_MINOR,
+        mainCampaignId: main?.id ?? '',
+        campaigns,
       },
     };
   }

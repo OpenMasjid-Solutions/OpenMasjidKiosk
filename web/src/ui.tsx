@@ -20,17 +20,23 @@ export function Crescent({ size = 22 }: { size?: number }) {
   );
 }
 
+/** Accept only safe image URLs for a CSS `url()` / an `<img src>`, else ''. Allows same-origin
+ *  uploads (`/uploads/<file>`, prefixed with the base path), `http(s):` URLs and `data:image`,
+ *  and rejects anything with quotes/backslashes/whitespace that could break out of `url("…")`.
+ *  Shared by the ambient Scene wallpaper and the campaign previews (values can arrive from the
+ *  attacker-craftable #omos fragment, so every image string is run through this first). */
+export function safeImageUrl(v: string): string {
+  const s = (v ?? '').trim();
+  if (/^\/uploads\/[\w.-]+$/.test(s)) return withBase(s); // our own uploaded file (same origin)
+  return /^(https?:\/\/|data:image\/)/i.test(s) && !/["\\\s]/.test(s) ? s : '';
+}
+
 /** Ambient background. A custom wallpaper image (inherited from the dashboard or set in
  *  OpenMasjidOS) fully replaces the preset gradient; otherwise we show the preset scene
  *  (gradient + aurora + geometric pattern, driven by data-wallpaper). */
 export function Scene() {
   const prefs = usePrefs();
-  const v = prefs.wallpaperImage.trim();
-  // Accept only http(s)/data:image URLs with no characters that could break out of url("…").
-  // The value can come from the attacker-craftable #omos fragment, and this is the whole
-  // backdrop, so sanitise before use (mirrors Donations/Display — the OS's wallpaperImage is a
-  // full image URL rendered directly, no proxy).
-  const safe = /^(https?:\/\/|data:image\/)/i.test(v) && !/["\\\s]/.test(v) ? v : '';
+  const safe = safeImageUrl(prefs.wallpaperImage);
   if (safe) return <div className="scene-img" aria-hidden="true" style={{ backgroundImage: `url("${safe}")` }} />;
   return <div className="scene" aria-hidden="true" />;
 }

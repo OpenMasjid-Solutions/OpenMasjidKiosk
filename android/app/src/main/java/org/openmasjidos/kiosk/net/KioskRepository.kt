@@ -4,11 +4,15 @@
 package org.openmasjidos.kiosk.net
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.openmasjidos.kiosk.local.DeviceStore
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.local.LogEntry
@@ -181,15 +185,17 @@ class KioskRepository(context: Context) {
      *  network retry can't double-charge. */
     suspend fun createPaymentIntent(
         amountMinor: Long,
+        campaignId: String?,
         donorName: String?,
         donorEmail: String?,
         monthly: Boolean,
         manual: Boolean,
+        coverFees: Boolean,
         idempotencyKey: String,
     ): CreatedPaymentIntent = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: throw IOException("Not paired")
         KioskApi(pinnedClientFor(p.certSha256))
-            .createPaymentIntent(p.serverUrl, p.deviceToken, amountMinor, donorName, donorEmail, monthly, manual, idempotencyKey)
+            .createPaymentIntent(p.serverUrl, p.deviceToken, amountMinor, campaignId, donorName, donorEmail, monthly, manual, coverFees, idempotencyKey)
     }
 
     /** After the reader confirms, ask the server to verify + capture with Stripe and record the
@@ -207,6 +213,49 @@ class KioskRepository(context: Context) {
 
     /** The last-connected reader as (transport, serial?) — or null if none. */
     suspend fun getLastReader(): Pair<String, String?>? = store.getLastReader()
+
+    // ---- Campaign images (backgrounds / logos) -----------------------------------------
+    // A few in-memory bitmaps for the campaign backgrounds/logos. Images on OUR server (/uploads or
+    // the same host) are fetched over the PINNED client; an external https image uses a plain client
+    // (it's presentation-only — never authenticated, never carries a token).
+    private val imageCache = LruCache<String, Bitmap>(8)
+    private val plainClient by lazy { OkHttpClient.Builder().build() }
+
+    /** Download + decode a campaign image (cached). Returns null on any error (the UI falls back to
+     *  the default look). [url] may be an absolute http(s) URL or a server-relative '/uploads/…' path. */
+    suspend fun image(url: String): Bitmap? = withContext(Dispatchers.IO) {
+        if (url.isBlank()) return@withContext null
+        imageCache.get(url)?.let { return@withContext it }
+        val p = store.pairing.first()
+        val full: String
+        val client: OkHttpClient
+        when {
+            url.startsWith("/") -> {
+                val base = p?.serverUrl ?: return@withContext null
+                full = base.trimEnd('/') + url
+                client = pinnedClientFor(p.certSha256)
+            }
+            url.startsWith("http://", true) || url.startsWith("https://", true) -> {
+                full = url
+                client = if (p != null && sameHost(url, p.serverUrl)) pinnedClientFor(p.certSha256) else plainClient
+            }
+            else -> return@withContext null
+        }
+        val bmp = runCatching {
+            client.newCall(Request.Builder().url(full).get().build()).execute().use { resp ->
+                if (!resp.isSuccessful) return@use null
+                val bytes = resp.body?.bytes() ?: return@use null
+                if (bytes.size > 8 * 1024 * 1024) return@use null // sane cap
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }
+        }.getOrNull()
+        if (bmp != null) imageCache.put(url, bmp)
+        bmp
+    }
+
+    private fun sameHost(a: String, b: String): Boolean = runCatching {
+        java.net.URI(a).host?.equals(java.net.URI(b).host, ignoreCase = true) == true
+    }.getOrDefault(false)
 
     // ---- PIN ---------------------------------------------------------------------------
 

@@ -433,6 +433,44 @@ button.status-pill:hover { filter: brightness(1.08); }
   padding: 0.6rem 0.7rem; border-radius: 12px; background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
 .kp-check { color: var(--color-success); font-weight: 800; }
+/* A campaign logo above the giving title (campaign preview). */
+.kp-logo { display: block; max-height: 2.6rem; max-width: 60%; margin-inline: auto; margin-block-end: 0.5rem; border-radius: 8px; object-fit: contain; }
+/* A disabled toggle (e.g. the main campaign's always-on "Live"). */
+.switch:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ── Campaigns manager ─────────────────────────────────────────────────────────── */
+.camp-list { display: flex; flex-direction: column; gap: 0.7rem; }
+.camp-row { padding: 0.85rem 1rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.camp-swatch { flex: none; width: 1.6rem; height: 1.6rem; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--color-border); }
+.camp-row__main { min-width: 8rem; flex: 1; display: flex; flex-direction: column; gap: 0.2rem; }
+.camp-row__title { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+.camp-name { font-family: var(--font-display); font-weight: 700; font-size: 1.02rem; color: var(--color-ink); }
+.camp-desc { font-size: 0.82rem; color: var(--color-ink-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 32rem; }
+.camp-actions { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+.camp-reorder { display: inline-flex; flex-direction: column; }
+.icon-btn--sm { width: 1.9rem; height: 1.9rem; }
+.icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.badge--main { display: inline-flex; align-items: center; gap: 0.2rem; background: var(--color-gold-subtle); color: var(--color-gold); box-shadow: inset 0 0 0 1px var(--color-gold); }
+
+/* Campaign editor: a taller, scrollable form modal (reuses .modal / .modal-body chrome). */
+.modal--form { width: min(40rem, 96vw); }
+
+/* Image field (URL text input + upload button + thumbnail) — shared by cover/background/logo. */
+.img-field { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.img-field .input { flex: 1; min-width: 12rem; }
+.img-preview { flex: none; width: 2.4rem; height: 2.4rem; border-radius: 8px; object-fit: cover; box-shadow: inset 0 0 0 1px var(--color-border); }
+
+/* Accent-colour picker row. */
+.accent-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.accent-swatch-input { width: 2.8rem; height: 2.2rem; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer; box-shadow: inset 0 0 0 1px var(--color-border); }
+.accent-swatch-input::-webkit-color-swatch-wrapper { padding: 2px; }
+.accent-swatch-input::-webkit-color-swatch { border: 0; border-radius: 6px; }
+
+/* Amber callout: a cross-account (keyed-entry) appeal, etc. — token-driven, matches the gold pill. */
+.note-amber {
+  color: var(--color-gold); background: var(--color-gold-subtle); box-shadow: inset 0 0 0 1px var(--color-gold);
+  border-radius: var(--radius-button); padding: 0.55rem 0.7rem; font-size: 0.82rem; line-height: 1.5; margin-block-start: 0.4rem;
+}
 
 /* ── Donations log ───────────────────────────────────────────────────────────── */
 .donation-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
