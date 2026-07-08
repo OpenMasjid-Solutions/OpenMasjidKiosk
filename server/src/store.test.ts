@@ -3,6 +3,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import Database from 'better-sqlite3';
 import { Store, grossUpForFees, FEE_BPS, FEE_FIXED_MINOR } from './store';
 
 /** A fresh in-memory store per test (better-sqlite3 supports ':memory:'). */
@@ -155,4 +159,36 @@ test('rememberPiAccount round-trips and falls back to empty for unknown PIs', ()
   s.rememberPiAccount('pi_abc', 'acct_123');
   assert.equal(s.getPiAccount('pi_abc'), 'acct_123');
   assert.equal(s.getPiAccount('pi_unknown'), '');
+});
+
+test('upgrading a PRE-campaigns install (donations table with no campaign columns) migrates, does not throw', () => {
+  // Regression for the v0.9.0 startup crash: an existing donations table isn't recreated by
+  // CREATE TABLE IF NOT EXISTS, so campaign_id must be added by ALTER *before* any index on it.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiosk-mig-'));
+  const dbPath = path.join(dir, 'kiosk.db');
+  const legacy = new Database(dbPath);
+  legacy.exec(
+    `CREATE TABLE donations (
+       id TEXT PRIMARY KEY, payment_intent_id TEXT NOT NULL DEFAULT '', device_id TEXT NOT NULL DEFAULT '',
+       amount_minor INTEGER NOT NULL, currency TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'one_time',
+       status TEXT NOT NULL DEFAULT '', donor_name TEXT NOT NULL DEFAULT '', donor_email TEXT NOT NULL DEFAULT '',
+       charge_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+     );`,
+  );
+  legacy
+    .prepare(`INSERT INTO donations (id, payment_intent_id, amount_minor, currency, status, created_at) VALUES ('pi_old','pi_old',500,'USD','succeeded',?)`)
+    .run(new Date().toISOString());
+  legacy.close();
+
+  let s: Store | undefined;
+  assert.doesNotThrow(() => {
+    s = new Store(dbPath);
+  });
+  const log = s!.listDonations();
+  assert.equal(log.length, 1); // the legacy donation survives
+  assert.equal(log[0].campaignId, ''); // new columns default cleanly
+  assert.equal(log[0].campaignTitle, '');
+  assert.ok(s!.getMainCampaign()); // a main campaign was seeded on upgrade
+  s!.close();
+  fs.rmSync(dir, { recursive: true, force: true });
 });

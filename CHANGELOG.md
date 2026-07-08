@@ -3,6 +3,12 @@
 
 # Changelog
 
+## 0.9.1
+- **Fix — the app failed to start after updating to 0.9.0 on an existing install** (“no such column:
+  campaign_id”, container restart-looping). The new donations “campaign” columns were being indexed
+  before they’d been added to an already-existing database. Fixed the upgrade to add the columns
+  first; upgrading now migrates cleanly and your existing donations are preserved.
+
 ## 0.9.0
 - **Multiple giving campaigns, shown as tabs.** The kiosk no longer starts on a “Tap to donate”
   screen — it opens straight on your **main campaign’s** giving screen (amounts, one-time/monthly).

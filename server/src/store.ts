@@ -267,7 +267,6 @@ export class Store {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_donations_pi ON donations(payment_intent_id);
       CREATE INDEX IF NOT EXISTS idx_donations_created ON donations(created_at);
-      CREATE INDEX IF NOT EXISTS idx_donations_campaign ON donations(campaign_id);
 
       CREATE TABLE IF NOT EXISTS campaigns (
         id TEXT PRIMARY KEY,
@@ -298,11 +297,15 @@ export class Store {
         created_at TEXT NOT NULL
       );
     `);
-    // Migrate older donation rows (pre-campaigns) to carry the new columns.
+    // Migrate older donation rows (pre-campaigns) to carry the new columns. This MUST run before any
+    // index on those columns — an existing `donations` table isn't recreated by CREATE TABLE IF NOT
+    // EXISTS, so the columns don't exist yet on an upgrade (a fresh DB has them from the CREATE above).
     for (const col of ['campaign_id', 'campaign_title']) {
       const exists = (this.db.prepare(`PRAGMA table_info(donations)`).all() as { name: string }[]).some((c) => c.name === col);
       if (!exists) this.db.exec(`ALTER TABLE donations ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`);
     }
+    // Now that campaign_id is guaranteed to exist, its index is safe to create.
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_donations_campaign ON donations(campaign_id)');
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
       fs.chmodSync(dbPath, 0o600);
