@@ -9,6 +9,7 @@ import com.stripe.android.PaymentConfiguration
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.local.Diagnostics
 import org.openmasjidos.kiosk.local.KioskConfig
@@ -243,6 +245,11 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                     if (manual && pk.isNotBlank()) runCatching { PaymentConfiguration.init(appContext, pk) }
                 }
         }
+        // Arm/cancel the idle-abandon timer at every step transition (so a donor who fills in details
+        // then walks away doesn't leave their name/email on screen — see rescheduleIdleReset).
+        viewModelScope.launch {
+            local.map { it.giving.step }.distinctUntilChanged().collect { rescheduleIdleReset() }
+        }
     }
 
     // ---- Card reader (maintenance screen) ----------------------------------------------
@@ -301,6 +308,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     private fun updateGiving(f: (GivingState) -> GivingState) = local.update { it.copy(giving = f(it.giving)) }
 
     private var autoReturnJob: Job? = null
+    private var idleResetJob: Job? = null
 
     /** The active campaign (the selected tab, or the main campaign). */
     private fun activeCampaign(): Campaign? {
@@ -324,9 +332,26 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         rescheduleAutoReturn()
     }
 
-    /** Any donor touch on a non-main tab resets its return-to-main countdown. */
+    /** Any donor touch resets the return-to-main countdown (on a non-main tab) and the idle-abandon
+     *  timer (mid-donation), so an actively-used kiosk is never yanked away. */
     fun onUserActivity() {
         if (local.value.giving.step == GivingStep.Amount) rescheduleAutoReturn()
+        rescheduleIdleReset()
+    }
+
+    /** Reset an ABANDONED donation (Details/Card/Error left untouched) back to a fresh giving screen,
+     *  so the next passer-by never sees a previous donor's name/email and the main appeal is restored.
+     *  Armed on entering those steps (via the step observer in [start]) and extended by any touch.
+     *  Excludes Processing (a payment is in flight — must finish) and Thanks (self-resets after 8s). */
+    private fun rescheduleIdleReset() {
+        idleResetJob?.cancel()
+        val step = local.value.giving.step
+        if (step != GivingStep.Details && step != GivingStep.Card && step != GivingStep.Error) return
+        idleResetJob = viewModelScope.launch {
+            delay(IDLE_ABANDON_MS)
+            val s = local.value.giving.step
+            if (s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error) cancelGiving()
+        }
     }
 
     /** Return the giving flow to the resting amount screen (after cancel / thank-you / error). */
@@ -470,26 +495,30 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 repo.flushLogs()
                 return@launch
             }
-            // Card read — acknowledge the tap immediately while the server verifies + captures.
-            updateGiving { it.copy(step = GivingStep.Processing, busy = true) }
-            val result = runCatching { repo.completePaymentIntent(piId) }.getOrNull()
-            if (result?.succeeded == true) {
-                val outcome = when {
-                    !result.monthlyRequested -> MonthlyOutcome.None
-                    result.monthlyCreated -> MonthlyOutcome.Created
-                    else -> MonthlyOutcome.NotSupported
+            // Card read — the payment is now authorized on the reader. Complete it in a NonCancellable
+            // block so a late cancel / tab-switch can't orphan the authorized charge: the server always
+            // captures + records it, and the donor sees the thank-you they earned.
+            withContext(NonCancellable) {
+                updateGiving { it.copy(step = GivingStep.Processing, busy = true) }
+                val result = runCatching { repo.completePaymentIntent(piId) }.getOrNull()
+                if (result?.succeeded == true) {
+                    val outcome = when {
+                        !result.monthlyRequested -> MonthlyOutcome.None
+                        result.monthlyCreated -> MonthlyOutcome.Created
+                        else -> MonthlyOutcome.NotSupported
+                    }
+                    repo.log("info", "donation_succeeded", "${result.amountMinor} ${result.currency} · $kind${if (result.monthlyRequested) " · monthly=${result.monthlyCreated}" else ""}")
+                    updateGiving { it.copy(step = GivingStep.Thanks, busy = false, monthlyOutcome = outcome) }
+                    viewModelScope.launch {
+                        delay(THANKS_MS)
+                        if (local.value.giving.step == GivingStep.Thanks) resetGiving()
+                    }
+                } else {
+                    repo.log("warn", "donation_not_succeeded", "$kind · status=${result?.status ?: "unknown"}")
+                    updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t complete. If your card was charged it will be refunded.") }
                 }
-                repo.log("info", "donation_succeeded", "${result.amountMinor} ${result.currency} · $kind${if (result.monthlyRequested) " · monthly=${result.monthlyCreated}" else ""}")
-                updateGiving { it.copy(step = GivingStep.Thanks, busy = false, monthlyOutcome = outcome) }
-                viewModelScope.launch {
-                    delay(THANKS_MS)
-                    if (local.value.giving.step == GivingStep.Thanks) resetGiving()
-                }
-            } else {
-                repo.log("warn", "donation_not_succeeded", "$kind · status=${result?.status ?: "unknown"}")
-                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t complete. If your card was charged it will be refunded.") }
+                repo.flushLogs()
             }
-            repo.flushLogs()
         }
     }
 
@@ -729,8 +758,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         const val HEARTBEAT_INTERVAL_MS = 10_000L
         // Flash long enough to actually spot across a room and to span heartbeat jitter.
         const val IDENTIFY_MS = 12_000L
-        // How long the thank-you screen stays up before returning to attract.
+        // How long the thank-you screen stays up before returning to the giving screen.
         const val THANKS_MS = 8_000L
+        // How long an abandoned donation (Details/Card/Error, no touches) waits before resetting.
+        const val IDLE_ABANDON_MS = 60_000L
         const val SECRET_TAPS = 7
         const val SECRET_WINDOW_MS = 3_000L
         const val FREE_ATTEMPTS = 3

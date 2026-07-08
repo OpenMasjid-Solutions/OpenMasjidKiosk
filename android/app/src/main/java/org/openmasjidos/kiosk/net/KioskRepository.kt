@@ -244,13 +244,44 @@ class KioskRepository(context: Context) {
         val bmp = runCatching {
             client.newCall(Request.Builder().url(full).get().build()).execute().use { resp ->
                 if (!resp.isSuccessful) return@use null
-                val bytes = resp.body?.bytes() ?: return@use null
-                if (bytes.size > 8 * 1024 * 1024) return@use null // sane cap
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                val body = resp.body ?: return@use null
+                // Reject an oversized body BEFORE buffering it (protects the buffer allocation), then
+                // read at most MAX bytes so a lying/absent Content-Length can't blow past the cap either.
+                if (body.contentLength() > MAX_IMAGE_BYTES) return@use null
+                val bytes = body.byteStream().use { readBounded(it, MAX_IMAGE_BYTES) } ?: return@use null
+                // Downsample large images so the DECODED bitmap allocation is bounded too, regardless
+                // of the source dimensions. (Keep ARGB_8888 so a logo's transparency survives.)
+                val probe = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, probe)
+                val opts = BitmapFactory.Options().apply { inSampleSize = sampleSize(probe.outWidth, probe.outHeight, 2048) }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
             }
         }.getOrNull()
         if (bmp != null) imageCache.put(url, bmp)
         bmp
+    }
+
+    /** Read up to [max] bytes; return null if the stream exceeds it (so a huge image can't OOM us). */
+    private fun readBounded(input: java.io.InputStream, max: Long): ByteArray? {
+        val out = java.io.ByteArrayOutputStream()
+        val chunk = ByteArray(16 * 1024)
+        var total = 0L
+        while (true) {
+            val n = input.read(chunk)
+            if (n < 0) break
+            total += n
+            if (total > max) return null
+            out.write(chunk, 0, n)
+        }
+        return out.toByteArray()
+    }
+
+    /** Power-of-two downsample factor so the decoded image fits within ~[target]px on its long edge. */
+    private fun sampleSize(w: Int, h: Int, target: Int): Int {
+        if (w <= 0 || h <= 0) return 1
+        var s = 1
+        while (w / (s * 2) >= target || h / (s * 2) >= target) s *= 2
+        return s
     }
 
     private fun sameHost(a: String, b: String): Boolean = runCatching {
@@ -293,5 +324,6 @@ class KioskRepository(context: Context) {
     private companion object {
         const val MAX_BUFFERED_LOGS = 200
         const val MAX_LOG_BATCH = 50
+        const val MAX_IMAGE_BYTES = 8L * 1024 * 1024
     }
 }

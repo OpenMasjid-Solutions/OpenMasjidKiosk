@@ -323,6 +323,7 @@ object ReaderManager {
             _state.update { it.copy(error = "That reader is no longer nearby. Scan again.") }
             return
         }
+        manualConnectRetries = 0 // fresh admin-initiated connect gets a full retry budget
         connectReaderInternal(reader, locationId, _state.value.transport, manual = true)
     }
 

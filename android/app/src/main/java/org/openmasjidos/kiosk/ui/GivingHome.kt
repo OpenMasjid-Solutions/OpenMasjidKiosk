@@ -27,6 +27,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -47,6 +48,7 @@ import org.openmasjidos.kiosk.KIOSK_AUTO_RETURN_MS
 import org.openmasjidos.kiosk.KioskViewModel
 import org.openmasjidos.kiosk.UiState
 import org.openmasjidos.kiosk.local.Campaign
+import org.openmasjidos.kiosk.readers.ReaderConn
 import org.openmasjidos.kiosk.ui.theme.InkDark
 import org.openmasjidos.kiosk.ui.theme.InkMutedDark
 import org.openmasjidos.kiosk.ui.theme.PrimaryDark
@@ -80,22 +82,27 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
             HomeTopBar(ui, onSelect = vm::selectCampaign, onSecretTap = vm::onSecretTap)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (campaign != null) {
-                    GivingScreen(
-                        giving = ui.giving,
-                        campaign = campaign,
-                        config = ui.config,
-                        accent = accent,
-                        readerPrompt = ui.reader.prompt,
-                        onSetMonthly = vm::setMonthly,
-                        onSetCoverFees = vm::setCoverFees,
-                        onChooseAmount = vm::chooseAmount,
-                        onDonorName = vm::setDonorName,
-                        onDonorEmail = vm::setDonorEmail,
-                        onSubmitDetails = vm::submitDetails,
-                        onRetry = vm::retryGiving,
-                        onEnterManually = vm::enterManually,
-                        onCancel = vm::cancelGiving,
-                    )
+                    // Key the giving subtree to the campaign so any remembered UI state (e.g. the
+                    // custom-amount numpad's typed digits / open state) is discarded when the tab changes.
+                    key(campaign.id) {
+                        GivingScreen(
+                            giving = ui.giving,
+                            campaign = campaign,
+                            config = ui.config,
+                            accent = accent,
+                            readerConnected = ui.reader.conn == ReaderConn.Connected,
+                            readerPrompt = ui.reader.prompt,
+                            onSetMonthly = vm::setMonthly,
+                            onSetCoverFees = vm::setCoverFees,
+                            onChooseAmount = vm::chooseAmount,
+                            onDonorName = vm::setDonorName,
+                            onDonorEmail = vm::setDonorEmail,
+                            onSubmitDetails = vm::submitDetails,
+                            onRetry = vm::retryGiving,
+                            onEnterManually = vm::enterManually,
+                            onCancel = vm::cancelGiving,
+                        )
+                    }
                 } else {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("Getting things ready…", color = InkMutedDark, style = MaterialTheme.typography.bodyLarge)

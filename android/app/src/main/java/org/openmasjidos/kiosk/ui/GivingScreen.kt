@@ -69,6 +69,7 @@ fun GivingScreen(
     campaign: Campaign,
     config: KioskConfig?,
     accent: Color,
+    readerConnected: Boolean,
     readerPrompt: String?,
     onSetMonthly: (Boolean) -> Unit,
     onSetCoverFees: (Boolean) -> Unit,
@@ -87,11 +88,11 @@ fun GivingScreen(
     // it's a fallback; with no reader the manual sheet has already opened over this step).
     val manualOnCard = config?.manualEntryEnabled == true
     // The amount actually charged (base + estimated card fee when the donor opted to cover it).
-    val chargeMinor = displayCharge(giving, config)
+    val chargeMinor = displayCharge(giving, campaign, config)
     SceneBox(modifier) {
         when (giving.step) {
             GivingStep.Amount, GivingStep.Idle ->
-                AmountStep(giving, campaign, config, currency, accent, onAccent, onSetMonthly, onSetCoverFees, onChooseAmount, onCancel)
+                AmountStep(giving, campaign, config, currency, accent, onAccent, readerConnected, onSetMonthly, onSetCoverFees, onChooseAmount, onCancel)
             GivingStep.Details -> DetailsStep(giving, config, accent, onAccent, onDonorName, onDonorEmail, onSubmitDetails, onCancel)
             GivingStep.Card -> CardStep(chargeMinor, currency, accent, readerPrompt, manualOnCard, onEnterManually, onCancel)
             GivingStep.Processing -> ProcessingStep(chargeMinor, currency, accent)
@@ -126,6 +127,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.AmountStep(
     currency: String,
     accent: Color,
     onAccent: Color,
+    readerConnected: Boolean,
     onSetMonthly: (Boolean) -> Unit,
     onSetCoverFees: (Boolean) -> Unit,
     onChoose: (Long) -> Unit,
@@ -150,8 +152,10 @@ private fun androidx.compose.foundation.layout.ColumnScope.AmountStep(
         Text("Choose an amount to give", style = MaterialTheme.typography.bodyLarge, color = InkMutedDark)
     }
     Spacer(Modifier.height(20.dp))
-    // One-time vs monthly (only when the campaign enabled monthly AND the reader can take it).
-    if (campaign.monthlyEnabled && campaign.readerCapable) {
+    // One-time vs monthly — only when the campaign enabled monthly, the reader can take it (monthly
+    // needs a card-present charge), AND a reader is actually connected right now (so the donor can't
+    // pick monthly and fill in details only to hit a dead-end at the card step).
+    if (campaign.monthlyEnabled && campaign.readerCapable && readerConnected) {
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("One-time") }
             SegmentedButton(selected = giving.monthly, onClick = { onSetMonthly(true) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Monthly") }
@@ -226,8 +230,8 @@ private fun androidx.compose.foundation.layout.ColumnScope.Numpad(
     onConfirm: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
-    val factor = if (isZeroDecimal(currency)) 1L else 100L
-    var digits by remember { mutableStateOf("") }
+    val factor = factorFor(currency)
+    var digits by remember(campaign.id) { mutableStateOf("") }
     val major = digits.toLongOrNull() ?: 0L
     val minor = major * factor
     val min = campaign.customMinMinor
@@ -430,9 +434,10 @@ private fun androidx.compose.foundation.layout.ColumnScope.ErrorStep(error: Stri
 // ── Amount / fee helpers ─────────────────────────────────────────────────────
 
 /** The amount to display/charge: the base, grossed up by the cover-fee estimate when opted in. Must
- *  match the server's [grossUpForFees] so the tablet shows exactly what will be charged. */
-private fun displayCharge(giving: GivingState, config: KioskConfig?): Long {
-    if (!giving.coverFees || giving.amountMinor <= 0) return giving.amountMinor
+ *  match the server's [grossUpForFees] so the tablet shows exactly what will be charged. Gated on the
+ *  campaign allowing cover-fees (same as the server), so the two never diverge. */
+private fun displayCharge(giving: GivingState, campaign: Campaign, config: KioskConfig?): Long {
+    if (!giving.coverFees || !campaign.coverFees || giving.amountMinor <= 0) return giving.amountMinor
     val bps = config?.feeBps ?: 290
     val fixed = config?.feeFixedMinor ?: 30
     val total = Math.ceil((giving.amountMinor + fixed) / (1.0 - bps / 10000.0)).toLong()
@@ -443,8 +448,19 @@ private fun displayCharge(giving: GivingState, config: KioskConfig?): Long {
 private val ZERO_DECIMAL = setOf(
     "JPY", "KRW", "VND", "CLP", "XAF", "XOF", "BIF", "DJF", "GNF", "KMF", "MGA", "PYG", "RWF", "UGX", "VUV", "XPF",
 )
+private val THREE_DECIMAL = setOf("BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND")
 
 private fun isZeroDecimal(currency: String) = currency.uppercase() in ZERO_DECIMAL
+private fun decimals(currency: String): Int = when {
+    isZeroDecimal(currency) -> 0
+    currency.uppercase() in THREE_DECIMAL -> 3
+    else -> 2
+}
+private fun factorFor(currency: String): Long = when (decimals(currency)) {
+    0 -> 1L
+    3 -> 1000L
+    else -> 100L
+}
 
 private fun symbolFor(currency: String) = when (currency.uppercase()) {
     "USD", "CAD", "AUD", "NZD" -> "$"
@@ -461,12 +477,12 @@ private fun symbolFor(currency: String) = when (currency.uppercase()) {
 /** Format integer minor units as a human amount (e.g. 2500 USD → "$25"). */
 fun formatMoney(minor: Long, currency: String): String {
     val sym = symbolFor(currency)
-    val body = if (isZeroDecimal(currency)) {
-        minor.toString()
-    } else if (minor % 100 == 0L) {
-        (minor / 100).toString()
-    } else {
-        String.format(Locale.US, "%.2f", minor / 100.0)
+    val d = decimals(currency)
+    val f = factorFor(currency)
+    val body = when {
+        d == 0 -> minor.toString()
+        minor % f == 0L -> (minor / f).toString()
+        else -> String.format(Locale.US, "%.${d}f", minor.toDouble() / f)
     }
     return if (sym.isNotEmpty()) "$sym$body" else "$body ${currency.uppercase()}"
 }

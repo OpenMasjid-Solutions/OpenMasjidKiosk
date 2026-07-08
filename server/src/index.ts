@@ -232,10 +232,17 @@ async function main(): Promise<void> {
   // memory only — never sent to the browser/tablet, never persisted.
   const resolveAccount = async (): Promise<{ keys: StripeKeys; source: 'fabric' | 'local'; id: string; label: string } | null> => {
     if (ssoConfigured()) {
-      const fab = await fetchFabricStripe(store.getFabricStripeChoice());
+      const choice = store.getFabricStripeChoice();
+      const fab = await fetchFabricStripe(choice);
       if (fab && stripeConfigured(fab)) {
         return { keys: { publishableKey: fab.publishableKey, secretKey: fab.secretKey }, source: 'fabric', id: fab.id, label: fab.label };
       }
+      // A vault account was explicitly chosen but can't be resolved right now (renamed/removed, or the
+      // platform is briefly unreachable). FAIL CLOSED — never silently fall back to leftover standalone
+      // keys while embedded, or donations would route to the wrong Stripe account. (Callers surface a
+      // friendly "Payments aren't set up" message on null.) The local fallback is only for a genuinely
+      // standalone install, or an embedded one where no account has been chosen yet.
+      if (choice) return null;
     }
     const local = store.getLocalStripe();
     if (stripeConfigured(local)) return { keys: local, source: 'local', id: 'local', label: 'Locally-entered keys' };

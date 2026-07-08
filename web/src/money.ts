@@ -6,7 +6,14 @@
 const ZERO_DECIMAL = new Set([
   'JPY', 'KRW', 'VND', 'CLP', 'XAF', 'XOF', 'BIF', 'DJF', 'GNF', 'KMF', 'MGA', 'PYG', 'RWF', 'UGX', 'VUV', 'XPF',
 ]);
-export const decimals = (ccy: string) => (ZERO_DECIMAL.has(ccy.toUpperCase()) ? 0 : 2);
+// Three-decimal currencies (Gulf/Maghreb): 1 major unit = 1000 minor units.
+const THREE_DECIMAL = new Set(['BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND']);
+export const decimals = (ccy: string) => {
+  const c = ccy.toUpperCase();
+  if (ZERO_DECIMAL.has(c)) return 0;
+  if (THREE_DECIMAL.has(c)) return 3;
+  return 2;
+};
 export const factor = (ccy: string) => 10 ** decimals(ccy);
 
 export function symbolFor(ccy: string): string {
@@ -27,10 +34,11 @@ export function symbolFor(ccy: string): string {
 export function formatMoney(minor: number, ccy: string): string {
   const sym = symbolFor(ccy);
   const d = decimals(ccy);
+  const f = factor(ccy);
   let body: string;
   if (d === 0) body = String(Math.round(minor));
-  else if (minor % 100 === 0) body = String(Math.round(minor / 100));
-  else body = (minor / 100).toFixed(2);
+  else if (minor % f === 0) body = String(Math.round(minor / f));
+  else body = (minor / f).toFixed(d);
   return sym ? `${sym}${body}` : `${body} ${ccy.toUpperCase()}`;
 }
 
@@ -44,6 +52,7 @@ export function toMinor(major: string, ccy: string): number {
 /** Integer minor units → an editable major-unit string (no trailing ".00"). */
 export function toMajorStr(minor: number, ccy: string): string {
   const d = decimals(ccy);
+  const f = factor(ccy);
   if (d === 0) return String(minor);
-  return minor % 100 === 0 ? String(minor / 100) : (minor / 100).toFixed(2);
+  return minor % f === 0 ? String(minor / f) : (minor / f).toFixed(d);
 }

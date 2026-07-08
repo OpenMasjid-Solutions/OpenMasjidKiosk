@@ -87,8 +87,14 @@ export async function verifySecretKey(secretKey: string): Promise<{ ok: boolean;
 const ZERO_DECIMAL = new Set([
   'BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
 ]);
+// Three-decimal currencies (Gulf/Maghreb) — 1 major unit = 1000 minor units. (Stripe requires the
+// smallest amount to be a multiple of 10 for these; we don't enforce that here.)
+const THREE_DECIMAL = new Set(['BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND']);
 export function currencyDecimals(currency: string): number {
-  return ZERO_DECIMAL.has(currency.toUpperCase()) ? 0 : 2;
+  const c = currency.toUpperCase();
+  if (ZERO_DECIMAL.has(c)) return 0;
+  if (THREE_DECIMAL.has(c)) return 3;
+  return 2;
 }
 export function toMinor(major: number, currency: string): number {
   return Math.round(major * 10 ** currencyDecimals(currency));
