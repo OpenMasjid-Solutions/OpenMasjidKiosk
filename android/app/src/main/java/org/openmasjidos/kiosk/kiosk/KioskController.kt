@@ -11,6 +11,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
 import androidx.core.view.WindowCompat
@@ -127,11 +128,18 @@ object KioskController {
 
     /**
      * Fully leave kiosk mode (the maintenance "Exit kiosk" button). Stops Lock Task, re-enables the
-     * status bar, and — as device owner — drops our forced-HOME so the device's OWN launcher takes
-     * over again. Returns true if we were device owner and handed the HOME role back (caller then
-     * navigates to HOME); false if not device owner (Android won't let an app change the default
-     * launcher itself, so the caller opens the Home-app picker instead). onResume won't re-lock
-     * because the caller sets its `exiting` guard.
+     * status bar, and — as device owner — hands the HOME role to the device's OWN launcher so we
+     * actually leave. Just *clearing* our forced-HOME isn't enough: this app is still a registered
+     * HOME app (CATEGORY_HOME in the manifest, so a wall tablet boots into the kiosk), so with no
+     * preference set the system either reopens us or shows a chooser we bounce out of. The definitive
+     * fix is to point the persistent HOME preference at ANOTHER launcher on the device — then pressing
+     * Home lands on the real Android launcher, not the kiosk. Re-arming the kiosk (reopening the app)
+     * calls [provisionHome], which flips the preference back to us.
+     *
+     * Returns true if we were device owner and handed HOME to another launcher (caller then navigates
+     * HOME); false if not device owner (Android won't let a plain app change the default launcher, so
+     * the caller opens the Home-app picker instead). onResume won't re-lock because the caller sets
+     * its `exiting` guard.
      */
     fun exitKioskFully(activity: Activity): Boolean {
         val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
@@ -142,6 +150,22 @@ object KioskController {
         val (dpm, admin) = owner
         runCatching { dpm.setStatusBarDisabled(admin, false) }
         runCatching { dpm.clearPackagePersistentPreferredActivities(admin, activity.packageName) }
+        // Find the device's OTHER launcher (any HOME activity that isn't us) and make IT the persistent
+        // HOME, so pressing Home leaves the kiosk for the real launcher instead of reopening us.
+        runCatching {
+            val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            val other = activity.packageManager
+                .queryIntentActivities(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                .map { it.activityInfo }
+                .firstOrNull { it.packageName != activity.packageName }
+            if (other != null) {
+                val filter = IntentFilter(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    addCategory(Intent.CATEGORY_DEFAULT)
+                }
+                dpm.addPersistentPreferredActivity(admin, filter, ComponentName(other.packageName, other.name))
+            }
+        }
         return true
     }
 

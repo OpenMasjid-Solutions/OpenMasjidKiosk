@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.8.2
+- **Fix — “Exit kiosk” really leaves now, even when the kiosk is the tablet’s Home app.** On a
+  locked-down (device-owner) tablet the kiosk *is* the launcher, so simply going Home came straight
+  back to it. Exit kiosk now hands the Home role to the tablet’s **own** launcher, so it drops you out
+  to the normal Android home screen. Re-opening the kiosk app makes it the launcher again.
+- **New — “Open Android settings” in the maintenance screen.** After unlocking with the exit PIN you
+  can jump straight to the tablet’s Android settings (Wi-Fi, launcher, etc.); the kiosk re-locks itself
+  as soon as you come back.
+
 ## 0.8.1
 - **Manual card entry: the real failure reason is now shown.** When a keyed payment can't even start,
   the exact Stripe reason is written to **Devices → Logs** (`payment_create_failed`) instead of a

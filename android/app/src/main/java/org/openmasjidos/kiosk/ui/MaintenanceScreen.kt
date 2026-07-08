@@ -77,6 +77,7 @@ fun MaintenanceScreen(
     onReaderPermissionDenied: () -> Unit,
     onUpdateApp: () -> Unit,
     onSetHomeApp: () -> Unit,
+    onOpenSettings: () -> Unit,
     onReturn: () -> Unit,
     onRePair: () -> Unit,
     onExit: () -> Unit,
@@ -208,6 +209,20 @@ fun MaintenanceScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(stringResource(R.string.maintenance_repair), color = InkDark)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // --- Tablet settings — jump to Android Settings (Wi-Fi, launcher, etc.). Drops kiosk
+            //     lockdown so Settings can open; the kiosk re-locks when the maintainer returns. ----
+            SectionCard(title = stringResource(R.string.maintenance_tablet_title)) {
+                OutlinedButton(
+                    onClick = onOpenSettings,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.maintenance_android_settings), color = InkDark)
                 }
             }
 

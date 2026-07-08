@@ -47,6 +47,7 @@ fun KioskRoot(
     onExitKiosk: () -> Unit,
     onOpenBrowser: (String) -> Unit,
     onSetHomeApp: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -147,6 +148,7 @@ fun KioskRoot(
                         onReaderPermissionDenied = vm::onReaderPermissionDenied,
                         onUpdateApp = vm::requestAppUpdate,
                         onSetHomeApp = onSetHomeApp,
+                        onOpenSettings = onOpenSettings,
                         onReturn = vm::closeOverlay,
                         onRePair = vm::rePair,
                         onExit = onExitKiosk,

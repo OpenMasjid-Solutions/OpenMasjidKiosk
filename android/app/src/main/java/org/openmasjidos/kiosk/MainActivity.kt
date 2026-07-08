@@ -106,6 +106,13 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onSetHomeApp = { requestHomeApp(force = true) },
+                    onOpenSettings = {
+                        // A maintenance excursion to Android Settings (Wi-Fi, launcher, etc.). Drop
+                        // lock task + re-enable the status bar so Settings can open, but stay the
+                        // kiosk (exiting stays false) so onResume re-locks the moment they return.
+                        KioskController.exitKiosk(this)
+                        runCatching { startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    },
                 )
             }
         }

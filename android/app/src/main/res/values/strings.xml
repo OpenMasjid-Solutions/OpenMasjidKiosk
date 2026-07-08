@@ -72,6 +72,8 @@
     <string name="reader_status_error">Reader problem</string>
     <string name="reader_permission_denied">Bluetooth and Location permission are needed to find a reader. Enable them for this app in the tablet\'s Settings, then try again.</string>
     <string name="maintenance_server_title">Server &amp; pairing</string>
+    <string name="maintenance_tablet_title">Tablet settings</string>
+    <string name="maintenance_android_settings">Open Android settings</string>
     <string name="maintenance_diagnostics_title">Diagnostics</string>
     <string name="maintenance_repair">Re-pair this kiosk</string>
     <string name="maintenance_update_title">App update available</string>
