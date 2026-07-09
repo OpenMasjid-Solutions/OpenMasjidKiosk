@@ -3,6 +3,18 @@
 
 # Changelog
 
+## 0.9.2
+- **Manual (typed) card entry is now always available when paying.** Every card screen shows an
+  **“Enter card details”** button — with or without a reader connected — so a donor can always pay
+  even if the reader is being fussy. (It’s no longer hidden behind a setting; the old toggle is gone.)
+  Note: your Stripe account must have **online card payments enabled** — being set up for the
+  in-person reader isn’t enough. If keyed entry ever fails, the exact reason shows in Devices → Logs.
+- **The hidden maintenance gesture (7 taps) works everywhere again.** Tap 7 times anywhere on the
+  screen background — on any screen — to reach the PIN unlock. (Tapping amount buttons or the number
+  pad won’t trigger it by accident.)
+- **Removed the Cancel button from the main giving screen.** Cancel now only appears once a donation
+  is under way (after you choose an amount).
+
 ## 0.9.1
 - **Fix — the app failed to start after updating to 0.9.0 on an existing install** (“no such column:
   campaign_id”, container restart-looping). The new donations “campaign” columns were being indexed
