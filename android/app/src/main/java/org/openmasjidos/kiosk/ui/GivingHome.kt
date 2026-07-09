@@ -9,7 +9,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -75,11 +74,20 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                     awaitFirstDown(requireUnconsumed = false)
                     vm.onUserActivity()
                 }
+            }
+            // Hidden maintenance gesture: 7 rapid taps anywhere on the screen background (works on
+            // EVERY step, not just one screen). requireUnconsumed=true means taps that a button/numpad
+            // already handled don't count — so entering a custom amount can't accidentally open it.
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = true)
+                    vm.onSecretTap()
+                }
             },
     ) {
         CampaignBackground(vm, campaign?.backgroundImage.orEmpty())
         Column(Modifier.fillMaxSize()) {
-            HomeTopBar(ui, onSelect = vm::selectCampaign, onSecretTap = vm::onSecretTap)
+            HomeTopBar(ui, onSelect = vm::selectCampaign)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (campaign != null) {
                     // Key the giving subtree to the campaign so any remembered UI state (e.g. the
@@ -123,21 +131,12 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun HomeTopBar(ui: UiState, onSelect: (String) -> Unit, onSecretTap: () -> Unit) {
+private fun HomeTopBar(ui: UiState, onSelect: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
         val masjid = ui.config?.masjidName?.takeIf { it.isNotBlank() }
-        // The masjid-name strip doubles as the hidden 7-tap maintenance zone (never a donor control).
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 44.dp)
-                .pointerInput(Unit) { detectTapGestures(onTap = { onSecretTap() }) },
-            contentAlignment = Alignment.Center,
-        ) {
-            if (masjid != null) {
+        if (masjid != null) {
+            Box(modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp), contentAlignment = Alignment.Center) {
                 Text(masjid, style = MaterialTheme.typography.titleMedium, color = InkMutedDark, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            } else {
-                Spacer(Modifier.heightIn(min = 44.dp))
             }
         }
         if (ui.campaigns.size > 1) {

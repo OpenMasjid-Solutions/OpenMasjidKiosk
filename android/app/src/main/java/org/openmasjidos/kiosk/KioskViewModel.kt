@@ -237,12 +237,14 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         }
         // Initialise Stripe (for the manual card sheet) EARLY with the publishable key from config —
         // PaymentSheet fails immediately if PaymentConfiguration wasn't set up before it's presented.
+        // Keyed entry is always offered now, so init whenever a publishable key is present (not gated
+        // on the old manual-entry toggle). KioskRoot also re-inits just-in-time as a belt-and-braces.
         viewModelScope.launch {
             repo.config
-                .map { it?.publishableKey.orEmpty() to (it?.manualEntryEnabled == true) }
+                .map { it?.publishableKey.orEmpty() }
                 .distinctUntilChanged()
-                .collect { (pk, manual) ->
-                    if (manual && pk.isNotBlank()) runCatching { PaymentConfiguration.init(appContext, pk) }
+                .collect { pk ->
+                    if (pk.isNotBlank()) runCatching { PaymentConfiguration.init(appContext, pk) }
                 }
         }
         // Arm/cancel the idle-abandon timer at every step transition (so a donor who fills in details
@@ -537,13 +539,16 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val idem = UUID.randomUUID().toString()
             repo.log("info", "donation_started", "${g.amountMinor} minor · manual · ${campaign?.title ?: ""}")
             val pi = runCatching { repo.createPaymentIntent(g.amountMinor, campaign?.id, name, email, monthly = false, manual = true, coverFees = g.coverFees, idem) }.getOrNull()
-            if (pi == null || pi.clientSecret.isBlank() || pi.publishableKey.isNullOrBlank()) {
+            // The publishable key comes back with the manual PI; fall back to the one in config (the
+            // server always injects it now) so a blank field on the PI can't strand keyed entry.
+            val pk = pi?.publishableKey?.takeIf { it.isNotBlank() } ?: ui.value.config?.publishableKey?.takeIf { it.isNotBlank() }
+            if (pi == null || pi.clientSecret.isBlank() || pk.isNullOrBlank()) {
                 repo.log("warn", "donation_create_failed", "manual")
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start card entry. Please try again.") }
                 repo.flushLogs()
                 return@launch
             }
-            updateGiving { it.copy(manual = ManualEntry(pi.id, pi.clientSecret, pi.publishableKey)) }
+            updateGiving { it.copy(manual = ManualEntry(pi.id, pi.clientSecret, pk)) }
         }
     }
 

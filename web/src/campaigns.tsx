@@ -5,7 +5,7 @@
  *  amounts, colour, images, monthly/cover-fees, Stripe account and thank-you. The MAIN campaign
  *  always shows on the kiosk (even when hidden) and can't be deleted; others appear only when
  *  live and in the order you set. A live preview mirrors the kiosk as you type. Above the list
- *  sit the kiosk-wide settings (masjid name, manual card entry, name/email prompts). Saving pushes
+ *  sit the kiosk-wide settings (masjid name, name/email prompts). Saving pushes
  *  live: kiosks pick the change up on their next check-in. Amounts are edited in whole/decimal
  *  currency units but stored as integer MINOR units. Non-optimistic — every change re-hydrates
  *  from the server's response. */
@@ -171,7 +171,6 @@ function GlobalSettingsCard() {
   const [loaded, setLoaded] = useState<GivingSettings | null>(null);
   const [loadErr, setLoadErr] = useState('');
   const [masjidName, setMasjidName] = useState('');
-  const [manualEntryEnabled, setManualEntryEnabled] = useState(false);
   const [namePolicy, setNamePolicy] = useState<PromptPolicy>('optional');
   const [emailPolicy, setEmailPolicy] = useState<PromptPolicy>('optional');
   const [busy, setBusy] = useState(false);
@@ -181,7 +180,6 @@ function GlobalSettingsCard() {
   const hydrate = useCallback((s: GivingSettings) => {
     setLoaded(s);
     setMasjidName(s.masjidName);
-    setManualEntryEnabled(s.giving.manualEntryEnabled);
     setNamePolicy(s.giving.namePolicy);
     setEmailPolicy(s.giving.emailPolicy);
   }, []);
@@ -202,7 +200,7 @@ function GlobalSettingsCard() {
     setBusy(true);
     try {
       // Only the kiosk-wide subset lives here now; amounts/monthly/thank-you are per-campaign.
-      const fresh = await saveGiving({ masjidName, manualEntryEnabled, namePolicy, emailPolicy });
+      const fresh = await saveGiving({ masjidName, namePolicy, emailPolicy });
       hydrate(fresh);
       setSaved(true);
     } catch (e) {
@@ -235,12 +233,10 @@ function GlobalSettingsCard() {
             <input id="g-masjid" className="input" value={masjidName} maxLength={160} placeholder="Al-Noor Masjid" onChange={(e) => setMasjidName(e.target.value)} />
           </div>
 
-          <Toggle
-            label="Allow manual card entry when a reader is connected"
-            hint="When no reader is connected, the kiosk always uses keyed entry. This adds a keyed-entry button beside a connected reader."
-            checked={manualEntryEnabled}
-            onChange={setManualEntryEnabled}
-          />
+          <p className="hint" style={{ marginTop: '0.25rem' }}>
+            Donors can always tap “Enter card details” to pay by typing their card — with or without a
+            reader connected. (Your Stripe account must have online card payments enabled.)
+          </p>
 
           <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
             <PolicyField id="g-name" label="Ask for a name" value={namePolicy} onChange={setNamePolicy} />

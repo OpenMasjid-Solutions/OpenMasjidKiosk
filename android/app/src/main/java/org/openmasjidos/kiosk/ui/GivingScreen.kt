@@ -84,15 +84,16 @@ fun GivingScreen(
 ) {
     val currency = config?.currency?.ifBlank { "USD" } ?: "USD"
     val onAccent = if (accent.luminance() > 0.6f) InkDark else Color.White
-    // Offer "enter card manually" on the Card step when the admin enabled it (with a reader connected
-    // it's a fallback; with no reader the manual sheet has already opened over this step).
-    val manualOnCard = config?.manualEntryEnabled == true
+    // Keyed/manual entry is ALWAYS offered on the card step — a "type your card" fallback beside a
+    // connected reader (with no reader the manual sheet has already auto-opened over this step). It's
+    // never hidden behind a setting, so a donor can always pay even if the reader is fussy.
+    val manualOnCard = true
     // The amount actually charged (base + estimated card fee when the donor opted to cover it).
     val chargeMinor = displayCharge(giving, campaign, config)
     SceneBox(modifier) {
         when (giving.step) {
             GivingStep.Amount, GivingStep.Idle ->
-                AmountStep(giving, campaign, config, currency, accent, onAccent, readerConnected, onSetMonthly, onSetCoverFees, onChooseAmount, onCancel)
+                AmountStep(giving, campaign, config, currency, accent, onAccent, readerConnected, onSetMonthly, onSetCoverFees, onChooseAmount)
             GivingStep.Details -> DetailsStep(giving, config, accent, onAccent, onDonorName, onDonorEmail, onSubmitDetails, onCancel)
             GivingStep.Card -> CardStep(chargeMinor, currency, accent, readerPrompt, manualOnCard, onEnterManually, onCancel)
             GivingStep.Processing -> ProcessingStep(chargeMinor, currency, accent)
@@ -131,7 +132,6 @@ private fun androidx.compose.foundation.layout.ColumnScope.AmountStep(
     onSetMonthly: (Boolean) -> Unit,
     onSetCoverFees: (Boolean) -> Unit,
     onChoose: (Long) -> Unit,
-    onCancel: () -> Unit,
 ) {
     var showPad by remember { mutableStateOf(false) }
     if (showPad) {
@@ -216,8 +216,8 @@ private fun androidx.compose.foundation.layout.ColumnScope.AmountStep(
             )
         }
     }
-    Spacer(Modifier.height(16.dp))
-    TextButton(onClick = onCancel) { Text("Cancel", color = InkMutedDark) }
+    // No Cancel here — the amount screen IS the resting state. Cancel appears only once a donation is
+    // under way (Details / Card steps).
 }
 
 // ── Step: custom amount numpad ───────────────────────────────────────────────
