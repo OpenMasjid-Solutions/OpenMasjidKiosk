@@ -42,6 +42,7 @@ object CampaignJson {
             monthlyEnabled = o.optBoolean("monthlyEnabled", false),
             coverFees = o.optBoolean("coverFees", false),
             thankYouMessage = o.optString("thankYouMessage", ""),
+            theme = o.optString("theme", "auto"),
             isMain = o.optBoolean("isMain", false),
             readerCapable = o.optBoolean("readerCapable", true),
         )
@@ -68,6 +69,7 @@ object CampaignJson {
                     .put("monthlyEnabled", c.monthlyEnabled)
                     .put("coverFees", c.coverFees)
                     .put("thankYouMessage", c.thankYouMessage)
+                    .put("theme", c.theme)
                     .put("isMain", c.isMain)
                     .put("readerCapable", c.readerCapable),
             )

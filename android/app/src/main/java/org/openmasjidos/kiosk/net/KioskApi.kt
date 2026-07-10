@@ -147,6 +147,7 @@ class KioskApi(private val client: OkHttpClient) {
             emailPolicy = cfg.optString("emailPolicy", "optional"),
             feeBps = cfg.optInt("feeBps", 290),
             feeFixedMinor = cfg.optLong("feeFixedMinor", 30),
+            maxBrightness = cfg.optBoolean("maxBrightness", true),
             mainCampaignId = cfg.optString("mainCampaignId", ""),
             campaigns = campaigns,
         )

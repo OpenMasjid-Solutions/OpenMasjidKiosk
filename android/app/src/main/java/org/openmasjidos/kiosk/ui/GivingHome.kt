@@ -13,10 +13,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -33,11 +31,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,7 +51,9 @@ import org.openmasjidos.kiosk.UiState
 import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.readers.ReaderConn
 import org.openmasjidos.kiosk.ui.theme.InkDark
+import org.openmasjidos.kiosk.ui.theme.InkLight
 import org.openmasjidos.kiosk.ui.theme.InkMutedDark
+import org.openmasjidos.kiosk.ui.theme.InkMutedLight
 import org.openmasjidos.kiosk.ui.theme.PrimaryDark
 
 /**
@@ -58,13 +62,28 @@ import org.openmasjidos.kiosk.ui.theme.PrimaryDark
  * each carries its own accent + background. Selecting a non-main tab starts a 45s inactivity
  * countdown (a visual-only ring) that returns to the main tab; any touch resets it.
  *
- * The hidden maintenance gesture (7 taps) lives on the top header strip so it never collides with
- * the donor's amount buttons.
+ * The hidden maintenance gesture (7 taps) is detected on the screen BACKGROUND (unconsumed taps),
+ * so it works on every step without colliding with the donor's amount buttons or the number pad.
  */
 @Composable
 fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
     val campaign = ui.activeCampaign
     val accent = accentOf(campaign)
+    // Bright by default: 'auto'/'light' with no background image → a vibrant accent gradient + dark
+    // text on frosted-glass tiles; 'dark' (or a background image) → the calm dark scene + light text.
+    val hasImage = !campaign?.backgroundImage.isNullOrBlank()
+    val bright = !hasImage && (campaign?.theme ?: "auto") != "dark"
+    val style = sceneStyleFor(bright, accent)
+    val darkBrush = SceneBrush
+    val bgBrush = if (bright) {
+        Brush.linearGradient(
+            colors = listOf(lerp(accent, Color.White, 0.55f), lerp(accent, Color.White, 0.14f), accent),
+            start = Offset.Zero,
+            end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
+        )
+    } else {
+        darkBrush
+    }
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -85,9 +104,9 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                 }
             },
     ) {
-        CampaignBackground(vm, campaign?.backgroundImage.orEmpty())
+        CampaignBackground(vm, campaign?.backgroundImage.orEmpty(), bgBrush)
         Column(Modifier.fillMaxSize()) {
-            HomeTopBar(ui, onSelect = vm::selectCampaign)
+            HomeTopBar(ui, style, onSelect = vm::selectCampaign)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (campaign != null) {
                     // Key the giving subtree to the campaign so any remembered UI state (e.g. the
@@ -97,7 +116,7 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                             giving = ui.giving,
                             campaign = campaign,
                             config = ui.config,
-                            accent = accent,
+                            style = style,
                             readerConnected = ui.reader.conn == ReaderConn.Connected,
                             readerPrompt = ui.reader.prompt,
                             onSetMonthly = vm::setMonthly,
@@ -113,7 +132,7 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                     }
                 } else {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Getting things ready…", color = InkMutedDark, style = MaterialTheme.typography.bodyLarge)
+                        Text("Getting things ready…", color = style.onSceneMuted, style = MaterialTheme.typography.bodyLarge)
                     }
                 }
             }
@@ -131,40 +150,35 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun HomeTopBar(ui: UiState, onSelect: (String) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-        val masjid = ui.config?.masjidName?.takeIf { it.isNotBlank() }
-        if (masjid != null) {
-            Box(modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp), contentAlignment = Alignment.Center) {
-                Text(masjid, style = MaterialTheme.typography.titleMedium, color = InkMutedDark, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-        if (ui.campaigns.size > 1) {
-            Spacer(Modifier.heightIn(min = 6.dp))
-            CampaignTabs(ui.campaigns, ui.selectedCampaignId, onSelect)
+private fun HomeTopBar(ui: UiState, style: SceneStyle, onSelect: (String) -> Unit) {
+    // Tabs appear only when there's more than one campaign; a single-campaign kiosk is chrome-free.
+    if (ui.campaigns.size > 1) {
+        Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            CampaignTabs(ui.campaigns, ui.selectedCampaignId, style, onSelect)
         }
     }
 }
 
 @Composable
-private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, onSelect: (String) -> Unit) {
+private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, style: SceneStyle, onSelect: (String) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
     ) {
+        val idleTab = if (style.bright) Color.Black.copy(alpha = 0.06f) else Color.White.copy(alpha = 0.06f)
         campaigns.forEach { c ->
             val selected = c.id == selectedId
             val acc = accentOf(c)
             Surface(
                 onClick = { onSelect(c.id) },
                 shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 4.dp, bottomEnd = 4.dp),
-                color = if (selected) acc.copy(alpha = 0.24f) else Color.White.copy(alpha = 0.06f),
+                color = if (selected) acc.copy(alpha = 0.26f) else idleTab,
                 border = if (selected) BorderStroke(1.5.dp, acc) else null,
             ) {
                 Text(
                     text = c.title.ifBlank { "Appeal" },
                     style = MaterialTheme.typography.titleSmall,
-                    color = if (selected) InkDark else InkMutedDark,
+                    color = if (selected) style.onScene else style.onSceneMuted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 11.dp),
@@ -175,9 +189,10 @@ private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, onSelect
 }
 
 @Composable
-private fun CampaignBackground(vm: KioskViewModel, url: String) {
-    // Always paint the default scene first (so there's never a blank flash while an image loads).
-    Box(Modifier.fillMaxSize().background(SceneBrush)) {
+private fun CampaignBackground(vm: KioskViewModel, url: String, brush: Brush) {
+    // Paint the campaign's scene (bright accent gradient, or the dark scene) first, so there's never
+    // a blank flash while a background image loads.
+    Box(Modifier.fillMaxSize().background(brush)) {
         if (url.isBlank()) return
         val bmp by produceState<ImageBitmap?>(initialValue = null, url) {
             value = runCatching { vm.image(url)?.asImageBitmap() }.getOrNull()
@@ -189,7 +204,7 @@ private fun CampaignBackground(vm: KioskViewModel, url: String) {
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            // Dark scrim so the (near-white) giving text stays legible over any image.
+            // Dark scrim so text stays legible over any image (text is light when a bg image is set).
             Box(Modifier.fillMaxSize().background(Color(0xAA020A12)))
         }
     }
@@ -230,4 +245,28 @@ private fun accentOf(c: Campaign?): Color {
     if (hex.length != 6) return PrimaryDark
     val v = hex.toLongOrNull(16) ?: return PrimaryDark
     return Color(0xFF000000L or v)
+}
+
+/** Resolve the giving-screen colour set: a bright, vibrant look (dark text on frosted-glass tiles)
+ *  or the calm dark scene (light text on subtle glass). */
+private fun sceneStyleFor(bright: Boolean, accent: Color): SceneStyle = if (bright) {
+    SceneStyle(
+        bright = true,
+        accent = accent,
+        onAccent = if (accent.luminance() > 0.6f) InkLight else Color.White,
+        onScene = InkLight,
+        onSceneMuted = InkMutedLight,
+        tile = Color.White.copy(alpha = 0.5f),
+        tileInk = InkLight,
+    )
+} else {
+    SceneStyle(
+        bright = false,
+        accent = accent,
+        onAccent = if (accent.luminance() > 0.6f) InkDark else Color.White,
+        onScene = InkDark,
+        onSceneMuted = InkMutedDark,
+        tile = Color.White.copy(alpha = 0.10f),
+        tileInk = InkDark,
+    )
 }

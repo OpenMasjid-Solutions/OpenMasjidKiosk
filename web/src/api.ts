@@ -275,7 +275,12 @@ export interface GivingConfig {
   namePolicy: PromptPolicy;
   emailPolicy: PromptPolicy;
   thankYouMessage: string;
+  /** Force the tablet to maximum screen brightness (a wall kiosk should be as bright as possible). */
+  maxBrightness: boolean;
 }
+
+/** Per-campaign kiosk appearance: 'light' (bright), 'dark', or 'auto' (bright unless a dark bg image). */
+export type CampaignTheme = 'auto' | 'light' | 'dark';
 
 /** The full giving-designer state: the giving config + the currency, masjid name and attract
  *  headline that share the same live-push mechanism. */
@@ -316,6 +321,8 @@ export interface Campaign {
   coverFees: boolean;
   /** '' inherits the global default thank-you. */
   thankYouMessage: string;
+  /** Kiosk appearance for this tab. */
+  theme: CampaignTheme;
   /** '' = the primary (reader) Stripe account. */
   stripeAccountId: string;
   live: boolean;
@@ -341,6 +348,7 @@ export type CampaignPatch = Partial<
     | 'monthlyEnabled'
     | 'coverFees'
     | 'thankYouMessage'
+    | 'theme'
     | 'stripeAccountId'
     | 'live'
   >
@@ -397,6 +405,8 @@ export interface Donation {
   paymentIntentId: string;
   deviceId: string;
   deviceName: string;
+  campaignId: string;
+  campaignTitle: string;
   amountMinor: number;
   currency: string;
   kind: string; // 'one_time' | 'monthly'

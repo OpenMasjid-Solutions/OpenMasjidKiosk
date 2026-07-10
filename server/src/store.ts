@@ -73,6 +73,8 @@ export interface GivingConfig {
   namePolicy: 'off' | 'optional' | 'required';
   emailPolicy: 'off' | 'optional' | 'required';
   thankYouMessage: string;
+  /** Force the tablet to maximum screen brightness (a wall kiosk should be as bright as possible). */
+  maxBrightness: boolean;
 }
 
 const GIVING_DEFAULTS: GivingConfig = {
@@ -86,6 +88,7 @@ const GIVING_DEFAULTS: GivingConfig = {
   namePolicy: 'optional',
   emailPolicy: 'optional',
   thankYouMessage: 'JazākAllāhu khayran — thank you for your generous donation.',
+  maxBrightness: true,
 };
 
 /** A giving campaign (an "appeal") the kiosk shows as a tab — its own amounts, colour,
@@ -114,6 +117,9 @@ export interface Campaign {
   coverFees: boolean;
   /** Per-campaign thank-you; '' inherits the global default message. */
   thankYouMessage: string;
+  /** Kiosk appearance for this campaign's tab: 'light' (bright), 'dark', or 'auto' (bright unless a
+   *  dark background image is set). Drives the vibrant bright look the giving screen defaults to. */
+  theme: string;
   /** Which Stripe account this campaign settles to. '' = the kiosk's primary account (the one the
    *  reader connects to). A different id routes the money elsewhere — but the physical reader is
    *  locked to the primary account, so a cross-account campaign is taken by keyed entry. */
@@ -140,6 +146,7 @@ const CAMPAIGN_DEFAULTS: Omit<Campaign, 'id' | 'title' | 'sortOrder' | 'createdA
   monthlyEnabled: true,
   coverFees: false,
   thankYouMessage: '',
+  theme: 'auto',
   stripeAccountId: '',
   live: true,
 };
@@ -283,6 +290,7 @@ export class Store {
         monthly_enabled INTEGER NOT NULL DEFAULT 1,
         cover_fees INTEGER NOT NULL DEFAULT 0,
         thank_you_message TEXT NOT NULL DEFAULT '',
+        theme TEXT NOT NULL DEFAULT 'auto',
         stripe_account_id TEXT NOT NULL DEFAULT '',
         live INTEGER NOT NULL DEFAULT 1,
         is_main INTEGER NOT NULL DEFAULT 0,
@@ -306,6 +314,11 @@ export class Store {
     }
     // Now that campaign_id is guaranteed to exist, its index is safe to create.
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_donations_campaign ON donations(campaign_id)');
+    // Add per-campaign appearance to an existing (pre-0.9.3) campaigns table.
+    {
+      const hasTheme = (this.db.prepare('PRAGMA table_info(campaigns)').all() as { name: string }[]).some((c) => c.name === 'theme');
+      if (!hasTheme) this.db.exec("ALTER TABLE campaigns ADD COLUMN theme TEXT NOT NULL DEFAULT 'auto'");
+    }
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
       fs.chmodSync(dbPath, 0o600);
@@ -490,6 +503,7 @@ export class Store {
     merged.monthlyEnabled = merged.monthlyEnabled !== false;
     merged.manualEntryEnabled = merged.manualEntryEnabled === true;
     merged.thankYouMessage = String(merged.thankYouMessage ?? GIVING_DEFAULTS.thankYouMessage).slice(0, 500);
+    merged.maxBrightness = merged.maxBrightness !== false; // default ON — a wall kiosk wants max brightness
     this.setRaw('giving', JSON.stringify(merged));
     this.bumpConfigVersion();
     return merged;
@@ -528,6 +542,7 @@ export class Store {
       monthlyEnabled: !!r.monthly_enabled,
       coverFees: !!r.cover_fees,
       thankYouMessage: String(r.thank_you_message),
+      theme: String(r.theme || 'auto'),
       stripeAccountId: String(r.stripe_account_id),
       live: !!r.live,
       isMain: !!r.is_main,
@@ -567,6 +582,7 @@ export class Store {
       monthlyEnabled: c.monthlyEnabled !== false,
       coverFees: c.coverFees === true,
       thankYouMessage: String(c.thankYouMessage ?? '').slice(0, 500),
+      theme: (['auto', 'light', 'dark'] as const).includes(c.theme as 'auto' | 'light' | 'dark') ? c.theme : 'auto',
       stripeAccountId: String(c.stripeAccountId ?? '').trim().slice(0, 120),
       live: c.live !== false,
     };
@@ -577,18 +593,18 @@ export class Store {
       .prepare(
         `INSERT INTO campaigns (id, title, description, accent_color, background_image, cover_image, logo,
            presets_minor, allow_custom, custom_min_minor, custom_max_minor, monthly_enabled, cover_fees,
-           thank_you_message, stripe_account_id, live, is_main, sort_order, created_at)
+           thank_you_message, theme, stripe_account_id, live, is_main, sort_order, created_at)
          VALUES (@id, @title, @description, @accentColor, @backgroundImage, @coverImage, @logo,
            @presetsJson, @allowCustom, @customMinMinor, @customMaxMinor, @monthlyEnabled, @coverFees,
-           @thankYouMessage, @stripeAccountId, @live, @isMain, @sortOrder, @createdAt)
+           @thankYouMessage, @theme, @stripeAccountId, @live, @isMain, @sortOrder, @createdAt)
          ON CONFLICT(id) DO UPDATE SET title=excluded.title, description=excluded.description,
            accent_color=excluded.accent_color, background_image=excluded.background_image,
            cover_image=excluded.cover_image, logo=excluded.logo, presets_minor=excluded.presets_minor,
            allow_custom=excluded.allow_custom, custom_min_minor=excluded.custom_min_minor,
            custom_max_minor=excluded.custom_max_minor, monthly_enabled=excluded.monthly_enabled,
            cover_fees=excluded.cover_fees, thank_you_message=excluded.thank_you_message,
-           stripe_account_id=excluded.stripe_account_id, live=excluded.live, is_main=excluded.is_main,
-           sort_order=excluded.sort_order`,
+           theme=excluded.theme, stripe_account_id=excluded.stripe_account_id, live=excluded.live,
+           is_main=excluded.is_main, sort_order=excluded.sort_order`,
       )
       .run({
         id: c.id,
@@ -605,6 +621,7 @@ export class Store {
         monthlyEnabled: c.monthlyEnabled ? 1 : 0,
         coverFees: c.coverFees ? 1 : 0,
         thankYouMessage: c.thankYouMessage,
+        theme: c.theme,
         stripeAccountId: c.stripeAccountId,
         live: c.live ? 1 : 0,
         isMain: c.isMain ? 1 : 0,
@@ -893,6 +910,7 @@ export class Store {
         monthlyEnabled: c.monthlyEnabled,
         coverFees: c.coverFees,
         thankYouMessage: c.thankYouMessage || g.thankYouMessage,
+        theme: c.theme || 'auto',
         isMain: c.isMain,
         // The reader is bound to the primary account; a campaign on another account is keyed-only.
         readerCapable: !c.stripeAccountId || c.stripeAccountId === primaryAccountId,
@@ -908,6 +926,7 @@ export class Store {
         manualEntryEnabled: g.manualEntryEnabled,
         namePolicy: g.namePolicy,
         emailPolicy: g.emailPolicy,
+        maxBrightness: g.maxBrightness !== false,
         // Cover-fee estimate so the tablet can display the same total the server will charge.
         feeBps: FEE_BPS,
         feeFixedMinor: FEE_FIXED_MINOR,

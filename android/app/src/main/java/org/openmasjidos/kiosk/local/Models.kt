@@ -49,6 +49,8 @@ data class Campaign(
     val coverFees: Boolean = false,
     /** '' inherits the global default thank-you. */
     val thankYouMessage: String = "",
+    /** Kiosk appearance for this tab: 'auto' (bright by default), 'light', or 'dark'. */
+    val theme: String = "auto",
     val isMain: Boolean = false,
     val readerCapable: Boolean = true,
 )
@@ -70,6 +72,7 @@ data class KioskConfig(
     val emailPolicy: String = "optional",
     val feeBps: Int = 290,               // cover-fees estimate: 2.9%
     val feeFixedMinor: Long = 30,        //                    + a small fixed fee
+    val maxBrightness: Boolean = true,   // force the tablet to full screen brightness
     val mainCampaignId: String = "",
     val campaigns: List<Campaign> = emptyList(),
 ) {

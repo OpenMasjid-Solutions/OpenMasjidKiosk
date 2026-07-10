@@ -3,6 +3,8 @@
 
 package org.openmasjidos.kiosk.ui
 
+import android.app.Activity
+import android.view.WindowManager
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -58,6 +60,19 @@ fun KioskRoot(
         if (updateUrl != null) {
             onOpenBrowser(updateUrl)
             vm.consumeOpenUpdate()
+        }
+    }
+
+    // Force the tablet to maximum screen brightness (a wall kiosk should be as bright as possible) —
+    // configurable in Admin → Kiosk settings, on by default. BRIGHTNESS_OVERRIDE_NONE hands control
+    // back to the system when turned off.
+    val ctx0 = LocalContext.current
+    val maxBright = ui.config?.maxBrightness != false
+    LaunchedEffect(maxBright) {
+        (ctx0 as? Activity)?.let { act ->
+            act.window.attributes = act.window.attributes.apply {
+                screenBrightness = if (maxBright) 1f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
         }
     }
 

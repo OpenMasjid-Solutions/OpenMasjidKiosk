@@ -85,7 +85,21 @@ object KioskController {
         val owner = dpmIfOwner(activity)
         if (owner != null) {
             val (dpm, admin) = owner
-            runCatching { dpm.setLockTaskPackages(admin, arrayOf(activity.packageName)) }
+            // Allow-list OUR package + the device's browser(s). The browser is needed so Stripe's card
+            // authentication (3DS) can open its Chrome Custom Tab during a KEYED card payment — a
+            // device-owner Lock Task kiosk silently blocks launching any non-allow-listed package, which
+            // is why keyed entry couldn't confirm before (tap-to-pay is in-process, so it was fine). The
+            // Custom Tab has no address bar and auto-returns, so this doesn't create an escape route.
+            runCatching {
+                val pkgs = linkedSetOf(activity.packageName)
+                runCatching {
+                    val pm = activity.packageManager
+                    val view = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://stripe.com"))
+                    pm.resolveActivity(view, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName?.let { pkgs.add(it) }
+                    pm.queryIntentActivities(view, 0).forEach { it.activityInfo?.packageName?.let { p -> pkgs.add(p) } }
+                }
+                dpm.setLockTaskPackages(admin, pkgs.toTypedArray())
+            }
             // Lock EVERYTHING down: Home, recents, the notification shade, the power menu and system
             // info are all disabled in Lock Task — you can't even press Home. (setLockTaskFeatures is
             // API 28+; LOCK_TASK_FEATURE_NONE is the most restrictive set.)

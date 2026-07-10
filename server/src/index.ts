@@ -471,6 +471,7 @@ async function main(): Promise<void> {
       namePolicy: z.enum(['off', 'optional', 'required']).optional(),
       emailPolicy: z.enum(['off', 'optional', 'required']).optional(),
       thankYouMessage: z.string().max(500).optional(),
+      maxBrightness: z.boolean().optional(),
       attractTitle: z.string().max(120).optional(),
       masjidName: z.string().max(160).optional(),
     })
@@ -508,6 +509,7 @@ async function main(): Promise<void> {
       monthlyEnabled: z.boolean().optional(),
       coverFees: z.boolean().optional(),
       thankYouMessage: z.string().max(500).optional(),
+      theme: z.enum(['auto', 'light', 'dark']).optional(),
       stripeAccountId: z.string().max(120).optional(),
       live: z.boolean().optional(),
     })

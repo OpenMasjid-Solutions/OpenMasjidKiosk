@@ -37,6 +37,7 @@ import {
   type Campaign,
   type CampaignPatch,
   type CampaignsData,
+  type CampaignTheme,
   type GivingSettings,
   type PromptPolicy,
   type StripeAccountRef,
@@ -173,6 +174,7 @@ function GlobalSettingsCard() {
   const [masjidName, setMasjidName] = useState('');
   const [namePolicy, setNamePolicy] = useState<PromptPolicy>('optional');
   const [emailPolicy, setEmailPolicy] = useState<PromptPolicy>('optional');
+  const [maxBrightness, setMaxBrightness] = useState(true);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState('');
@@ -182,6 +184,7 @@ function GlobalSettingsCard() {
     setMasjidName(s.masjidName);
     setNamePolicy(s.giving.namePolicy);
     setEmailPolicy(s.giving.emailPolicy);
+    setMaxBrightness(s.giving.maxBrightness !== false);
   }, []);
 
   useEffect(() => {
@@ -200,7 +203,7 @@ function GlobalSettingsCard() {
     setBusy(true);
     try {
       // Only the kiosk-wide subset lives here now; amounts/monthly/thank-you are per-campaign.
-      const fresh = await saveGiving({ masjidName, namePolicy, emailPolicy });
+      const fresh = await saveGiving({ masjidName, namePolicy, emailPolicy, maxBrightness });
       hydrate(fresh);
       setSaved(true);
     } catch (e) {
@@ -242,6 +245,13 @@ function GlobalSettingsCard() {
             <PolicyField id="g-name" label="Ask for a name" value={namePolicy} onChange={setNamePolicy} />
             <PolicyField id="g-email" label="Ask for an email" value={emailPolicy} onChange={setEmailPolicy} hint="An email lets Stripe send a receipt." />
           </div>
+
+          <Toggle
+            label="Force maximum screen brightness"
+            hint="Keeps a wall-mounted tablet as bright as possible so the giving screen is easy to read."
+            checked={maxBrightness}
+            onChange={setMaxBrightness}
+          />
 
           {err && <p className="form-error">{err}</p>}
           <div className="row" style={{ gap: '0.6rem', flexWrap: 'wrap', marginBlockStart: '0.4rem' }}>
@@ -369,6 +379,7 @@ function CampaignEditor({
   const [customMin, setCustomMin] = useState(campaign ? toMajorStr(campaign.customMinMinor, currency) : '1');
   const [customMax, setCustomMax] = useState(campaign ? toMajorStr(campaign.customMaxMinor, currency) : '');
   const [accentColor, setAccentColor] = useState(campaign?.accentColor ?? '');
+  const [theme, setTheme] = useState<CampaignTheme>(campaign?.theme ?? 'auto');
   const [backgroundImage, setBackgroundImage] = useState(campaign?.backgroundImage ?? '');
   const [coverImage, setCoverImage] = useState(campaign?.coverImage ?? '');
   const [logo, setLogo] = useState(campaign?.logo ?? '');
@@ -426,6 +437,7 @@ function CampaignEditor({
       title: t,
       description: description.trim(),
       accentColor,
+      theme,
       backgroundImage: backgroundImage.trim(),
       coverImage: coverImage.trim(),
       logo: logo.trim(),
@@ -553,6 +565,16 @@ function CampaignEditor({
                 </button>
               )}
             </div>
+          </div>
+
+          <div className="field">
+            <label className="label" htmlFor="c-theme">Appearance</label>
+            <select id="c-theme" className="input" value={theme} onChange={(e) => setTheme(e.target.value as CampaignTheme)}>
+              <option value="auto">Auto — bright, or dark over a dark background image</option>
+              <option value="light">Bright (light)</option>
+              <option value="dark">Dark</option>
+            </select>
+            <p className="hint">The kiosk defaults to a bright, vibrant look. Choose Dark for a calm night-time screen.</p>
           </div>
 
           {showAccountPicker && (

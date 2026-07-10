@@ -217,10 +217,12 @@ export async function createCardPaymentIntent(
     {
       amount: input.amountMinor,
       currency: input.currency.toLowerCase(),
-      // Mirror the proven OpenMasjidDonations pattern: let Stripe offer the account's enabled methods
-      // (Cards, Link, …) but NEVER a redirect method — the kiosk can't handle a browser redirect, and
-      // this keeps PaymentSheet to on-device forms. (Was explicit ['card'].)
-      automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+      // CARD ONLY for the kiosk's keyed entry. We deliberately do NOT use automatic_payment_methods:
+      // that offers Link (and wallets), whose verification opens an EXTERNAL browser — which a
+      // device-owner Lock Task kiosk blocks (only our package is allow-listed), so the payment could
+      // never confirm. Cards authenticate via native 3DS2 in-process (or, rarely, a Custom Tab we now
+      // allow-list during lock task — see KioskController.enterKiosk).
+      payment_method_types: ['card'],
       description: input.description || undefined,
       receipt_email: input.receiptEmail || undefined,
       metadata: input.metadata,

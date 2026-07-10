@@ -59,6 +59,7 @@ class DeviceStore(private val context: Context) {
         val CFG_EMAIL_POLICY = stringPreferencesKey("cfg_email_policy")
         val CFG_FEE_BPS = intPreferencesKey("cfg_fee_bps")
         val CFG_FEE_FIXED = longPreferencesKey("cfg_fee_fixed")
+        val CFG_MAX_BRIGHTNESS = booleanPreferencesKey("cfg_max_brightness")
         val CFG_MAIN_CAMPAIGN = stringPreferencesKey("cfg_main_campaign")
         val CFG_CAMPAIGNS = stringPreferencesKey("cfg_campaigns") // JSON array of campaigns
 
@@ -100,6 +101,7 @@ class DeviceStore(private val context: Context) {
                 emailPolicy = p[Keys.CFG_EMAIL_POLICY]?.takeIf { it.isNotBlank() } ?: "optional",
                 feeBps = p[Keys.CFG_FEE_BPS] ?: 290,
                 feeFixedMinor = p[Keys.CFG_FEE_FIXED] ?: 30L,
+                maxBrightness = p[Keys.CFG_MAX_BRIGHTNESS] ?: true,
                 mainCampaignId = p[Keys.CFG_MAIN_CAMPAIGN].orEmpty(),
                 campaigns = CampaignJson.parseString(p[Keys.CFG_CAMPAIGNS]),
             )
@@ -129,6 +131,7 @@ class DeviceStore(private val context: Context) {
             p[Keys.CFG_EMAIL_POLICY] = config.emailPolicy
             p[Keys.CFG_FEE_BPS] = config.feeBps
             p[Keys.CFG_FEE_FIXED] = config.feeFixedMinor
+            p[Keys.CFG_MAX_BRIGHTNESS] = config.maxBrightness
             p[Keys.CFG_MAIN_CAMPAIGN] = config.mainCampaignId
             p[Keys.CFG_CAMPAIGNS] = CampaignJson.toJsonString(config.campaigns)
         }

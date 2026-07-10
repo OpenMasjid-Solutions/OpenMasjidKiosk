@@ -3,13 +3,14 @@
 
 package org.openmasjidos.kiosk.ui
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -38,10 +40,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.openmasjidos.kiosk.GivingState
 import org.openmasjidos.kiosk.GivingStep
@@ -49,26 +51,35 @@ import org.openmasjidos.kiosk.MonthlyOutcome
 import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.ui.theme.DangerDark
-import org.openmasjidos.kiosk.ui.theme.GoldDark
-import org.openmasjidos.kiosk.ui.theme.InkDark
-import org.openmasjidos.kiosk.ui.theme.InkMutedDark
 import org.openmasjidos.kiosk.ui.theme.SuccessDark
 import java.util.Locale
 
 /**
+ * Resolved per-campaign appearance for the giving screen (computed in [GivingHome]). Lets one bright
+ * or dark, accent-tinted look flow through every step without hard-coding colours.
+ */
+data class SceneStyle(
+    val bright: Boolean,
+    val accent: Color,
+    val onAccent: Color,       // text on a filled accent button
+    val onScene: Color,        // headings on the background
+    val onSceneMuted: Color,   // subtitles / secondary
+    val tile: Color,           // amount tile fill (glass)
+    val tileInk: Color,        // amount text on a tile
+)
+
+/**
  * The donor-facing giving flow (§9) for one campaign: amount → (details) → card → thank-you.
- * GiveALittle-simple — huge targets, warm wording, no jargon. Card data is never touched here; the
- * reader + Stripe SDK handle it, and the server verifies every payment before it counts.
- *
- * The full-screen background + campaign tabs are drawn by [GivingHome]; this composable is
- * transparent and just renders the current step, tinted with the campaign's [accent].
+ * GiveALittle-simple — huge full-screen tiles, warm wording, no jargon. Card data is never touched
+ * here; the reader + Stripe SDK handle it, and the server verifies every payment before it counts.
+ * The full-screen background + campaign tabs are drawn by [GivingHome]; colours come from [style].
  */
 @Composable
 fun GivingScreen(
     giving: GivingState,
     campaign: Campaign,
     config: KioskConfig?,
-    accent: Color,
+    style: SceneStyle,
     readerConnected: Boolean,
     readerPrompt: String?,
     onSetMonthly: (Boolean) -> Unit,
@@ -83,32 +94,27 @@ fun GivingScreen(
     modifier: Modifier = Modifier,
 ) {
     val currency = config?.currency?.ifBlank { "USD" } ?: "USD"
-    val onAccent = if (accent.luminance() > 0.6f) InkDark else Color.White
-    // Keyed/manual entry is ALWAYS offered on the card step — a "type your card" fallback beside a
-    // connected reader (with no reader the manual sheet has already auto-opened over this step). It's
-    // never hidden behind a setting, so a donor can always pay even if the reader is fussy.
-    val manualOnCard = true
-    // The amount actually charged (base + estimated card fee when the donor opted to cover it).
+    val manualOnCard = true // keyed entry is always offered (see KioskViewModel)
     val chargeMinor = displayCharge(giving, campaign, config)
-    SceneBox(modifier) {
-        when (giving.step) {
-            GivingStep.Amount, GivingStep.Idle ->
-                AmountStep(giving, campaign, config, currency, accent, onAccent, readerConnected, onSetMonthly, onSetCoverFees, onChooseAmount)
-            GivingStep.Details -> DetailsStep(giving, config, accent, onAccent, onDonorName, onDonorEmail, onSubmitDetails, onCancel)
-            GivingStep.Card -> CardStep(chargeMinor, currency, accent, readerPrompt, manualOnCard, onEnterManually, onCancel)
-            GivingStep.Processing -> ProcessingStep(chargeMinor, currency, accent)
-            GivingStep.Thanks -> ThanksStep(giving, campaign, currency, chargeMinor, onCancel)
-            GivingStep.Error -> ErrorStep(giving.error, accent, onAccent, onRetry, onCancel)
+    when (giving.step) {
+        GivingStep.Amount, GivingStep.Idle ->
+            AmountStep(giving, campaign, config, currency, style, readerConnected, onSetMonthly, onSetCoverFees, onChooseAmount, modifier)
+        else -> CenteredScene(modifier) {
+            when (giving.step) {
+                GivingStep.Details -> DetailsStep(giving, config, style, onDonorName, onDonorEmail, onSubmitDetails, onCancel)
+                GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard, onEnterManually, onCancel)
+                GivingStep.Processing -> ProcessingStep(chargeMinor, currency, style)
+                GivingStep.Thanks -> ThanksStep(giving, campaign, currency, chargeMinor, style, onCancel)
+                GivingStep.Error -> ErrorStep(giving.error, style, onRetry, onCancel)
+                else -> Unit
+            }
         }
     }
 }
 
+/** Transparent centred column for the form-like steps (GivingHome owns the background). */
 @Composable
-private fun SceneBox(
-    modifier: Modifier = Modifier,
-    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
-) {
-    // Transparent — GivingHome owns the background (per-campaign image or the default scene).
+private fun CenteredScene(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -118,115 +124,128 @@ private fun SceneBox(
     }
 }
 
-// ── Step: choose an amount ───────────────────────────────────────────────────
+// ── Step: choose an amount (FULL-SCREEN, GiveALittle-style) ──────────────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.AmountStep(
+private fun AmountStep(
     giving: GivingState,
     campaign: Campaign,
     config: KioskConfig?,
     currency: String,
-    accent: Color,
-    onAccent: Color,
+    style: SceneStyle,
     readerConnected: Boolean,
     onSetMonthly: (Boolean) -> Unit,
     onSetCoverFees: (Boolean) -> Unit,
     onChoose: (Long) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var showPad by remember { mutableStateOf(false) }
     if (showPad) {
-        Numpad(campaign, currency, accent, onAccent, onConfirm = onChoose, onBack = { showPad = false })
+        CenteredScene(modifier) { Numpad(campaign, currency, style, onConfirm = onChoose, onBack = { showPad = false }) }
         return
     }
-    Text(
-        text = campaign.title.ifBlank { "Support your masjid" },
-        style = MaterialTheme.typography.displaySmall,
-        color = InkDark,
-        textAlign = TextAlign.Center,
-    )
-    if (campaign.description.isNotBlank()) {
-        Spacer(Modifier.height(6.dp))
-        Text(campaign.description, style = MaterialTheme.typography.bodyLarge, color = InkMutedDark, textAlign = TextAlign.Center)
-    } else {
-        Spacer(Modifier.height(6.dp))
-        Text("Choose an amount to give", style = MaterialTheme.typography.bodyLarge, color = InkMutedDark)
-    }
-    Spacer(Modifier.height(20.dp))
-    // One-time vs monthly — only when the campaign enabled monthly, the reader can take it (monthly
-    // needs a card-present charge), AND a reader is actually connected right now (so the donor can't
-    // pick monthly and fill in details only to hit a dead-end at the card step).
-    if (campaign.monthlyEnabled && campaign.readerCapable && readerConnected) {
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("One-time") }
-            SegmentedButton(selected = giving.monthly, onClick = { onSetMonthly(true) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Monthly") }
+    Column(
+        modifier = modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = campaign.title.ifBlank { "Support your masjid" },
+            style = MaterialTheme.typography.displaySmall,
+            color = style.onScene,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (campaign.description.isNotBlank()) {
+            Spacer(Modifier.height(2.dp))
+            Text(campaign.description, style = MaterialTheme.typography.titleMedium, color = style.onSceneMuted, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        if (giving.monthly) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Give this amount automatically every month. We'll ask for your name and email to set it up and send receipts.",
-                style = MaterialTheme.typography.bodySmall,
-                color = InkMutedDark,
-                textAlign = TextAlign.Center,
-            )
-        }
-        Spacer(Modifier.height(18.dp))
-    }
-    val presets = campaign.presetsMinor.ifEmpty { listOf(500L, 1000L, 2000L, 5000L, 10000L, 25000L) }
-    presets.chunked(2).forEach { row ->
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            row.forEach { minor ->
-                Button(
-                    onClick = { onChoose(minor) },
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f), contentColor = InkDark),
-                    modifier = Modifier.weight(1f).aspectRatio(2.1f),
-                ) { Text(formatMoney(minor, currency), style = MaterialTheme.typography.headlineMedium) }
+        // One-time vs monthly (only when the campaign enabled it, the reader can take it, and one is
+        // connected right now — monthly needs a card-present charge).
+        if (campaign.monthlyEnabled && campaign.readerCapable && readerConnected) {
+            Spacer(Modifier.height(12.dp))
+            SingleChoiceSegmentedButtonRow {
+                SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("One-time") }
+                SegmentedButton(selected = giving.monthly, onClick = { onSetMonthly(true) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Monthly") }
             }
-            if (row.size == 1) Spacer(Modifier.weight(1f))
         }
-        Spacer(Modifier.height(12.dp))
-    }
-    if (campaign.allowCustom) {
-        Spacer(Modifier.height(4.dp))
-        Button(
-            onClick = { showPad = true },
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = onAccent),
-            modifier = Modifier.fillMaxWidth().height(64.dp),
-        ) { Text("Other amount", style = MaterialTheme.typography.titleLarge) }
-    }
-    // Cover-fees opt-in (only when the campaign offers it). The exact total shows on the next screen.
-    if (campaign.coverFees) {
-        Spacer(Modifier.height(16.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                "Add the card fee so we receive your full gift",
-                style = MaterialTheme.typography.bodyMedium,
-                color = InkDark,
-                modifier = Modifier.weight(1f),
-            )
-            Switch(
-                checked = giving.coverFees,
-                onCheckedChange = onSetCoverFees,
-                colors = SwitchDefaults.colors(checkedTrackColor = accent),
-            )
+        Spacer(Modifier.height(14.dp))
+
+        val presets = campaign.presetsMinor.ifEmpty { listOf(500L, 1000L, 2000L, 5000L, 10000L, 25000L) }
+        val cols = if (presets.size <= 4) 2 else 3
+        // The tile grid fills all remaining height so the buttons are big + edge-to-edge.
+        Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            presets.chunked(cols).forEach { row ->
+                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    row.forEach { minor ->
+                        AmountTile(formatMoney(minor, currency), style, Modifier.weight(1f).fillMaxHeight()) { onChoose(minor) }
+                    }
+                    repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+            if (campaign.allowCustom) {
+                Row(Modifier.fillMaxWidth().weight(0.62f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    OtherTile(style, Modifier.weight(1f).fillMaxHeight()) { showPad = true }
+                }
+            }
+        }
+
+        // Cover-fees opt-in (only when the campaign offers it). Exact total shows on the next screen.
+        if (campaign.coverFees) {
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().widthIn(max = 620.dp).padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Add the card fee so we receive your full gift", style = MaterialTheme.typography.bodyMedium, color = style.onScene, modifier = Modifier.weight(1f))
+                Switch(checked = giving.coverFees, onCheckedChange = onSetCoverFees, colors = SwitchDefaults.colors(checkedTrackColor = style.accent))
+            }
         }
     }
-    // No Cancel here — the amount screen IS the resting state. Cancel appears only once a donation is
-    // under way (Details / Card steps).
+}
+
+/** A big glass amount tile: huge amount + "Donate" sublabel, GiveALittle-style. */
+@Composable
+private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(26.dp),
+        color = style.tile,
+        border = BorderStroke(1.5.dp, Color.White.copy(alpha = if (style.bright) 0.7f else 0.16f)),
+        shadowElevation = 3.dp,
+        modifier = modifier,
+    ) {
+        Column(Modifier.fillMaxSize().padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Text(label, style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold, color = style.tileInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(2.dp))
+            Text("Donate", style = MaterialTheme.typography.titleMedium, color = style.accent, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun OtherTile(style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(26.dp),
+        color = style.accent,
+        shadowElevation = 3.dp,
+        modifier = modifier,
+    ) {
+        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Text("Other amount", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = style.onAccent)
+        }
+    }
 }
 
 // ── Step: custom amount numpad ───────────────────────────────────────────────
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.Numpad(
+private fun ColumnScope.Numpad(
     campaign: Campaign,
     currency: String,
-    accent: Color,
-    onAccent: Color,
+    style: SceneStyle,
     onConfirm: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -238,11 +257,11 @@ private fun androidx.compose.foundation.layout.ColumnScope.Numpad(
     val max = campaign.customMaxMinor
     val valid = minor in min..max
 
-    Text("Enter an amount", style = MaterialTheme.typography.headlineSmall, color = InkDark)
+    Text("Enter an amount", style = MaterialTheme.typography.headlineSmall, color = style.onScene)
     Spacer(Modifier.height(16.dp))
-    Text(if (major == 0L) formatMoney(0, currency) else formatMoney(minor, currency), style = MaterialTheme.typography.displayMedium, color = InkDark)
+    Text(if (major == 0L) formatMoney(0, currency) else formatMoney(minor, currency), style = MaterialTheme.typography.displayMedium, color = style.onScene)
     Spacer(Modifier.height(6.dp))
-    Text("Between ${formatMoney(min, currency)} and ${formatMoney(max, currency)}", style = MaterialTheme.typography.bodySmall, color = InkMutedDark)
+    Text("Between ${formatMoney(min, currency)} and ${formatMoney(max, currency)}", style = MaterialTheme.typography.bodySmall, color = style.onSceneMuted)
     Spacer(Modifier.height(20.dp))
 
     val rows = listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf("⌫", "0", "OK"))
@@ -261,8 +280,8 @@ private fun androidx.compose.foundation.layout.ColumnScope.Numpad(
                     enabled = !isOk || valid,
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isOk) accent else MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                        contentColor = if (isOk) onAccent else InkDark,
+                        containerColor = if (isOk) style.accent else style.tile,
+                        contentColor = if (isOk) style.onAccent else style.tileInk,
                     ),
                     modifier = Modifier.weight(1f).height(66.dp),
                 ) { Text(key, style = MaterialTheme.typography.titleLarge) }
@@ -270,16 +289,15 @@ private fun androidx.compose.foundation.layout.ColumnScope.Numpad(
         }
         Spacer(Modifier.height(12.dp))
     }
-    TextButton(onClick = onBack) { Text("Back", color = InkMutedDark) }
+    TextButton(onClick = onBack) { Text("Back", color = style.onSceneMuted) }
 }
 
 // ── Step: optional donor details ─────────────────────────────────────────────
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.DetailsStep(
+private fun ColumnScope.DetailsStep(
     giving: GivingState,
     config: KioskConfig?,
-    accent: Color,
-    onAccent: Color,
+    style: SceneStyle,
     onName: (String) -> Unit,
     onEmail: (String) -> Unit,
     onSubmit: () -> Unit,
@@ -289,22 +307,16 @@ private fun androidx.compose.foundation.layout.ColumnScope.DetailsStep(
     val emailOn = giving.monthly || (config?.emailPolicy ?: "off") != "off"
     val nameReq = giving.monthly || config?.namePolicy == "required"
     val emailReq = giving.monthly || config?.emailPolicy == "required"
-    Text("Your details", style = MaterialTheme.typography.headlineSmall, color = InkDark)
+    Text("Your details", style = MaterialTheme.typography.headlineSmall, color = style.onScene)
     Spacer(Modifier.height(6.dp))
     Text(
         if (giving.monthly) "For your monthly giving and receipts." else "For your receipt — optional unless marked required.",
         style = MaterialTheme.typography.bodyMedium,
-        color = InkMutedDark,
+        color = style.onSceneMuted,
     )
     Spacer(Modifier.height(20.dp))
     if (nameOn) {
-        OutlinedTextField(
-            value = giving.donorName,
-            onValueChange = onName,
-            label = { Text(if (nameReq) "Name (required)" else "Name (optional)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        OutlinedTextField(value = giving.donorName, onValueChange = onName, label = { Text(if (nameReq) "Name (required)" else "Name (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(12.dp))
     }
     if (emailOn) {
@@ -325,59 +337,64 @@ private fun androidx.compose.foundation.layout.ColumnScope.DetailsStep(
     Button(
         onClick = onSubmit,
         shape = RoundedCornerShape(16.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = onAccent),
+        colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
         modifier = Modifier.fillMaxWidth().height(60.dp),
     ) { Text("Continue", style = MaterialTheme.typography.titleLarge) }
     Spacer(Modifier.height(8.dp))
-    TextButton(onClick = onCancel) { Text("Cancel", color = InkMutedDark) }
+    TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
 }
 
 // ── Step: collect the card ───────────────────────────────────────────────────
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.CardStep(
+private fun ColumnScope.CardStep(
     chargeMinor: Long,
     currency: String,
-    accent: Color,
+    style: SceneStyle,
     readerPrompt: String?,
     manualEnabled: Boolean,
     onEnterManually: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    Text(formatMoney(chargeMinor, currency), style = MaterialTheme.typography.displayMedium, color = GoldDark)
+    Text(formatMoney(chargeMinor, currency), style = MaterialTheme.typography.displayMedium, color = style.accent, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(20.dp))
-    CircularProgressIndicator(color = accent)
+    CircularProgressIndicator(color = style.accent)
     Spacer(Modifier.height(20.dp))
     Text(
         text = readerPrompt?.takeIf { it.isNotBlank() } ?: "Tap, insert or swipe your card",
         style = MaterialTheme.typography.headlineSmall,
-        color = InkDark,
+        color = style.onScene,
         textAlign = TextAlign.Center,
     )
     if (manualEnabled) {
         Spacer(Modifier.height(20.dp))
-        TextButton(onClick = onEnterManually) { Text("Enter card details instead", color = GoldDark) }
+        Button(
+            onClick = onEnterManually,
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
+        ) { Text("Enter card details") }
     }
     Spacer(Modifier.height(16.dp))
-    OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp)) { Text("Cancel", color = InkMutedDark) }
+    OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp)) { Text("Cancel", color = style.onSceneMuted) }
 }
 
 // ── Step: processing (card read; server verifying) ───────────────────────────
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.ProcessingStep(chargeMinor: Long, currency: String, accent: Color) {
-    Text(formatMoney(chargeMinor, currency), style = MaterialTheme.typography.displayMedium, color = GoldDark)
+private fun ColumnScope.ProcessingStep(chargeMinor: Long, currency: String, style: SceneStyle) {
+    Text(formatMoney(chargeMinor, currency), style = MaterialTheme.typography.displayMedium, color = style.accent, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(20.dp))
-    CircularProgressIndicator(color = accent)
+    CircularProgressIndicator(color = style.accent)
     Spacer(Modifier.height(20.dp))
-    Text("Processing your donation…", style = MaterialTheme.typography.headlineSmall, color = InkDark, textAlign = TextAlign.Center)
+    Text("Processing your donation…", style = MaterialTheme.typography.headlineSmall, color = style.onScene, textAlign = TextAlign.Center)
 }
 
 // ── Step: thank you ──────────────────────────────────────────────────────────
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.ThanksStep(
+private fun ColumnScope.ThanksStep(
     giving: GivingState,
     campaign: Campaign,
     currency: String,
     chargeMinor: Long,
+    style: SceneStyle,
     onCancel: () -> Unit,
 ) {
     val msg = campaign.thankYouMessage.takeIf { it.isNotBlank() }
@@ -388,12 +405,13 @@ private fun androidx.compose.foundation.layout.ColumnScope.ThanksStep(
         Text(
             text = if (giving.monthly) "${formatMoney(chargeMinor, currency)} / month" else "You gave ${formatMoney(chargeMinor, currency)}",
             style = MaterialTheme.typography.headlineMedium,
-            color = GoldDark,
+            color = style.accent,
+            fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(12.dp))
     }
-    Text(msg, style = MaterialTheme.typography.headlineSmall, color = InkDark, textAlign = TextAlign.Center)
+    Text(msg, style = MaterialTheme.typography.headlineSmall, color = style.onScene, textAlign = TextAlign.Center)
     when (giving.monthlyOutcome) {
         MonthlyOutcome.Created -> {
             Spacer(Modifier.height(10.dp))
@@ -401,41 +419,40 @@ private fun androidx.compose.foundation.layout.ColumnScope.ThanksStep(
         }
         MonthlyOutcome.NotSupported -> {
             Spacer(Modifier.height(10.dp))
-            Text("We couldn't set up monthly giving with this card, but your gift today went through. Thank you!", style = MaterialTheme.typography.bodyMedium, color = InkMutedDark, textAlign = TextAlign.Center)
+            Text("We couldn't set up monthly giving with this card, but your gift today went through. Thank you!", style = MaterialTheme.typography.bodyMedium, color = style.onSceneMuted, textAlign = TextAlign.Center)
         }
         MonthlyOutcome.None -> Unit
     }
     Spacer(Modifier.height(28.dp))
-    OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp)) { Text("Done", color = InkDark) }
+    OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp)) { Text("Done", color = style.onScene) }
 }
 
 // ── Step: error ──────────────────────────────────────────────────────────────
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.ErrorStep(error: String?, accent: Color, onAccent: Color, onRetry: () -> Unit, onCancel: () -> Unit) {
-    Text("Sorry", style = MaterialTheme.typography.displaySmall, color = InkDark)
+private fun ColumnScope.ErrorStep(error: String?, style: SceneStyle, onRetry: () -> Unit, onCancel: () -> Unit) {
+    Text("Sorry", style = MaterialTheme.typography.displaySmall, color = style.onScene)
     Spacer(Modifier.height(12.dp))
     Text(
         error ?: "That didn’t go through — no charge was made.",
         style = MaterialTheme.typography.bodyLarge,
-        color = InkMutedDark,
+        color = style.onSceneMuted,
         textAlign = TextAlign.Center,
     )
     Spacer(Modifier.height(28.dp))
     Button(
         onClick = onRetry,
         shape = RoundedCornerShape(16.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = onAccent),
+        colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
         modifier = Modifier.fillMaxWidth().height(58.dp),
     ) { Text("Try again", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) }
     Spacer(Modifier.height(8.dp))
-    TextButton(onClick = onCancel) { Text("Not now", color = InkMutedDark) }
+    TextButton(onClick = onCancel) { Text("Not now", color = style.onSceneMuted) }
 }
 
 // ── Amount / fee helpers ─────────────────────────────────────────────────────
 
-/** The amount to display/charge: the base, grossed up by the cover-fee estimate when opted in. Must
- *  match the server's [grossUpForFees] so the tablet shows exactly what will be charged. Gated on the
- *  campaign allowing cover-fees (same as the server), so the two never diverge. */
+/** The amount to display/charge: base grossed up by the cover-fee estimate when opted in. Matches
+ *  the server's grossUpForFees + is gated on the campaign allowing cover-fees (never diverges). */
 private fun displayCharge(giving: GivingState, campaign: Campaign, config: KioskConfig?): Long {
     if (!giving.coverFees || !campaign.coverFees || giving.amountMinor <= 0) return giving.amountMinor
     val bps = config?.feeBps ?: 290
