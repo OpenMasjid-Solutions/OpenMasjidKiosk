@@ -256,8 +256,10 @@ private fun sceneStyleFor(bright: Boolean, accent: Color): SceneStyle = if (brig
         onAccent = if (accent.luminance() > 0.6f) InkLight else Color.White,
         onScene = InkLight,
         onSceneMuted = InkMutedLight,
-        tile = Color.White.copy(alpha = 0.5f),
+        tile = Color.White.copy(alpha = 0.62f),
         tileInk = InkLight,
+        card = Color.White.copy(alpha = 0.3f),
+        cardBorder = Color.White.copy(alpha = 0.6f),
     )
 } else {
     SceneStyle(
@@ -266,7 +268,9 @@ private fun sceneStyleFor(bright: Boolean, accent: Color): SceneStyle = if (brig
         onAccent = if (accent.luminance() > 0.6f) InkDark else Color.White,
         onScene = InkDark,
         onSceneMuted = InkMutedDark,
-        tile = Color.White.copy(alpha = 0.10f),
+        tile = Color.White.copy(alpha = 0.12f),
         tileInk = InkDark,
+        card = Color.White.copy(alpha = 0.06f),
+        cardBorder = Color.White.copy(alpha = 0.14f),
     )
 }

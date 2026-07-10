@@ -115,6 +115,7 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)  // device token / config / pinned cert at rest
     implementation(libs.androidx.work.runtime.ktx)        // backstop heartbeat when backgrounded
     implementation(libs.okhttp)                           // pinned-HTTPS client (self-signed LAN cert)
+    implementation(libs.androidx.webkit)                  // WebViewAssetLoader — keyed-entry Stripe.js form
     implementation(libs.kotlinx.coroutines.android)       // IO dispatcher for blocking OkHttp calls
     implementation(libs.bouncycastle)                     // offline SCrypt PIN verification
 

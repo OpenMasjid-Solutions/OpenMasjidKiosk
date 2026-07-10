@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!-- Copyright (C) 2026 OpenMasjid-Solutions -->
+<!--
+  Keyed / typed card entry for the kiosk, using Stripe.js Payment Element — the SAME approach as
+  OpenMasjidDonations. This page is served LOCALLY by WebViewAssetLoader over
+  https://appassets.androidplatform.net/, so it runs inside our own (Lock-Task allow-listed) activity
+  and NEVER launches an external browser: card authentication (3-D Secure) renders in an iframe on
+  this page (redirect:'if_required'). The card number is entered into Stripe's iframe and tokenised
+  on-device — our code/server never sees the PAN. Results are handed back to the app via the
+  `KioskPay` JS bridge; the app then verifies the PaymentIntent server-side before recording.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <script src="https://js.stripe.com/v3/"></script>
+    <style>
+      :root { --accent: #22d3ee; }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: transparent; color: #f4f7fb;
+        display: flex; align-items: center; justify-content: center; padding: 20px;
+      }
+      .card {
+        width: 100%; max-width: 560px;
+        background: rgba(10, 24, 40, 0.92);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 26px; padding: 26px 24px 22px;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+      }
+      h1 { font-size: 1.35rem; margin: 0 0 2px; text-align: center; }
+      .sub { color: #aebacd; text-align: center; margin: 0 0 20px; font-size: 0.95rem; }
+      #pe { margin-bottom: 18px; min-height: 40px; }
+      #msg { color: #f87171; font-size: 0.9rem; margin: 0 0 12px; text-align: center; min-height: 1em; }
+      button { width: 100%; border: 0; border-radius: 16px; font-size: 1.1rem; font-weight: 700; cursor: pointer; }
+      #pay { background: var(--accent); color: #04121a; padding: 16px; }
+      #pay:disabled { opacity: 0.55; }
+      #cancel { background: transparent; color: #aebacd; padding: 12px; font-weight: 600; margin-top: 6px; }
+      .spin { display: inline-block; width: 1em; height: 1em; border: 2px solid rgba(4,18,26,0.35); border-top-color: #04121a; border-radius: 50%; animation: s 0.8s linear infinite; vertical-align: -2px; }
+      @keyframes s { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1 id="title">Enter your card</h1>
+      <p class="sub" id="amt"></p>
+      <div id="pe"></div>
+      <p id="msg"></p>
+      <button id="pay" disabled>Pay</button>
+      <button id="cancel">Cancel</button>
+    </div>
+    <script>
+      (function () {
+        function bridge(status, detail) {
+          try { if (window.KioskPay && KioskPay.onResult) KioskPay.onResult(status, detail || ''); } catch (e) {}
+        }
+        var params = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+        var cs = params.get('cs') || '';
+        var pk = params.get('pk') || '';
+        var ac = params.get('ac');
+        var amt = params.get('amt');
+        var payLabel = params.get('pay') || 'Pay';
+        if (ac) document.documentElement.style.setProperty('--accent', ac);
+        if (amt) document.getElementById('amt').textContent = amt;
+        var payBtn = document.getElementById('pay');
+        var cancelBtn = document.getElementById('cancel');
+        var msg = document.getElementById('msg');
+        payBtn.textContent = payLabel;
+        cancelBtn.addEventListener('click', function () { bridge('canceled', ''); });
+
+        if (!cs || !pk || typeof Stripe === 'undefined') {
+          msg.textContent = 'Couldn’t load the card form. Please try again.';
+          return;
+        }
+        var stripe = Stripe(pk);
+        var elements = stripe.elements({
+          clientSecret: cs,
+          appearance: { theme: 'night', variables: { colorPrimary: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#22d3ee', borderRadius: '12px' } },
+        });
+        var paymentElement = elements.create('payment', { layout: 'tab' });
+        paymentElement.mount('#pe');
+        paymentElement.on('ready', function () { payBtn.disabled = false; });
+
+        var busy = false;
+        payBtn.addEventListener('click', function () {
+          if (busy) return;
+          busy = true; msg.textContent = '';
+          payBtn.disabled = true; payBtn.innerHTML = '<span class="spin"></span>';
+          stripe.confirmPayment({ elements: elements, redirect: 'if_required' }).then(function (result) {
+            if (result.error) {
+              busy = false; payBtn.disabled = false; payBtn.textContent = payLabel;
+              msg.textContent = result.error.message || 'That card didn’t go through.';
+              // Keep the donor on the form to retry; only report a hard failure to the app if it's not
+              // a simple validation/decline they can fix in place.
+              if (result.error.type && result.error.type !== 'validation_error' && result.error.type !== 'card_error') {
+                bridge('failed', result.error.message || result.error.type);
+              }
+            } else if (result.paymentIntent && (result.paymentIntent.status === 'succeeded' || result.paymentIntent.status === 'processing' || result.paymentIntent.status === 'requires_capture')) {
+              bridge('completed', result.paymentIntent.id);
+            } else {
+              busy = false; payBtn.disabled = false; payBtn.textContent = payLabel;
+              msg.textContent = 'That didn’t complete. Please try again.';
+            }
+          }).catch(function (e) {
+            busy = false; payBtn.disabled = false; payBtn.textContent = payLabel;
+            msg.textContent = 'Something went wrong. Please try again.';
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>

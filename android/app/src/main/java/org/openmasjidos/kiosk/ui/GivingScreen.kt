@@ -4,19 +4,22 @@
 package org.openmasjidos.kiosk.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -66,6 +70,8 @@ data class SceneStyle(
     val onSceneMuted: Color,   // subtitles / secondary
     val tile: Color,           // amount tile fill (glass)
     val tileInk: Color,        // amount text on a tile
+    val card: Color,           // the central giving card (liquid glass)
+    val cardBorder: Color,     // its hairline border
 )
 
 /**
@@ -98,10 +104,10 @@ fun GivingScreen(
     val chargeMinor = displayCharge(giving, campaign, config)
     when (giving.step) {
         GivingStep.Amount, GivingStep.Idle ->
-            AmountStep(giving, campaign, config, currency, style, readerConnected, onSetMonthly, onSetCoverFees, onChooseAmount, modifier)
+            AmountStep(giving, campaign, currency, style, readerConnected, onSetMonthly, onChooseAmount, modifier)
         else -> CenteredScene(modifier) {
             when (giving.step) {
-                GivingStep.Details -> DetailsStep(giving, config, style, onDonorName, onDonorEmail, onSubmitDetails, onCancel)
+                GivingStep.Details -> DetailsStep(giving, campaign, config, currency, style, onDonorName, onDonorEmail, onSetCoverFees, onSubmitDetails, onCancel)
                 GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard, onEnterManually, onCancel)
                 GivingStep.Processing -> ProcessingStep(chargeMinor, currency, style)
                 GivingStep.Thanks -> ThanksStep(giving, campaign, currency, chargeMinor, style, onCancel)
@@ -124,118 +130,115 @@ private fun CenteredScene(modifier: Modifier = Modifier, content: @Composable Co
     }
 }
 
-// ── Step: choose an amount (FULL-SCREEN, GiveALittle-style) ──────────────────
+// ── Step: choose an amount (a centred liquid-glass card; 6 big buttons + a small "Other") ──────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AmountStep(
     giving: GivingState,
     campaign: Campaign,
-    config: KioskConfig?,
     currency: String,
     style: SceneStyle,
     readerConnected: Boolean,
     onSetMonthly: (Boolean) -> Unit,
-    onSetCoverFees: (Boolean) -> Unit,
     onChoose: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showPad by remember { mutableStateOf(false) }
-    if (showPad) {
-        CenteredScene(modifier) { Numpad(campaign, currency, style, onConfirm = onChoose, onBack = { showPad = false }) }
-        return
-    }
-    Column(
-        modifier = modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = campaign.title.ifBlank { "Support your masjid" },
-            style = MaterialTheme.typography.displaySmall,
-            color = style.onScene,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (campaign.description.isNotBlank()) {
-            Spacer(Modifier.height(2.dp))
-            Text(campaign.description, style = MaterialTheme.typography.titleMedium, color = style.onSceneMuted, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        // One-time vs monthly (only when the campaign enabled it, the reader can take it, and one is
-        // connected right now — monthly needs a card-present charge).
-        if (campaign.monthlyEnabled && campaign.readerCapable && readerConnected) {
-            Spacer(Modifier.height(12.dp))
-            SingleChoiceSegmentedButtonRow {
-                SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("One-time") }
-                SegmentedButton(selected = giving.monthly, onClick = { onSetMonthly(true) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Monthly") }
-            }
-        }
-        Spacer(Modifier.height(14.dp))
-
-        val presets = campaign.presetsMinor.ifEmpty { listOf(500L, 1000L, 2000L, 5000L, 10000L, 25000L) }
-        val cols = if (presets.size <= 4) 2 else 3
-        // The tile grid fills all remaining height so the buttons are big + edge-to-edge.
-        Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            presets.chunked(cols).forEach { row ->
-                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    row.forEach { minor ->
-                        AmountTile(formatMoney(minor, currency), style, Modifier.weight(1f).fillMaxHeight()) { onChoose(minor) }
-                    }
-                    repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
-                }
-            }
-            if (campaign.allowCustom) {
-                Row(Modifier.fillMaxWidth().weight(0.62f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    OtherTile(style, Modifier.weight(1f).fillMaxHeight()) { showPad = true }
-                }
-            }
-        }
-
-        // Cover-fees opt-in (only when the campaign offers it). Exact total shows on the next screen.
-        if (campaign.coverFees) {
-            Spacer(Modifier.height(10.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth().widthIn(max = 620.dp).padding(horizontal = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+    Box(modifier = modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.Center) {
+        Surface(
+            shape = RoundedCornerShape(30.dp),
+            color = style.card,
+            border = BorderStroke(1.dp, style.cardBorder),
+            shadowElevation = 12.dp,
+            modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth().verticalScroll(rememberScrollState()),
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 26.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("Add the card fee so we receive your full gift", style = MaterialTheme.typography.bodyMedium, color = style.onScene, modifier = Modifier.weight(1f))
-                Switch(checked = giving.coverFees, onCheckedChange = onSetCoverFees, colors = SwitchDefaults.colors(checkedTrackColor = style.accent))
+                if (showPad) {
+                    Numpad(campaign, currency, style, onConfirm = onChoose, onBack = { showPad = false })
+                    return@Column
+                }
+                Text(
+                    text = campaign.title.ifBlank { "Support your masjid" },
+                    style = MaterialTheme.typography.displaySmall,
+                    color = style.onScene,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                )
+                if (campaign.description.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(campaign.description, style = MaterialTheme.typography.titleMedium, color = style.onSceneMuted, textAlign = TextAlign.Center)
+                }
+                // One-time vs monthly (only when the campaign enabled it, the reader can take it, and
+                // one is connected right now — monthly needs a card-present charge).
+                if (campaign.monthlyEnabled && campaign.readerCapable && readerConnected) {
+                    Spacer(Modifier.height(18.dp))
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("One-time") }
+                        SegmentedButton(selected = giving.monthly, onClick = { onSetMonthly(true) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Monthly") }
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+
+                // Six BIG readable glass buttons in a 2-column grid.
+                val presets = campaign.presetsMinor.take(6).ifEmpty { listOf(500L, 1000L, 2000L, 5000L, 10000L, 25000L) }
+                presets.chunked(2).forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        row.forEach { minor ->
+                            AmountTile(formatMoney(minor, currency), style, Modifier.weight(1f).aspectRatio(2.3f)) { onChoose(minor) }
+                        }
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                // A SMALL "Other amount" pill (GiveALittle-style), not a full-width button.
+                if (campaign.allowCustom) {
+                    Spacer(Modifier.height(2.dp))
+                    Surface(
+                        onClick = { showPad = true },
+                        shape = RoundedCornerShape(50),
+                        color = Color.Transparent,
+                        border = BorderStroke(1.5.dp, style.accent),
+                    ) {
+                        Text(
+                            "Other amount",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = style.onScene,
+                            modifier = Modifier.padding(horizontal = 26.dp, vertical = 12.dp),
+                        )
+                    }
+                }
             }
         }
     }
 }
 
-/** A big glass amount tile: huge amount + "Donate" sublabel, GiveALittle-style. */
+/** A big glass amount tile: huge amount + "Donate" sublabel, with a liquid-glass sheen. */
 @Composable
 private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(22.dp),
         color = style.tile,
-        border = BorderStroke(1.5.dp, Color.White.copy(alpha = if (style.bright) 0.7f else 0.16f)),
+        border = BorderStroke(1.5.dp, if (style.bright) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.18f)),
         shadowElevation = 3.dp,
         modifier = modifier,
     ) {
-        Column(Modifier.fillMaxSize().padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            Text(label, style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold, color = style.tileInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(2.dp))
-            Text("Donate", style = MaterialTheme.typography.titleMedium, color = style.accent, fontWeight = FontWeight.SemiBold)
-        }
-    }
-}
-
-@Composable
-private fun OtherTile(style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(26.dp),
-        color = style.accent,
-        shadowElevation = 3.dp,
-        modifier = modifier,
-    ) {
-        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            Text("Other amount", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = style.onAccent)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                // A soft top-down highlight gives the tile a glassy sheen.
+                .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = if (style.bright) 0.35f else 0.12f), Color.Transparent))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(label, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold, color = style.tileInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Donate", style = MaterialTheme.typography.bodyLarge, color = style.accent, fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }
@@ -296,10 +299,13 @@ private fun ColumnScope.Numpad(
 @Composable
 private fun ColumnScope.DetailsStep(
     giving: GivingState,
+    campaign: Campaign,
     config: KioskConfig?,
+    currency: String,
     style: SceneStyle,
     onName: (String) -> Unit,
     onEmail: (String) -> Unit,
+    onSetCoverFees: (Boolean) -> Unit,
     onSubmit: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -328,6 +334,24 @@ private fun ColumnScope.DetailsStep(
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Email),
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+    // Cover-fees opt-in lives here, next to name/email, and shows the exact extra it adds.
+    if (campaign.coverFees && !giving.monthly) {
+        Spacer(Modifier.height(16.dp))
+        val extra = feeExtra(giving.amountMinor, config)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                "Add a little to cover card fees, so the masjid receives the full amount (+${formatMoney(extra, currency)})",
+                style = MaterialTheme.typography.bodyMedium,
+                color = style.onScene,
+                modifier = Modifier.weight(1f).padding(end = 12.dp),
+            )
+            Switch(checked = giving.coverFees, onCheckedChange = onSetCoverFees, colors = SwitchDefaults.colors(checkedTrackColor = style.accent))
+        }
     }
     giving.error?.let {
         Spacer(Modifier.height(12.dp))
@@ -455,10 +479,16 @@ private fun ColumnScope.ErrorStep(error: String?, style: SceneStyle, onRetry: ()
  *  the server's grossUpForFees + is gated on the campaign allowing cover-fees (never diverges). */
 private fun displayCharge(giving: GivingState, campaign: Campaign, config: KioskConfig?): Long {
     if (!giving.coverFees || !campaign.coverFees || giving.amountMinor <= 0) return giving.amountMinor
+    return giving.amountMinor + feeExtra(giving.amountMinor, config)
+}
+
+/** The estimated extra a donor adds by covering the card fee (grossed-up total − base). */
+private fun feeExtra(baseMinor: Long, config: KioskConfig?): Long {
+    if (baseMinor <= 0) return 0
     val bps = config?.feeBps ?: 290
     val fixed = config?.feeFixedMinor ?: 30
-    val total = Math.ceil((giving.amountMinor + fixed) / (1.0 - bps / 10000.0)).toLong()
-    return maxOf(giving.amountMinor, total)
+    val total = Math.ceil((baseMinor + fixed) / (1.0 - bps / 10000.0)).toLong()
+    return maxOf(0L, total - baseMinor)
 }
 
 // ── Money formatting ─────────────────────────────────────────────────────────

@@ -5,7 +5,6 @@ package org.openmasjidos.kiosk
 
 import android.app.Application
 import android.os.Build
-import com.stripe.android.PaymentConfiguration
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -56,7 +55,13 @@ enum class MonthlyOutcome { None, Created, NotSupported }
 
 /** A one-shot request for the UI to present Stripe's on-device card form (keyed/manual entry).
  *  When [GivingState.manual] is non-null, KioskRoot presents PaymentSheet and reports the result. */
-data class ManualEntry(val piId: String, val clientSecret: String, val publishableKey: String)
+data class ManualEntry(
+    val piId: String,
+    val clientSecret: String,
+    val publishableKey: String,
+    val chargeMinor: Long = 0L,
+    val currency: String = "",
+)
 
 /** Outcome the UI reports back after presenting the manual card form. */
 enum class ManualResult { Completed, Canceled, Failed }
@@ -235,18 +240,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
         }
-        // Initialise Stripe (for the manual card sheet) EARLY with the publishable key from config —
-        // PaymentSheet fails immediately if PaymentConfiguration wasn't set up before it's presented.
-        // Keyed entry is always offered now, so init whenever a publishable key is present (not gated
-        // on the old manual-entry toggle). KioskRoot also re-inits just-in-time as a belt-and-braces.
-        viewModelScope.launch {
-            repo.config
-                .map { it?.publishableKey.orEmpty() }
-                .distinctUntilChanged()
-                .collect { pk ->
-                    if (pk.isNotBlank()) runCatching { PaymentConfiguration.init(appContext, pk) }
-                }
-        }
+        // (Keyed card entry now uses Stripe.js in an in-app WebView — no PaymentConfiguration/PaymentSheet
+        //  init needed; the publishable key is passed to the WebView per keyed PaymentIntent.)
         // Arm/cancel the idle-abandon timer at every step transition (so a donor who fills in details
         // then walks away doesn't leave their name/email on screen — see rescheduleIdleReset).
         viewModelScope.launch {
@@ -418,7 +413,12 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         if (amountMinor <= 0) return
         val cfg = ui.value.config
         val monthly = local.value.giving.monthly
-        val wantsDetails = monthly || (cfg?.namePolicy ?: "off") != "off" || (cfg?.emailPolicy ?: "off") != "off"
+        // Show the details step for name/email prompts, monthly, OR when the campaign offers cover-fees
+        // (its toggle lives on that step, showing the exact extra it adds).
+        val wantsDetails = monthly ||
+            (cfg?.namePolicy ?: "off") != "off" ||
+            (cfg?.emailPolicy ?: "off") != "off" ||
+            activeCampaign()?.coverFees == true
         cancelAutoReturn() // a donation is starting — don't yank the donor back to the main tab
         updateGiving { it.copy(amountMinor = amountMinor, error = null, step = if (wantsDetails) GivingStep.Details else GivingStep.Card) }
         if (!wantsDetails) startCollect()
@@ -548,7 +548,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 repo.flushLogs()
                 return@launch
             }
-            updateGiving { it.copy(manual = ManualEntry(pi.id, pi.clientSecret, pk)) }
+            updateGiving { it.copy(manual = ManualEntry(pi.id, pi.clientSecret, pk, pi.chargeMinor, ui.value.config?.currency.orEmpty())) }
         }
     }
 

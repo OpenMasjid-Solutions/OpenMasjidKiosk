@@ -21,12 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.stripe.android.PaymentConfiguration
-import com.stripe.android.paymentsheet.PaymentSheet
-import com.stripe.android.paymentsheet.PaymentSheetResult
-import com.stripe.android.paymentsheet.rememberPaymentSheet
 import org.openmasjidos.kiosk.KioskViewModel
-import org.openmasjidos.kiosk.ManualResult
 import org.openmasjidos.kiosk.Overlay
 import org.openmasjidos.kiosk.Phase
 import org.openmasjidos.kiosk.R
@@ -76,29 +71,12 @@ fun KioskRoot(
         }
     }
 
-    // Manual/keyed card entry: present Stripe's own card sheet (it tokenises the card on-device and
-    // confirms the PaymentIntent directly with Stripe — our code never sees the card number). The VM
-    // then verifies the result server-side before recording, same as the reader.
-    val context = LocalContext.current
-    val paymentSheet = rememberPaymentSheet { result ->
-        when (result) {
-            is PaymentSheetResult.Completed -> vm.onManualResult(ManualResult.Completed)
-            is PaymentSheetResult.Canceled -> vm.onManualResult(ManualResult.Canceled)
-            is PaymentSheetResult.Failed -> vm.onManualResult(ManualResult.Failed, result.error.message)
-        }
-    }
+    // Keyed/manual card entry runs Stripe.js Payment Element in an in-app WebView (ManualCardWebView)
+    // presented as a full-screen overlay below when a keyed PaymentIntent is pending. Unlike Stripe's
+    // PaymentSheet (which opens an external Chrome Custom Tab for 3DS/Link that a device-owner Lock
+    // Task kiosk blocks), the WebView keeps everything in-app. The VM verifies the result server-side
+    // before recording, same as the reader. The PAN is entered into Stripe's iframe, never our code.
     val manual = ui.giving.manual
-    LaunchedEffect(manual?.piId) {
-        if (manual != null) {
-            runCatching { PaymentConfiguration.init(context, manual.publishableKey) }
-            paymentSheet.presentWithPaymentIntent(
-                manual.clientSecret,
-                PaymentSheet.Configuration(
-                    merchantDisplayName = ui.config?.masjidName?.takeIf { it.isNotBlank() } ?: "Donation",
-                ),
-            )
-        }
-    }
 
     Box(modifier = modifier) {
         when {
@@ -147,6 +125,18 @@ fun KioskRoot(
                     )
                 }
             }
+        }
+        // Keyed card entry (Stripe.js Payment Element in a WebView) — a full-screen overlay on top of
+        // everything while a keyed PaymentIntent is pending. Stays in-app, so Lock Task never blocks it.
+        manual?.let { m ->
+            ManualCardWebView(
+                clientSecret = m.clientSecret,
+                publishableKey = m.publishableKey,
+                accentHex = ui.activeCampaign?.accentColor?.takeIf { it.isNotBlank() } ?: "#22d3ee",
+                payLabel = if (m.chargeMinor > 0) "Pay ${formatMoney(m.chargeMinor, m.currency.ifBlank { "USD" })}" else "Pay",
+                amountLabel = ui.config?.masjidName?.takeIf { it.isNotBlank() } ?: "",
+                onResult = vm::onManualResult,
+            )
         }
     }
 }
