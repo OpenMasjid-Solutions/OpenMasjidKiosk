@@ -3,6 +3,18 @@
 
 # Changelog
 
+## 0.9.4
+- **Typed card entry rebuilt to actually work on a locked kiosk.** Keyed card payments now use
+  Stripe’s own card form (Payment Element) inside the app — the same technology as OpenMasjidDonations
+  — so the card’s security check happens *in the app* and never needs the external browser that a
+  fully-locked (device-owner) tablet blocks. Enter the card, pay, done. (The card number goes straight
+  into Stripe and is never seen by our app or server.)
+- **Nicer giving screen.** A polished liquid-glass card with **six big, easy-to-read amount buttons**
+  and a **small “Other amount”** — a blend of GiveALittle and the OpenMasjidDonations look.
+- **“Cover the card fee” moved to the details step.** After you pick an amount, the option to cover
+  card fees sits next to the name/email, and shows the **exact extra it adds** (e.g. “+$0.60”).
+- Bigger campaign editor and click-through donation details from the previous update carry over.
+
 ## 0.9.3
 - **Fix — typing a card now works on a locked-down kiosk.** Keyed card entry couldn’t complete on a
   device-owner (fully locked) tablet because the card’s security check (3-D Secure) needs to briefly
