@@ -102,7 +102,7 @@ fun GivingScreen(
     val chargeMinor = displayCharge(giving, campaign, config)
     when (giving.step) {
         GivingStep.Amount, GivingStep.Idle ->
-            AmountStep(giving, campaign, currency, style, readerConnected, onSetMonthly, onChooseAmount, modifier)
+            AmountStep(giving, campaign, currency, style, readerConnected, config?.footerText ?: "OpenMasjid Solutions", onSetMonthly, onChooseAmount, modifier)
         else -> CenteredScene(modifier) {
             when (giving.step) {
                 GivingStep.Details -> DetailsStep(giving, campaign, config, currency, style, onDonorName, onDonorEmail, onSetCoverFees, onSubmitDetails, onCancel)
@@ -137,6 +137,7 @@ private fun AmountStep(
     currency: String,
     style: SceneStyle,
     readerConnected: Boolean,
+    footerText: String,
     onSetMonthly: (Boolean) -> Unit,
     onChoose: (Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -210,40 +211,53 @@ private fun AmountStep(
                 )
             }
         }
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "OpenMasjid Solutions",
-            style = MaterialTheme.typography.labelMedium,
-            color = style.onSceneMuted.copy(alpha = 0.7f),
-        )
+        if (footerText.isNotBlank()) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                footerText,
+                style = MaterialTheme.typography.labelMedium,
+                color = style.onSceneMuted.copy(alpha = 0.7f),
+            )
+        }
     }
 }
 
-/** A big glass amount tile (image-2 style): huge amount + "Donate" + a thin accent bar. A little
- *  transparency (see [SceneStyle.tile]) gives the liquid-glass look. */
+/** A big liquid-glass amount tile: huge amount + "Donate" + a thin accent bar. The look = a
+ *  translucent fill (bg shows through) + a top-down sheen + a soft rim-light border (brighter at the
+ *  top edge, fading down), which reads as glass instead of a flat outline. */
 @Composable
 private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    // Rim light: a hairline that's bright along the top and fades toward the bottom — the classic
+    // glass edge. (Replaces the old flat white outline that read as a "weird border".)
+    val rim = Brush.verticalGradient(
+        listOf(
+            Color.White.copy(alpha = if (style.bright) 0.95f else 0.28f),
+            Color.White.copy(alpha = if (style.bright) 0.28f else 0.05f),
+        ),
+    )
+    // Sheen: a soft highlight at the top + a faint glow at the bottom, over the translucent fill.
+    val sheen = Brush.verticalGradient(
+        listOf(
+            Color.White.copy(alpha = if (style.bright) 0.5f else 0.14f),
+            Color.Transparent,
+            Color.White.copy(alpha = if (style.bright) 0.14f else 0.05f),
+        ),
+    )
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(24.dp),
         color = style.tile,
-        border = BorderStroke(1.5.dp, if (style.bright) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.18f)),
-        shadowElevation = 4.dp,
+        border = BorderStroke(1.dp, rim),
+        shadowElevation = 6.dp,
         modifier = modifier,
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                // A soft top-down highlight gives the tile a glassy sheen.
-                .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = if (style.bright) 0.35f else 0.12f), Color.Transparent))),
-            contentAlignment = Alignment.Center,
-        ) {
+        Box(modifier = Modifier.fillMaxSize().background(sheen), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(label, style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold, color = style.tileInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(4.dp))
                 Text("Donate", style = MaterialTheme.typography.titleMedium, color = style.accent, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
-                Box(Modifier.fillMaxWidth(0.42f).height(4.dp).background(style.accent, RoundedCornerShape(50)))
+                Box(Modifier.fillMaxWidth(0.4f).height(4.dp).background(style.accent, RoundedCornerShape(50)))
             }
         }
     }
@@ -358,6 +372,12 @@ private fun ColumnScope.DetailsStep(
             )
             Switch(checked = giving.coverFees, onCheckedChange = onSetCoverFees, colors = SwitchDefaults.colors(checkedTrackColor = style.accent))
         }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "This is the Visa / Mastercard / Amex card fee — not a platform fee. OpenMasjid Solutions is free, unlimited, forever.",
+            style = MaterialTheme.typography.bodySmall,
+            color = style.onSceneMuted,
+        )
     }
     giving.error?.let {
         Spacer(Modifier.height(12.dp))

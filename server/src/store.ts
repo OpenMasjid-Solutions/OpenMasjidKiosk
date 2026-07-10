@@ -75,6 +75,8 @@ export interface GivingConfig {
   thankYouMessage: string;
   /** Force the tablet to maximum screen brightness (a wall kiosk should be as bright as possible). */
   maxBrightness: boolean;
+  /** Small tagline shown at the bottom of the kiosk giving screen ('' hides it). */
+  footerText: string;
 }
 
 const GIVING_DEFAULTS: GivingConfig = {
@@ -89,6 +91,7 @@ const GIVING_DEFAULTS: GivingConfig = {
   emailPolicy: 'optional',
   thankYouMessage: 'JazākAllāhu khayran — thank you for your generous donation.',
   maxBrightness: true,
+  footerText: 'OpenMasjid Solutions',
 };
 
 /** A giving campaign (an "appeal") the kiosk shows as a tab — its own amounts, colour,
@@ -504,6 +507,7 @@ export class Store {
     merged.manualEntryEnabled = merged.manualEntryEnabled === true;
     merged.thankYouMessage = String(merged.thankYouMessage ?? GIVING_DEFAULTS.thankYouMessage).slice(0, 500);
     merged.maxBrightness = merged.maxBrightness !== false; // default ON — a wall kiosk wants max brightness
+    merged.footerText = String(merged.footerText ?? GIVING_DEFAULTS.footerText).slice(0, 80);
     this.setRaw('giving', JSON.stringify(merged));
     this.bumpConfigVersion();
     return merged;
@@ -927,6 +931,7 @@ export class Store {
         namePolicy: g.namePolicy,
         emailPolicy: g.emailPolicy,
         maxBrightness: g.maxBrightness !== false,
+        footerText: g.footerText,
         // Cover-fee estimate so the tablet can display the same total the server will charge.
         feeBps: FEE_BPS,
         feeFixedMinor: FEE_FIXED_MINOR,

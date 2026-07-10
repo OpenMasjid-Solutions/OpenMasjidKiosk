@@ -175,6 +175,7 @@ function GlobalSettingsCard() {
   const [namePolicy, setNamePolicy] = useState<PromptPolicy>('optional');
   const [emailPolicy, setEmailPolicy] = useState<PromptPolicy>('optional');
   const [maxBrightness, setMaxBrightness] = useState(true);
+  const [footerText, setFooterText] = useState('OpenMasjid Solutions');
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState('');
@@ -185,6 +186,7 @@ function GlobalSettingsCard() {
     setNamePolicy(s.giving.namePolicy);
     setEmailPolicy(s.giving.emailPolicy);
     setMaxBrightness(s.giving.maxBrightness !== false);
+    setFooterText(s.giving.footerText ?? 'OpenMasjid Solutions');
   }, []);
 
   useEffect(() => {
@@ -203,7 +205,7 @@ function GlobalSettingsCard() {
     setBusy(true);
     try {
       // Only the kiosk-wide subset lives here now; amounts/monthly/thank-you are per-campaign.
-      const fresh = await saveGiving({ masjidName, namePolicy, emailPolicy, maxBrightness });
+      const fresh = await saveGiving({ masjidName, namePolicy, emailPolicy, maxBrightness, footerText });
       hydrate(fresh);
       setSaved(true);
     } catch (e) {
@@ -234,6 +236,12 @@ function GlobalSettingsCard() {
           <div className="field">
             <label className="label" htmlFor="g-masjid">Masjid name</label>
             <input id="g-masjid" className="input" value={masjidName} maxLength={160} placeholder="Al-Noor Masjid" onChange={(e) => setMasjidName(e.target.value)} />
+          </div>
+
+          <div className="field">
+            <label className="label" htmlFor="g-footer">Bottom tagline</label>
+            <input id="g-footer" className="input" value={footerText} maxLength={80} placeholder="OpenMasjid Solutions" onChange={(e) => setFooterText(e.target.value)} />
+            <p className="hint">Small line at the bottom of the kiosk giving screen. Leave blank to hide it.</p>
           </div>
 
           <p className="hint" style={{ marginTop: '0.25rem' }}>

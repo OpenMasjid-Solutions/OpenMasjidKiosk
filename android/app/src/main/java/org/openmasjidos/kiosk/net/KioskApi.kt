@@ -148,6 +148,7 @@ class KioskApi(private val client: OkHttpClient) {
             feeBps = cfg.optInt("feeBps", 290),
             feeFixedMinor = cfg.optLong("feeFixedMinor", 30),
             maxBrightness = cfg.optBoolean("maxBrightness", true),
+            footerText = cfg.optString("footerText", "OpenMasjid Solutions"),
             mainCampaignId = cfg.optString("mainCampaignId", ""),
             campaigns = campaigns,
         )

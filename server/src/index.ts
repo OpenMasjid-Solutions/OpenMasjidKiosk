@@ -472,6 +472,7 @@ async function main(): Promise<void> {
       emailPolicy: z.enum(['off', 'optional', 'required']).optional(),
       thankYouMessage: z.string().max(500).optional(),
       maxBrightness: z.boolean().optional(),
+      footerText: z.string().max(80).optional(),
       attractTitle: z.string().max(120).optional(),
       masjidName: z.string().max(160).optional(),
     })

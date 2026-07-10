@@ -277,6 +277,8 @@ export interface GivingConfig {
   thankYouMessage: string;
   /** Force the tablet to maximum screen brightness (a wall kiosk should be as bright as possible). */
   maxBrightness: boolean;
+  /** Small tagline shown at the bottom of the kiosk giving screen ('' hides it). */
+  footerText: string;
 }
 
 /** Per-campaign kiosk appearance: 'light' (bright), 'dark', or 'auto' (bright unless a dark bg image). */

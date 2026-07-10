@@ -73,6 +73,7 @@ data class KioskConfig(
     val feeBps: Int = 290,               // cover-fees estimate: 2.9%
     val feeFixedMinor: Long = 30,        //                    + a small fixed fee
     val maxBrightness: Boolean = true,   // force the tablet to full screen brightness
+    val footerText: String = "OpenMasjid Solutions", // bottom tagline ('' hides it)
     val mainCampaignId: String = "",
     val campaigns: List<Campaign> = emptyList(),
 ) {
