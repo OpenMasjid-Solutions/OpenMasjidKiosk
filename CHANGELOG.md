@@ -3,6 +3,16 @@
 
 # Changelog
 
+## 0.9.7
+- **Fixed the typed-card screen.** The card form was overflowing off the top of the screen (only the
+  Pay/Cancel buttons showed) and sat see-through over the giving screen — so a donor couldn’t actually
+  enter a card. It’s now a clean, opaque, full-screen card page that scrolls if needed, with Stripe’s
+  card fields clearly shown. This also fixes keyed payments failing because the card couldn’t be typed.
+- **Countdown-to-menu during a donation.** Once a donation is started, the same small countdown ring
+  appears in the corner and returns to the menu after inactivity (with a longer, patient window while
+  the card form is open, so a slow typer is never cut off).
+- Softer, cleaner glass on the amount buttons.
+
 ## 0.9.6
 - **Nicer donation buttons.** The amount buttons now have a proper liquid-glass look — a soft
   rim-light edge and a gentle sheen instead of the flat, hard border.
