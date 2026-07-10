@@ -137,8 +137,9 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                 }
             }
         }
-        // Visual-only return-to-main countdown (no numbers/words), shown only while a non-main tab idles.
-        ui.autoReturnStartedMs?.let { started ->
+        // Visual-only countdown ring (no numbers/words): shown while a non-main tab idles OR while a
+        // donation is under way (returns to the menu on inactivity).
+        (ui.autoReturnStartedMs ?: ui.idleReturnStartedMs)?.let { started ->
             CountdownRing(started, accent, Modifier.align(Alignment.TopEnd).padding(top = 14.dp, end = 16.dp))
         }
         // "Identify" flash — the admin taps Identify in the fleet view and the kiosk lights up so a

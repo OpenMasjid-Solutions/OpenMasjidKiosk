@@ -2,13 +2,14 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!-- Copyright (C) 2026 OpenMasjid-Solutions -->
 <!--
-  Keyed / typed card entry for the kiosk, using Stripe.js Payment Element — the SAME approach as
-  OpenMasjidDonations. This page is served LOCALLY by WebViewAssetLoader over
-  https://appassets.androidplatform.net/, so it runs inside our own (Lock-Task allow-listed) activity
-  and NEVER launches an external browser: card authentication (3-D Secure) renders in an iframe on
-  this page (redirect:'if_required'). The card number is entered into Stripe's iframe and tokenised
-  on-device — our code/server never sees the PAN. Results are handed back to the app via the
-  `KioskPay` JS bridge; the app then verifies the PaymentIntent server-side before recording.
+  Keyed / typed card entry for the kiosk, using Stripe.js Payment Element — the same approach as
+  OpenMasjidDonations. Served LOCALLY by WebViewAssetLoader over https://appassets.androidplatform.net,
+  so it runs inside our own (Lock-Task allow-listed) activity and NEVER launches an external browser:
+  card authentication (3-D Secure) renders in an iframe on this page (redirect:'if_required'). The card
+  number is entered into Stripe's iframe and tokenised on-device — our code/server never see the PAN.
+  Results are handed back to the app via the `KioskPay` bridge; the app verifies server-side before it
+  records. This page is OPAQUE and full-screen (its own backdrop) so nothing behind it shows through,
+  and the card scrolls so it is never clipped.
 -->
 <html lang="en">
   <head>
@@ -21,36 +22,43 @@
       html, body { margin: 0; height: 100%; }
       body {
         font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-        background: transparent; color: #f4f7fb;
-        display: flex; align-items: center; justify-content: center; padding: 20px;
+        color: #f4f7fb;
+        /* Opaque backdrop so the giving screen behind never shows through. */
+        background: radial-gradient(120% 120% at 50% 0%, #0f2942 0%, #071726 55%, #030d18 100%);
       }
+      /* A scrollable centring wrapper: if the card is taller than the screen the page scrolls instead
+         of clipping the top (the old bug). */
+      .wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 28px 18px; }
       .card {
-        width: 100%; max-width: 560px;
-        background: rgba(10, 24, 40, 0.92);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 26px; padding: 26px 24px 22px;
-        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+        width: 100%; max-width: 620px;
+        background: rgba(12, 28, 46, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 28px; padding: 30px 28px 24px;
+        box-shadow: 0 30px 70px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
       }
-      h1 { font-size: 1.35rem; margin: 0 0 2px; text-align: center; }
-      .sub { color: #aebacd; text-align: center; margin: 0 0 20px; font-size: 0.95rem; }
-      #pe { margin-bottom: 18px; min-height: 40px; }
-      #msg { color: #f87171; font-size: 0.9rem; margin: 0 0 12px; text-align: center; min-height: 1em; }
-      button { width: 100%; border: 0; border-radius: 16px; font-size: 1.1rem; font-weight: 700; cursor: pointer; }
-      #pay { background: var(--accent); color: #04121a; padding: 16px; }
+      h1 { font-size: 1.7rem; margin: 0 0 4px; text-align: center; font-weight: 700; }
+      .sub { color: #aebacd; text-align: center; margin: 0 0 22px; font-size: 1.05rem; }
+      #pe { margin-bottom: 18px; min-height: 44px; }
+      #msg { color: #fca5a5; font-size: 0.95rem; margin: 0 0 14px; text-align: center; min-height: 1.1em; }
+      button { width: 100%; border: 0; border-radius: 16px; cursor: pointer; font-weight: 700; }
+      #pay { background: var(--accent); color: #04121a; padding: 18px; font-size: 1.25rem; }
       #pay:disabled { opacity: 0.55; }
-      #cancel { background: transparent; color: #aebacd; padding: 12px; font-weight: 600; margin-top: 6px; }
-      .spin { display: inline-block; width: 1em; height: 1em; border: 2px solid rgba(4,18,26,0.35); border-top-color: #04121a; border-radius: 50%; animation: s 0.8s linear infinite; vertical-align: -2px; }
+      #cancel { background: transparent; color: #aebacd; padding: 14px; font-size: 1.05rem; font-weight: 600; margin-top: 8px; }
+      .spin { display: inline-block; width: 1.1em; height: 1.1em; border: 2px solid rgba(4,18,26,0.35); border-top-color: #04121a; border-radius: 50%; animation: s 0.8s linear infinite; vertical-align: -3px; }
       @keyframes s { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>
-    <div class="card">
-      <h1 id="title">Enter your card</h1>
-      <p class="sub" id="amt"></p>
-      <div id="pe"></div>
-      <p id="msg"></p>
-      <button id="pay" disabled>Pay</button>
-      <button id="cancel">Cancel</button>
+    <div class="wrap">
+      <div class="card">
+        <h1>Enter your card</h1>
+        <p class="sub" id="amt">Secured by Stripe</p>
+        <div id="pe"></div>
+        <p id="msg"></p>
+        <button id="pay" disabled>Pay</button>
+        <button id="cancel">Cancel</button>
+      </div>
     </div>
     <script>
       (function () {
@@ -64,7 +72,7 @@
         var amt = params.get('amt');
         var payLabel = params.get('pay') || 'Pay';
         if (ac) document.documentElement.style.setProperty('--accent', ac);
-        if (amt) document.getElementById('amt').textContent = amt;
+        if (amt) document.getElementById('amt').textContent = amt + ' · Secured by Stripe';
         var payBtn = document.getElementById('pay');
         var cancelBtn = document.getElementById('cancel');
         var msg = document.getElementById('msg');
@@ -72,40 +80,44 @@
         cancelBtn.addEventListener('click', function () { bridge('canceled', ''); });
 
         if (!cs || !pk || typeof Stripe === 'undefined') {
-          msg.textContent = 'Couldn’t load the card form. Please try again.';
+          msg.textContent = 'Couldn’t load the card form. Please check the tablet’s internet and try again.';
           return;
         }
         var stripe = Stripe(pk);
+        var accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#22d3ee';
         var elements = stripe.elements({
           clientSecret: cs,
-          appearance: { theme: 'night', variables: { colorPrimary: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#22d3ee', borderRadius: '12px' } },
+          appearance: {
+            theme: 'night',
+            variables: { colorPrimary: accent, borderRadius: '12px', fontSizeBase: '17px', spacingUnit: '5px' },
+          },
         });
-        var paymentElement = elements.create('payment', { layout: 'tab' });
+        var paymentElement = elements.create('payment', { layout: 'accordion' });
         paymentElement.mount('#pe');
         paymentElement.on('ready', function () { payBtn.disabled = false; });
 
         var busy = false;
+        function resetBtn() { busy = false; payBtn.disabled = false; payBtn.textContent = payLabel; }
         payBtn.addEventListener('click', function () {
           if (busy) return;
           busy = true; msg.textContent = '';
           payBtn.disabled = true; payBtn.innerHTML = '<span class="spin"></span>';
           stripe.confirmPayment({ elements: elements, redirect: 'if_required' }).then(function (result) {
             if (result.error) {
-              busy = false; payBtn.disabled = false; payBtn.textContent = payLabel;
+              resetBtn();
               msg.textContent = result.error.message || 'That card didn’t go through.';
-              // Keep the donor on the form to retry; only report a hard failure to the app if it's not
-              // a simple validation/decline they can fix in place.
-              if (result.error.type && result.error.type !== 'validation_error' && result.error.type !== 'card_error') {
-                bridge('failed', result.error.message || result.error.type);
-              }
-            } else if (result.paymentIntent && (result.paymentIntent.status === 'succeeded' || result.paymentIntent.status === 'processing' || result.paymentIntent.status === 'requires_capture')) {
+              // Card declines / validation stay on the form so the donor can fix + retry. Only a hard
+              // (config/network) error hands back to the app so it can show its own message.
+              var t = result.error.type;
+              if (t && t !== 'validation_error' && t !== 'card_error') bridge('failed', result.error.message || t);
+            } else if (result.paymentIntent && ['succeeded', 'processing', 'requires_capture'].indexOf(result.paymentIntent.status) !== -1) {
               bridge('completed', result.paymentIntent.id);
             } else {
-              busy = false; payBtn.disabled = false; payBtn.textContent = payLabel;
+              resetBtn();
               msg.textContent = 'That didn’t complete. Please try again.';
             }
-          }).catch(function (e) {
-            busy = false; payBtn.disabled = false; payBtn.textContent = payLabel;
+          }).catch(function () {
+            resetBtn();
             msg.textContent = 'Something went wrong. Please try again.';
           });
         });

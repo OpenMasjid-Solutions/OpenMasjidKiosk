@@ -49,7 +49,9 @@ fun ManualCardWebView(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
             WebView(ctx).apply {
-                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                // Opaque dark backdrop (matches kioskpay.html) so the giving screen never shows
+                // through and there's no white flash before the page paints.
+                setBackgroundColor(0xFF071726.toInt())
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 webViewClient = object : WebViewClientCompat() {

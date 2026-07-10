@@ -227,28 +227,28 @@ private fun AmountStep(
  *  top edge, fading down), which reads as glass instead of a flat outline. */
 @Composable
 private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    // Rim light: a hairline that's bright along the top and fades toward the bottom — the classic
-    // glass edge. (Replaces the old flat white outline that read as a "weird border".)
+    // Rim light: a soft hairline, a touch brighter at the top, fading down — a subtle glass edge
+    // rather than a hard outline.
     val rim = Brush.verticalGradient(
         listOf(
-            Color.White.copy(alpha = if (style.bright) 0.95f else 0.28f),
-            Color.White.copy(alpha = if (style.bright) 0.28f else 0.05f),
+            Color.White.copy(alpha = if (style.bright) 0.55f else 0.18f),
+            Color.White.copy(alpha = if (style.bright) 0.12f else 0.04f),
         ),
     )
-    // Sheen: a soft highlight at the top + a faint glow at the bottom, over the translucent fill.
+    // Sheen: a gentle highlight at the top + a faint glow at the bottom, over the translucent fill.
     val sheen = Brush.verticalGradient(
         listOf(
-            Color.White.copy(alpha = if (style.bright) 0.5f else 0.14f),
+            Color.White.copy(alpha = if (style.bright) 0.4f else 0.12f),
             Color.Transparent,
-            Color.White.copy(alpha = if (style.bright) 0.14f else 0.05f),
+            Color.White.copy(alpha = if (style.bright) 0.1f else 0.04f),
         ),
     )
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(26.dp),
         color = style.tile,
         border = BorderStroke(1.dp, rim),
-        shadowElevation = 6.dp,
+        shadowElevation = 8.dp,
         modifier = modifier,
     ) {
         Box(modifier = Modifier.fillMaxSize().background(sheen), contentAlignment = Alignment.Center) {

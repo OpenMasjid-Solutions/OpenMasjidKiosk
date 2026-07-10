@@ -132,6 +132,9 @@ data class UiState(
     /** When non-null, a non-main tab is idling and will return to the main tab at this monotonic
      *  wall-clock deadline's *start* — the UI draws a visual-only countdown ring from here + [KIOSK_AUTO_RETURN_MS]. */
     val autoReturnStartedMs: Long? = null,
+    /** When non-null, a donation is under way (details/card) and will return to the menu on inactivity;
+     *  drives the same countdown ring. */
+    val idleReturnStartedMs: Long? = null,
     /** When non-null, the UI should open this URL (the server's APK download) in the browser so a
      *  person can install the update, then call [KioskViewModel.consumeOpenUpdate]. */
     val openUpdateUrl: String? = null,
@@ -166,6 +169,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         val selectedCampaignId: String = "",
         /** When a non-main tab is idling, when its return-to-main countdown started (null = off). */
         val autoReturnStartedMs: Long? = null,
+        /** When a donation is under way, when its return-to-menu countdown started (null = off). */
+        val idleReturnStartedMs: Long? = null,
         val latestAppVersion: String = "",
         // Set when the admin (webui) or a maintainer (7-tap menu) asks this kiosk to update; the UI
         // opens the APK link in the browser to install (Android can't update an ordinary app itself).
@@ -194,6 +199,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             selectedCampaignId = active?.id.orEmpty(),
             activeCampaign = active,
             autoReturnStartedMs = l.autoReturnStartedMs,
+            idleReturnStartedMs = l.idleReturnStartedMs,
             openUpdateUrl = if (l.openUpdatePending && pairing != null)
                 pairing.serverUrl.trimEnd('/') + "/download/openmasjidkiosk.apk" else null,
         )
@@ -342,10 +348,19 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
      *  Excludes Processing (a payment is in flight — must finish) and Thanks (self-resets after 8s). */
     private fun rescheduleIdleReset() {
         idleResetJob?.cancel()
-        val step = local.value.giving.step
-        if (step != GivingStep.Details && step != GivingStep.Card && step != GivingStep.Error) return
+        val g = local.value.giving
+        val step = g.step
+        if (step != GivingStep.Details && step != GivingStep.Card && step != GivingStep.Error) {
+            if (local.value.idleReturnStartedMs != null) local.update { it.copy(idleReturnStartedMs = null) }
+            return
+        }
+        // Show the same return-to-menu countdown ring the tabs use. While the keyed-card WebView is up
+        // (manual != null) the donor's taps go to the WebView, not us, so give a much longer window so
+        // a slow typer isn't cut off mid-card (an abandoned form still resets eventually).
+        val timeout = if (g.manual != null) MANUAL_IDLE_MS else IDLE_ABANDON_MS
+        local.update { it.copy(idleReturnStartedMs = System.currentTimeMillis()) }
         idleResetJob = viewModelScope.launch {
-            delay(IDLE_ABANDON_MS)
+            delay(timeout)
             val s = local.value.giving.step
             if (s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error) cancelGiving()
         }
@@ -766,7 +781,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         // How long the thank-you screen stays up before returning to the giving screen.
         const val THANKS_MS = 8_000L
         // How long an abandoned donation (Details/Card/Error, no touches) waits before resetting.
-        const val IDLE_ABANDON_MS = 60_000L
+        const val IDLE_ABANDON_MS = 45_000L
+        // While the keyed-card WebView is open the donor's taps don't reach us, so give a long window.
+        const val MANUAL_IDLE_MS = 120_000L
         const val SECRET_TAPS = 7
         const val SECRET_WINDOW_MS = 3_000L
         const val FREE_ATTEMPTS = 3
