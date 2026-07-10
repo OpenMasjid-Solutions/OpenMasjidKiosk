@@ -3,6 +3,12 @@
 
 # Changelog
 
+## 0.9.5
+- **Redesigned the giving screen to the full-screen layout you wanted.** The masjid name + tagline
+  sit across the top, then a big, edge-to-edge grid of donation buttons (three across) — each with a
+  large amount, a “Donate” label and an accent bar — a small “Choose your own amount”, and a subtle
+  footer. The buttons have a touch of glass transparency. Replaces the cramped centred card.
+
 ## 0.9.4
 - **Typed card entry rebuilt to actually work on a locked kiosk.** Keyed card payments now use
   Stripe’s own card form (Payment Element) inside the app — the same technology as OpenMasjidDonations
