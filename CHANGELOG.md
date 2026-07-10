@@ -3,6 +3,20 @@
 
 # Changelog
 
+## 0.9.3
+- **Fix — typing a card now works on a locked-down kiosk.** Keyed card entry couldn’t complete on a
+  device-owner (fully locked) tablet because the card’s security check (3-D Secure) needs to briefly
+  open the browser, and lock-task mode was blocking it. The kiosk now allows that secure browser step
+  (it has no address bar and returns automatically, so the kiosk stays locked), and keyed payments are
+  card-only for a cleaner, more reliable form. Tap-to-pay was always fine.
+- **Brighter, bolder giving screen.** The kiosk now shows big, full-screen, frosted-glass amount
+  tiles (GiveALittle-style) on a vibrant, bright background, and the tablet is forced to **maximum
+  brightness**. Each campaign’s **Appearance** (Bright / Dark / Auto) and the **Force maximum screen
+  brightness** switch are configurable in the admin panel.
+- **Bigger campaign editor.** The campaign editor is now a roomier, more spacious window.
+- **Donation details.** Tap any donation in the Donations log to open a details window (amount, date
+  & time, donor name & email, campaign, kiosk, payment id).
+
 ## 0.9.2
 - **Manual (typed) card entry is now always available when paying.** Every card screen shows an
   **“Enter card details”** button — with or without a reader connected — so a donor can always pay
