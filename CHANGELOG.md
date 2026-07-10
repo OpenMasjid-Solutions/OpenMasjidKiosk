@@ -3,6 +3,16 @@
 
 # Changelog
 
+## 0.9.6
+- **Nicer donation buttons.** The amount buttons now have a proper liquid-glass look — a soft
+  rim-light edge and a gentle sheen instead of the flat, hard border.
+- **Editable bottom tagline.** The small line at the bottom of the giving screen (previously always
+  “OpenMasjid Solutions”) can now be changed — or hidden — in **Admin → Campaigns → Kiosk settings →
+  Bottom tagline**.
+- **Clearer “cover the fee” note.** When a donor is offered to cover the card fee, it now explains
+  that this is the **Visa / Mastercard / Amex** card fee — not a platform fee — and that OpenMasjid
+  Solutions is free, unlimited, forever.
+
 ## 0.9.5
 - **Redesigned the giving screen to the full-screen layout you wanted.** The masjid name + tagline
   sit across the top, then a big, edge-to-edge grid of donation buttons (three across) — each with a
