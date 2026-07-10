@@ -14,7 +14,7 @@ services:
     # Tag for humans + @sha256 digest for integrity (the digest is the real pin — a
     # moved tag can't repoint it to a different image). Bump BOTH on every release.
     # (digest filled in from the build-image.yml output after the first org build)
-    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.9.4@sha256:76b440f648b8fab45b1ec1b16468cb5a8b14bfded82042d1b4c604aa60a9b9ba
+    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.9.5@sha256:f52662adcc3a5884d0f12f84dec5f249fde50928239593806c64bd1f8b6f2f21
     restart: unless-stopped
     environment:
       PORT: "8080"
