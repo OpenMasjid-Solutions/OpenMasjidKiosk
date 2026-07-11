@@ -52,6 +52,32 @@ const MAX_PRESETS = 6;
 const DEFAULT_ACCENT = '#22d3ee';
 /** Shown in the primary-colour picker while a campaign inherits the default background. */
 const DEFAULT_PRIMARY = '#a8f2b7';
+
+// ── Colour helpers (mirror the kiosk's scene logic so the preview matches the device) ─────────────
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+/** Mix `hex` toward `toward` by fraction `t` (0..1), returning a #rrggbb string. */
+function mixHex(hex: string, toward: string, t: number): string {
+  const a = hexToRgb(hex);
+  const b = hexToRgb(toward);
+  if (!a || !b) return hex;
+  const c = a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  return `#${c.map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('')}`;
+}
+/** WCAG relative luminance of a #rrggbb colour (0 = black, 1 = white). */
+function relLuminance(hex: string): number {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return 0.5;
+  const [r, g, b] = rgb.map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
 /** A friendly starting set for a brand-new campaign (major units; the admin edits them). */
 const DEFAULT_NEW_PRESETS = ['5', '10', '25', '50', '100'];
 
@@ -900,19 +926,24 @@ function KioskPreview({
 }) {
   const bg = safeImageUrl(backgroundImage);
   const safeLogo = safeImageUrl(logo);
-  const primary = primaryColor || DEFAULT_PRIMARY;
-  // With a background image → the calm dark scrim (light text). Otherwise → a soft PRIMARY-colour
-  // wash (light at top → primary at the bottom) with dark text + white tiles, like the reference.
-  const bright = !bg;
+  // Match the kiosk (GivingHome): with no primary set, the background derives from a light tint of the
+  // accent. A clearly-light base → a light wash with dark text; a darker base → a deepened wash with
+  // light text (so headings stay readable, exactly as the device chooses).
+  const sceneBase = primaryColor || mixHex(accentColor || DEFAULT_ACCENT, '#ffffff', 0.35);
+  const lightScene = relLuminance(sceneBase) > 0.35;
   const screenStyle: CSSProperties = bg
     ? { backgroundImage: `linear-gradient(rgba(4,14,20,0.5), rgba(4,14,20,0.68)), url("${bg}")`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' }
-    : { background: `linear-gradient(180deg, color-mix(in srgb, ${primary} 42%, #ffffff), ${primary})` };
+    : lightScene
+      ? { background: `linear-gradient(180deg, ${mixHex(sceneBase, '#ffffff', 0.45)}, ${sceneBase}, ${mixHex(sceneBase, '#ffffff', 0.12)})` }
+      : { background: `linear-gradient(180deg, ${mixHex(sceneBase, '#000000', 0.06)}, ${sceneBase}, ${mixHex(sceneBase, '#000000', 0.28)})` };
   const accentBg: CSSProperties | undefined = accentColor ? { background: accentColor } : undefined;
   const accentOn: CSSProperties | undefined = accentColor ? { background: accentColor, color: '#04121a' } : undefined;
+  // Bright (no bg image) = white tiles in both cases; text is dark on a light scene, white on a dark one.
+  const screenClass = bg ? 'kp-screen' : `kp-screen kp-screen--tiles${lightScene ? ' kp-screen--bright' : ' kp-screen--ondark'}`;
 
   return (
     <div className="kiosk-preview" aria-hidden="true">
-      <div className={`kp-screen${bright ? ' kp-screen--bright' : ''}`} style={screenStyle}>
+      <div className={screenClass} style={screenStyle}>
         {safeLogo && <img className="kp-logo" src={safeLogo} alt="" />}
         <div className="kp-title">{title.trim() || 'Support your masjid'}</div>
         <div className="kp-sub">Choose an amount to give</div>

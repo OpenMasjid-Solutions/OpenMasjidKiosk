@@ -81,14 +81,20 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
     // The bright background base: the campaign's primary colour, or a light tint of the accent when
     // no primary is set (keeps older single-colour campaigns looking right).
     val sceneBase = primary ?: lerp(accent, Color.White, 0.35f)
-    val style = sceneStyleFor(bright, sceneBase, accent)
+    // A clearly-light primary → a light wash with dark text (the reference look). A darker primary →
+    // DEEPEN the whole gradient and use light text, so headings stay readable everywhere (not just the
+    // mid-tone). This avoids low-contrast white text over a lightened-toward-white background.
+    val lightScene = sceneBase.luminance() > 0.35f
+    val style = sceneStyleFor(bright, accent, lightScene)
     val darkBrush = SceneBrush
-    val bgBrush = if (bright) {
-        Brush.verticalGradient(
-            colors = listOf(lerp(sceneBase, Color.White, 0.35f), sceneBase, lerp(sceneBase, Color.Black, 0.05f)),
+    val bgBrush = when {
+        !bright -> darkBrush
+        lightScene -> Brush.verticalGradient(
+            colors = listOf(lerp(sceneBase, Color.White, 0.45f), sceneBase, lerp(sceneBase, Color.White, 0.12f)),
         )
-    } else {
-        darkBrush
+        else -> Brush.verticalGradient(
+            colors = listOf(lerp(sceneBase, Color.Black, 0.06f), sceneBase, lerp(sceneBase, Color.Black, 0.28f)),
+        )
     }
     Box(
         modifier = modifier
@@ -276,13 +282,12 @@ private fun primaryOf(c: Campaign?): Color? {
  *  primary background and on the white tiles (matching the reference giving screen). */
 private val InkBlack = Color(0xFF0A0F14)
 
-/** Resolve the giving-screen colour set from the scene's background base + the accent. Bright: dark
- *  text on a light PRIMARY background, white (slightly glassy) tiles with big black numbers, and an
- *  accent "Donate" band. Dark: the calm dark scene, light text on solid elevated tiles. */
-private fun sceneStyleFor(bright: Boolean, sceneBase: Color, accent: Color): SceneStyle = if (bright) {
-    // If the primary background is light (the normal case) use dark text; if the admin picked a dark
-    // primary, fall back to white text so headings stay readable.
-    val lightBg = sceneBase.luminance() > 0.45f
+/** Resolve the giving-screen colour set from the accent + whether the scene reads light. Bright +
+ *  [lightScene]: dark text on a light PRIMARY background. Bright + dark primary: light text on a
+ *  deepened background (the gradient is built to match in GivingHome). Either way the tiles are white
+ *  (slightly glassy) with big black numbers and an accent "Donate" band. Dark theme: the calm dark
+ *  scene, light text on solid elevated tiles. */
+private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean): SceneStyle = if (bright) {
     SceneStyle(
         bright = true,
         accent = accent,
@@ -290,8 +295,8 @@ private fun sceneStyleFor(bright: Boolean, sceneBase: Color, accent: Color): Sce
         // white on a dark one. Crossover ≈ 0.4 luminance (well above the 0.179 WCAG break-even) so a
         // mid-bright accent like the default cyan gets readable dark text, not low-contrast white.
         onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
-        onScene = if (lightBg) InkBlack else Color.White,
-        onSceneMuted = if (lightBg) InkMutedLight else Color.White.copy(alpha = 0.85f),
+        onScene = if (lightScene) InkBlack else Color.White,
+        onSceneMuted = if (lightScene) InkMutedLight else Color.White.copy(alpha = 0.85f),
         tile = Color.White.copy(alpha = 0.92f), // slight liquid-glass — the background tints through a touch
         tileInk = InkBlack,                      // big BOLD BLACK numbers, like the reference
         card = Color.White,
