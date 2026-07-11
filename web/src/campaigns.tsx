@@ -176,6 +176,10 @@ function GlobalSettingsCard() {
   const [emailPolicy, setEmailPolicy] = useState<PromptPolicy>('optional');
   const [maxBrightness, setMaxBrightness] = useState(true);
   const [footerText, setFooterText] = useState('OpenMasjid Solutions');
+  const [currency, setCurrency] = useState('USD');
+  const [largeThreshold, setLargeThreshold] = useState(''); // major units; '' = off
+  const [largeNote, setLargeNote] = useState('');
+  const [largeImage, setLargeImage] = useState('');
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState('');
@@ -187,6 +191,10 @@ function GlobalSettingsCard() {
     setEmailPolicy(s.giving.emailPolicy);
     setMaxBrightness(s.giving.maxBrightness !== false);
     setFooterText(s.giving.footerText ?? 'OpenMasjid Solutions');
+    setCurrency(s.currency);
+    setLargeThreshold(s.giving.largeAmountThresholdMinor > 0 ? toMajorStr(s.giving.largeAmountThresholdMinor, s.currency) : '');
+    setLargeNote(s.giving.largeAmountNote ?? '');
+    setLargeImage(s.giving.largeAmountImage ?? '');
   }, []);
 
   useEffect(() => {
@@ -205,7 +213,16 @@ function GlobalSettingsCard() {
     setBusy(true);
     try {
       // Only the kiosk-wide subset lives here now; amounts/monthly/thank-you are per-campaign.
-      const fresh = await saveGiving({ masjidName, namePolicy, emailPolicy, maxBrightness, footerText });
+      const fresh = await saveGiving({
+        masjidName,
+        namePolicy,
+        emailPolicy,
+        maxBrightness,
+        footerText,
+        largeAmountThresholdMinor: toMinor(largeThreshold, currency), // 0 when blank = off
+        largeAmountNote: largeNote,
+        largeAmountImage: largeImage.trim(),
+      });
       hydrate(fresh);
       setSaved(true);
     } catch (e) {
@@ -260,6 +277,51 @@ function GlobalSettingsCard() {
             checked={maxBrightness}
             onChange={setMaxBrightness}
           />
+
+          <div className="field" style={{ marginBlockStart: '0.6rem' }}>
+            <span className="label">Large-donation alternative</span>
+            <p className="hint" style={{ marginBlockStart: 0 }}>
+              Card fees are highest on big gifts. Above the amount you set, the kiosk gently suggests a
+              cheaper way to give (like a bank transfer or a Zelle QR code) before the card — the donor
+              can still choose to pay by card.
+            </p>
+            <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap', marginBlockStart: '0.4rem' }}>
+              <div className="field" style={{ flex: 1, minWidth: '10rem' }}>
+                <label className="label" htmlFor="g-large">Show it at or above <span className="faint">({currency})</span></label>
+                <div className="preset-input">
+                  <span className="preset-sym" aria-hidden="true">{symbolFor(currency) || currency}</span>
+                  <input
+                    id="g-large"
+                    className="input"
+                    value={largeThreshold}
+                    inputMode="decimal"
+                    placeholder="e.g. 250"
+                    onChange={(e) => setLargeThreshold(e.target.value.replace(/[^\d.]/g, ''))}
+                  />
+                </div>
+                <span className="hint">Leave blank to never show it.</span>
+              </div>
+            </div>
+            <div className="field">
+              <label className="label" htmlFor="g-large-note">What to show the donor</label>
+              <textarea
+                id="g-large-note"
+                className="input"
+                rows={3}
+                maxLength={600}
+                value={largeNote}
+                placeholder="e.g. For larger gifts, a bank transfer means more reaches the masjid. Zelle: give@al-noor.org — or scan the code below."
+                onChange={(e) => setLargeNote(e.target.value)}
+              />
+            </div>
+            <ImageField
+              id="g-large-img"
+              label="QR code / image (optional)"
+              hint="A Zelle/bank QR code or any image to show on the large-donation screen."
+              value={largeImage}
+              onChange={setLargeImage}
+            />
+          </div>
 
           {err && <p className="form-error">{err}</p>}
           <div className="row" style={{ gap: '0.6rem', flexWrap: 'wrap', marginBlockStart: '0.4rem' }}>
@@ -393,6 +455,7 @@ function CampaignEditor({
   const [logo, setLogo] = useState(campaign?.logo ?? '');
   const [stripeAccountId, setStripeAccountId] = useState(campaign?.stripeAccountId ?? '');
   const [coverFees, setCoverFees] = useState(campaign?.coverFees ?? false);
+  const [forceCoverFees, setForceCoverFees] = useState(campaign?.forceCoverFees ?? false);
   const [monthlyEnabled, setMonthlyEnabled] = useState(campaign?.monthlyEnabled ?? true);
   const [thankYou, setThankYou] = useState(campaign?.thankYouMessage ?? '');
   const [live, setLive] = useState(campaign ? campaign.live : true);
@@ -454,7 +517,8 @@ function CampaignEditor({
       customMinMinor: min,
       customMaxMinor: max,
       monthlyEnabled,
-      coverFees,
+      coverFees: coverFees || forceCoverFees, // forcing implies offering
+      forceCoverFees,
       thankYouMessage: thankYou,
       stripeAccountId,
       live: isMain ? true : live, // the main campaign is always shown
@@ -608,8 +672,16 @@ function CampaignEditor({
           <Toggle
             label="Offer donors the option to cover card fees"
             hint="Adds an estimated card fee (≈2.9% + a small fixed fee) so your masjid keeps the full amount. The donor chooses on the tablet."
-            checked={coverFees}
+            checked={coverFees || forceCoverFees}
             onChange={setCoverFees}
+            disabled={forceCoverFees}
+          />
+
+          <Toggle
+            label="Require donors to cover card fees (only for Zakat)"
+            hint="For a Zakat campaign the full Zakat must reach the masjid, so the card fee is always added and the donor is told it's because this is Zakat. Leave off for every other appeal."
+            checked={forceCoverFees}
+            onChange={setForceCoverFees}
           />
 
           <Toggle

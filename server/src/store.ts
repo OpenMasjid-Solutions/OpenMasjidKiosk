@@ -77,6 +77,12 @@ export interface GivingConfig {
   maxBrightness: boolean;
   /** Small tagline shown at the bottom of the kiosk giving screen ('' hides it). */
   footerText: string;
+  /** For a large donation the kiosk suggests a fee-free alternative (e.g. bank transfer). 0 = off. */
+  largeAmountThresholdMinor: number;
+  /** Message shown in the large-donation dialog (e.g. bank / Zelle transfer details). */
+  largeAmountNote: string;
+  /** Optional image (e.g. a Zelle/bank QR code) shown in the large-donation dialog. */
+  largeAmountImage: string;
 }
 
 const GIVING_DEFAULTS: GivingConfig = {
@@ -92,6 +98,9 @@ const GIVING_DEFAULTS: GivingConfig = {
   thankYouMessage: 'JazākAllāhu khayran — thank you for your generous donation.',
   maxBrightness: true,
   footerText: 'OpenMasjid Solutions',
+  largeAmountThresholdMinor: 0,
+  largeAmountNote: '',
+  largeAmountImage: '',
 };
 
 /** A giving campaign (an "appeal") the kiosk shows as a tab — its own amounts, colour,
@@ -118,6 +127,9 @@ export interface Campaign {
   monthlyEnabled: boolean;
   /** Offer donors the option to add an estimated card fee so the masjid nets the full amount. */
   coverFees: boolean;
+  /** REQUIRE donors to cover the card fee (they can't opt out). Intended for Zakat, so the full
+   *  zakat amount reaches the masjid. Implies cover-fees is offered. */
+  forceCoverFees: boolean;
   /** Per-campaign thank-you; '' inherits the global default message. */
   thankYouMessage: string;
   /** Kiosk appearance for this campaign's tab: 'light' (bright), 'dark', or 'auto' (bright unless a
@@ -148,6 +160,7 @@ const CAMPAIGN_DEFAULTS: Omit<Campaign, 'id' | 'title' | 'sortOrder' | 'createdA
   customMaxMinor: GIVING_DEFAULTS.customMaxMinor,
   monthlyEnabled: true,
   coverFees: false,
+  forceCoverFees: false,
   thankYouMessage: '',
   theme: 'auto',
   stripeAccountId: '',
@@ -292,6 +305,7 @@ export class Store {
         custom_max_minor INTEGER NOT NULL DEFAULT 1000000,
         monthly_enabled INTEGER NOT NULL DEFAULT 1,
         cover_fees INTEGER NOT NULL DEFAULT 0,
+        force_cover_fees INTEGER NOT NULL DEFAULT 0,
         thank_you_message TEXT NOT NULL DEFAULT '',
         theme TEXT NOT NULL DEFAULT 'auto',
         stripe_account_id TEXT NOT NULL DEFAULT '',
@@ -317,10 +331,11 @@ export class Store {
     }
     // Now that campaign_id is guaranteed to exist, its index is safe to create.
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_donations_campaign ON donations(campaign_id)');
-    // Add per-campaign appearance to an existing (pre-0.9.3) campaigns table.
+    // Add later per-campaign columns to an existing campaigns table.
     {
-      const hasTheme = (this.db.prepare('PRAGMA table_info(campaigns)').all() as { name: string }[]).some((c) => c.name === 'theme');
-      if (!hasTheme) this.db.exec("ALTER TABLE campaigns ADD COLUMN theme TEXT NOT NULL DEFAULT 'auto'");
+      const cols = (this.db.prepare('PRAGMA table_info(campaigns)').all() as { name: string }[]).map((c) => c.name);
+      if (!cols.includes('theme')) this.db.exec("ALTER TABLE campaigns ADD COLUMN theme TEXT NOT NULL DEFAULT 'auto'");
+      if (!cols.includes('force_cover_fees')) this.db.exec('ALTER TABLE campaigns ADD COLUMN force_cover_fees INTEGER NOT NULL DEFAULT 0');
     }
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
@@ -508,6 +523,12 @@ export class Store {
     merged.thankYouMessage = String(merged.thankYouMessage ?? GIVING_DEFAULTS.thankYouMessage).slice(0, 500);
     merged.maxBrightness = merged.maxBrightness !== false; // default ON — a wall kiosk wants max brightness
     merged.footerText = String(merged.footerText ?? GIVING_DEFAULTS.footerText).slice(0, 80);
+    merged.largeAmountThresholdMinor = Math.max(0, Math.round(Number(merged.largeAmountThresholdMinor) || 0));
+    merged.largeAmountNote = String(merged.largeAmountNote ?? '').slice(0, 600);
+    {
+      const s = String(merged.largeAmountImage ?? '').trim().slice(0, 500);
+      merged.largeAmountImage = /^\/uploads\/[A-Za-z0-9._-]+$/.test(s) || /^https?:\/\/[^"'\\\s]+$/i.test(s) ? s : '';
+    }
     this.setRaw('giving', JSON.stringify(merged));
     this.bumpConfigVersion();
     return merged;
@@ -545,6 +566,7 @@ export class Store {
       customMaxMinor: Number(r.custom_max_minor),
       monthlyEnabled: !!r.monthly_enabled,
       coverFees: !!r.cover_fees,
+      forceCoverFees: !!r.force_cover_fees,
       thankYouMessage: String(r.thank_you_message),
       theme: String(r.theme || 'auto'),
       stripeAccountId: String(r.stripe_account_id),
@@ -584,7 +606,8 @@ export class Store {
       customMinMinor: min,
       customMaxMinor: max,
       monthlyEnabled: c.monthlyEnabled !== false,
-      coverFees: c.coverFees === true,
+      coverFees: c.coverFees === true || c.forceCoverFees === true, // forcing implies offering
+      forceCoverFees: c.forceCoverFees === true,
       thankYouMessage: String(c.thankYouMessage ?? '').slice(0, 500),
       theme: (['auto', 'light', 'dark'] as const).includes(c.theme as 'auto' | 'light' | 'dark') ? c.theme : 'auto',
       stripeAccountId: String(c.stripeAccountId ?? '').trim().slice(0, 120),
@@ -597,16 +620,17 @@ export class Store {
       .prepare(
         `INSERT INTO campaigns (id, title, description, accent_color, background_image, cover_image, logo,
            presets_minor, allow_custom, custom_min_minor, custom_max_minor, monthly_enabled, cover_fees,
-           thank_you_message, theme, stripe_account_id, live, is_main, sort_order, created_at)
+           force_cover_fees, thank_you_message, theme, stripe_account_id, live, is_main, sort_order, created_at)
          VALUES (@id, @title, @description, @accentColor, @backgroundImage, @coverImage, @logo,
            @presetsJson, @allowCustom, @customMinMinor, @customMaxMinor, @monthlyEnabled, @coverFees,
-           @thankYouMessage, @theme, @stripeAccountId, @live, @isMain, @sortOrder, @createdAt)
+           @forceCoverFees, @thankYouMessage, @theme, @stripeAccountId, @live, @isMain, @sortOrder, @createdAt)
          ON CONFLICT(id) DO UPDATE SET title=excluded.title, description=excluded.description,
            accent_color=excluded.accent_color, background_image=excluded.background_image,
            cover_image=excluded.cover_image, logo=excluded.logo, presets_minor=excluded.presets_minor,
            allow_custom=excluded.allow_custom, custom_min_minor=excluded.custom_min_minor,
            custom_max_minor=excluded.custom_max_minor, monthly_enabled=excluded.monthly_enabled,
-           cover_fees=excluded.cover_fees, thank_you_message=excluded.thank_you_message,
+           cover_fees=excluded.cover_fees, force_cover_fees=excluded.force_cover_fees,
+           thank_you_message=excluded.thank_you_message,
            theme=excluded.theme, stripe_account_id=excluded.stripe_account_id, live=excluded.live,
            is_main=excluded.is_main, sort_order=excluded.sort_order`,
       )
@@ -624,6 +648,7 @@ export class Store {
         customMaxMinor: c.customMaxMinor,
         monthlyEnabled: c.monthlyEnabled ? 1 : 0,
         coverFees: c.coverFees ? 1 : 0,
+        forceCoverFees: c.forceCoverFees ? 1 : 0,
         thankYouMessage: c.thankYouMessage,
         theme: c.theme,
         stripeAccountId: c.stripeAccountId,
@@ -913,6 +938,7 @@ export class Store {
         customMaxMinor: c.customMaxMinor,
         monthlyEnabled: c.monthlyEnabled,
         coverFees: c.coverFees,
+        forceCoverFees: c.forceCoverFees,
         thankYouMessage: c.thankYouMessage || g.thankYouMessage,
         theme: c.theme || 'auto',
         isMain: c.isMain,
@@ -932,6 +958,9 @@ export class Store {
         emailPolicy: g.emailPolicy,
         maxBrightness: g.maxBrightness !== false,
         footerText: g.footerText,
+        largeAmountThresholdMinor: g.largeAmountThresholdMinor,
+        largeAmountNote: g.largeAmountNote,
+        largeAmountImage: g.largeAmountImage,
         // Cover-fee estimate so the tablet can display the same total the server will charge.
         feeBps: FEE_BPS,
         feeFixedMinor: FEE_FIXED_MINOR,

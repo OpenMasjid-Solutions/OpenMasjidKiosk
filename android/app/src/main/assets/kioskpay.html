@@ -31,11 +31,11 @@
       .wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 28px 18px; }
       .card {
         width: 100%; max-width: 620px;
-        background: rgba(12, 28, 46, 0.72);
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        border-radius: 28px; padding: 30px 28px 24px;
-        box-shadow: 0 30px 70px rgba(0, 0, 0, 0.5);
-        backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+        /* Solid, flat card — no glass/blur. */
+        background: #0a1828;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 24px; padding: 30px 28px 24px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
       }
       h1 { font-size: 1.7rem; margin: 0 0 4px; text-align: center; font-weight: 700; }
       .sub { color: #aebacd; text-align: center; margin: 0 0 22px; font-size: 1.05rem; }

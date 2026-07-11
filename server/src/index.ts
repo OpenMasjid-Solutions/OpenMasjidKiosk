@@ -473,6 +473,9 @@ async function main(): Promise<void> {
       thankYouMessage: z.string().max(500).optional(),
       maxBrightness: z.boolean().optional(),
       footerText: z.string().max(80).optional(),
+      largeAmountThresholdMinor: z.number().int().min(0).optional(),
+      largeAmountNote: z.string().max(600).optional(),
+      largeAmountImage: z.string().max(500).optional(),
       attractTitle: z.string().max(120).optional(),
       masjidName: z.string().max(160).optional(),
     })
@@ -509,6 +512,7 @@ async function main(): Promise<void> {
       customMaxMinor: z.number().int().positive().optional(),
       monthlyEnabled: z.boolean().optional(),
       coverFees: z.boolean().optional(),
+      forceCoverFees: z.boolean().optional(),
       thankYouMessage: z.string().max(500).optional(),
       theme: z.enum(['auto', 'light', 'dark']).optional(),
       stripeAccountId: z.string().max(120).optional(),
@@ -809,9 +813,10 @@ async function main(): Promise<void> {
       if (!looksLikeEmail(donorEmail)) return reply.code(400).send({ error: 'Monthly giving needs a valid email for the receipt.' });
     }
     const currency = store.getCurrency();
-    // Cover-fees: only if the campaign offers it AND the donor opted in. The masjid nets ≈ the base;
-    // the donor pays the grossed-up total. Computed server-side (the tablet only displays it).
-    const coverFees = parsed.data.coverFees === true && campaign.coverFees;
+    // Cover-fees: forced on for a Zakat campaign (forceCoverFees), otherwise only when the campaign
+    // offers it AND the donor opted in. The masjid nets ≈ the base; the donor pays the grossed-up
+    // total. Computed server-side (the tablet only displays it).
+    const coverFees = campaign.forceCoverFees || (parsed.data.coverFees === true && campaign.coverFees);
     const chargeMinor = coverFees ? grossUpForFees(amountMinor) : amountMinor;
     const preset = campaign.presetsMinor.includes(amountMinor) ? 'preset' : 'custom';
     const metadata = {

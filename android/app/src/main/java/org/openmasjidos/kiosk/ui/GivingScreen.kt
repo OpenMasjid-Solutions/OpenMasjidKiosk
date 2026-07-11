@@ -4,7 +4,7 @@
 package org.openmasjidos.kiosk.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -36,12 +37,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -92,9 +95,11 @@ fun GivingScreen(
     onDonorName: (String) -> Unit,
     onDonorEmail: (String) -> Unit,
     onSubmitDetails: () -> Unit,
+    onProceedLarge: () -> Unit,
     onRetry: () -> Unit,
     onEnterManually: () -> Unit,
     onCancel: () -> Unit,
+    loadImage: suspend (String) -> ImageBitmap? = { null },
     modifier: Modifier = Modifier,
 ) {
     val currency = config?.currency?.ifBlank { "USD" } ?: "USD"
@@ -105,6 +110,7 @@ fun GivingScreen(
             AmountStep(giving, campaign, currency, style, readerConnected, config?.footerText ?: "OpenMasjid Solutions", onSetMonthly, onChooseAmount, modifier)
         else -> CenteredScene(modifier) {
             when (giving.step) {
+                GivingStep.LargeAmount -> LargeAmountStep(giving, config, currency, style, loadImage, onProceedLarge, onCancel)
                 GivingStep.Details -> DetailsStep(giving, campaign, config, currency, style, onDonorName, onDonorEmail, onSetCoverFees, onSubmitDetails, onCancel)
                 GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard, onEnterManually, onCancel)
                 GivingStep.Processing -> ProcessingStep(chargeMinor, currency, style)
@@ -222,42 +228,26 @@ private fun AmountStep(
     }
 }
 
-/** A big liquid-glass amount tile: huge amount + "Donate" + a thin accent bar. The look = a
- *  translucent fill (bg shows through) + a top-down sheen + a soft rim-light border (brighter at the
- *  top edge, fading down), which reads as glass instead of a flat outline. */
+/** A big, flat GiveALittle-style amount tile: a solid opaque card with the huge amount and a small
+ *  "Donate" label. No glass — no translucency, sheen or rim; just a clean fill with a soft shadow,
+ *  so the amounts read instantly at a glance. */
 @Composable
 private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    // Rim light: a soft hairline, a touch brighter at the top, fading down — a subtle glass edge
-    // rather than a hard outline.
-    val rim = Brush.verticalGradient(
-        listOf(
-            Color.White.copy(alpha = if (style.bright) 0.55f else 0.18f),
-            Color.White.copy(alpha = if (style.bright) 0.12f else 0.04f),
-        ),
-    )
-    // Sheen: a gentle highlight at the top + a faint glow at the bottom, over the translucent fill.
-    val sheen = Brush.verticalGradient(
-        listOf(
-            Color.White.copy(alpha = if (style.bright) 0.4f else 0.12f),
-            Color.Transparent,
-            Color.White.copy(alpha = if (style.bright) 0.1f else 0.04f),
-        ),
-    )
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(24.dp),
         color = style.tile,
-        border = BorderStroke(1.dp, rim),
-        shadowElevation = 8.dp,
+        contentColor = style.tileInk,
+        // A hairline keeps a white tile defined on the light scene; the dark scene relies on the fill.
+        border = if (style.bright) BorderStroke(1.dp, Color.Black.copy(alpha = 0.06f)) else null,
+        shadowElevation = if (style.bright) 4.dp else 2.dp,
         modifier = modifier,
     ) {
-        Box(modifier = Modifier.fillMaxSize().background(sheen), contentAlignment = Alignment.Center) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(label, style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold, color = style.tileInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(4.dp))
                 Text("Donate", style = MaterialTheme.typography.titleMedium, color = style.accent, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                Box(Modifier.fillMaxWidth(0.4f).height(4.dp).background(style.accent, RoundedCornerShape(50)))
             }
         }
     }
@@ -315,6 +305,64 @@ private fun ColumnScope.Numpad(
     TextButton(onClick = onBack) { Text("Back", color = style.onSceneMuted) }
 }
 
+// ── Step: large-donation alternative (suggest a cheaper way before the card) ──────────────────
+@Composable
+private fun ColumnScope.LargeAmountStep(
+    giving: GivingState,
+    config: KioskConfig?,
+    currency: String,
+    style: SceneStyle,
+    loadImage: suspend (String) -> ImageBitmap?,
+    onProceed: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Text("Before you give", style = MaterialTheme.typography.headlineSmall, color = style.onScene)
+    Spacer(Modifier.height(8.dp))
+    if (giving.amountMinor > 0) {
+        Text(formatMoney(giving.amountMinor, currency), style = MaterialTheme.typography.displaySmall, color = style.accent, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(16.dp))
+    }
+    val note = config?.largeAmountNote.orEmpty()
+    if (note.isNotBlank()) {
+        Text(note, style = MaterialTheme.typography.bodyLarge, color = style.onScene, textAlign = TextAlign.Center)
+    } else {
+        Text(
+            "For a larger gift, a bank transfer means more of it reaches the masjid.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = style.onScene,
+            textAlign = TextAlign.Center,
+        )
+    }
+    val img = config?.largeAmountImage.orEmpty()
+    if (img.isNotBlank()) {
+        val bmp by produceState<ImageBitmap?>(initialValue = null, img) {
+            value = runCatching { loadImage(img) }.getOrNull()
+        }
+        bmp?.let {
+            Spacer(Modifier.height(20.dp))
+            Surface(shape = RoundedCornerShape(16.dp), color = Color.White) {
+                Image(bitmap = it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.size(240.dp).padding(10.dp))
+            }
+        }
+    }
+    Spacer(Modifier.height(24.dp))
+    Button(
+        onClick = onProceed,
+        shape = RoundedCornerShape(16.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
+        modifier = Modifier.fillMaxWidth().height(60.dp),
+    ) { Text("Give ${formatMoney(giving.amountMinor, currency)} by card", style = MaterialTheme.typography.titleLarge) }
+    Spacer(Modifier.height(6.dp))
+    Text(
+        "Card fees are higher on large gifts, but you're welcome to give by card.",
+        style = MaterialTheme.typography.bodySmall,
+        color = style.onSceneMuted,
+        textAlign = TextAlign.Center,
+    )
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
+}
+
 // ── Step: optional donor details ─────────────────────────────────────────────
 @Composable
 private fun ColumnScope.DetailsStep(
@@ -355,8 +403,22 @@ private fun ColumnScope.DetailsStep(
             modifier = Modifier.fillMaxWidth(),
         )
     }
-    // Cover-fees opt-in lives here, next to name/email, and shows the exact extra it adds.
-    if (campaign.coverFees && !giving.monthly) {
+    // Cover-fees lives here, next to name/email, and shows the exact extra it adds. A Zakat campaign
+    // FORCES it on (no toggle) with a note that the fee is added because it's Zakat; otherwise it's a
+    // donor opt-in toggle.
+    val feeClarify = "This is the Visa / Mastercard / Amex card fee — not a platform fee. OpenMasjid Solutions is free, unlimited, forever."
+    if (campaign.forceCoverFees && !giving.monthly) {
+        Spacer(Modifier.height(16.dp))
+        val extra = feeExtra(giving.amountMinor, config)
+        Text(
+            "Because this is Zakat, the card fee (+${formatMoney(extra, currency)}) is added so the full Zakat reaches the masjid.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = style.onScene,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(feeClarify, style = MaterialTheme.typography.bodySmall, color = style.onSceneMuted)
+    } else if (campaign.coverFees && !giving.monthly) {
         Spacer(Modifier.height(16.dp))
         val extra = feeExtra(giving.amountMinor, config)
         Row(
@@ -373,11 +435,7 @@ private fun ColumnScope.DetailsStep(
             Switch(checked = giving.coverFees, onCheckedChange = onSetCoverFees, colors = SwitchDefaults.colors(checkedTrackColor = style.accent))
         }
         Spacer(Modifier.height(4.dp))
-        Text(
-            "This is the Visa / Mastercard / Amex card fee — not a platform fee. OpenMasjid Solutions is free, unlimited, forever.",
-            style = MaterialTheme.typography.bodySmall,
-            color = style.onSceneMuted,
-        )
+        Text(feeClarify, style = MaterialTheme.typography.bodySmall, color = style.onSceneMuted)
     }
     giving.error?.let {
         Spacer(Modifier.height(12.dp))
@@ -504,7 +562,9 @@ private fun ColumnScope.ErrorStep(error: String?, style: SceneStyle, onRetry: ()
 /** The amount to display/charge: base grossed up by the cover-fee estimate when opted in. Matches
  *  the server's grossUpForFees + is gated on the campaign allowing cover-fees (never diverges). */
 private fun displayCharge(giving: GivingState, campaign: Campaign, config: KioskConfig?): Long {
-    if (!giving.coverFees || !campaign.coverFees || giving.amountMinor <= 0) return giving.amountMinor
+    // Fees are covered when the donor opted in, or when the campaign forces it (Zakat).
+    val cover = campaign.coverFees && (giving.coverFees || campaign.forceCoverFees)
+    if (!cover || giving.amountMinor <= 0) return giving.amountMinor
     return giving.amountMinor + feeExtra(giving.amountMinor, config)
 }
 

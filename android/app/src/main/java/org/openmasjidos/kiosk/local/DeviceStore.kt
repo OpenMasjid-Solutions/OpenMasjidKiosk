@@ -61,6 +61,9 @@ class DeviceStore(private val context: Context) {
         val CFG_FEE_FIXED = longPreferencesKey("cfg_fee_fixed")
         val CFG_MAX_BRIGHTNESS = booleanPreferencesKey("cfg_max_brightness")
         val CFG_FOOTER = stringPreferencesKey("cfg_footer")
+        val CFG_LARGE_THRESHOLD = longPreferencesKey("cfg_large_threshold")
+        val CFG_LARGE_NOTE = stringPreferencesKey("cfg_large_note")
+        val CFG_LARGE_IMAGE = stringPreferencesKey("cfg_large_image")
         val CFG_MAIN_CAMPAIGN = stringPreferencesKey("cfg_main_campaign")
         val CFG_CAMPAIGNS = stringPreferencesKey("cfg_campaigns") // JSON array of campaigns
 
@@ -104,6 +107,9 @@ class DeviceStore(private val context: Context) {
                 feeFixedMinor = p[Keys.CFG_FEE_FIXED] ?: 30L,
                 maxBrightness = p[Keys.CFG_MAX_BRIGHTNESS] ?: true,
                 footerText = p[Keys.CFG_FOOTER] ?: "OpenMasjid Solutions",
+                largeAmountThresholdMinor = p[Keys.CFG_LARGE_THRESHOLD] ?: 0L,
+                largeAmountNote = p[Keys.CFG_LARGE_NOTE].orEmpty(),
+                largeAmountImage = p[Keys.CFG_LARGE_IMAGE].orEmpty(),
                 mainCampaignId = p[Keys.CFG_MAIN_CAMPAIGN].orEmpty(),
                 campaigns = CampaignJson.parseString(p[Keys.CFG_CAMPAIGNS]),
             )
@@ -135,6 +141,9 @@ class DeviceStore(private val context: Context) {
             p[Keys.CFG_FEE_FIXED] = config.feeFixedMinor
             p[Keys.CFG_MAX_BRIGHTNESS] = config.maxBrightness
             p[Keys.CFG_FOOTER] = config.footerText
+            p[Keys.CFG_LARGE_THRESHOLD] = config.largeAmountThresholdMinor
+            p[Keys.CFG_LARGE_NOTE] = config.largeAmountNote
+            p[Keys.CFG_LARGE_IMAGE] = config.largeAmountImage
             p[Keys.CFG_MAIN_CAMPAIGN] = config.mainCampaignId
             p[Keys.CFG_CAMPAIGNS] = CampaignJson.toJsonString(config.campaigns)
         }

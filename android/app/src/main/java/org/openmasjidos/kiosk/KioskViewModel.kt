@@ -45,7 +45,7 @@ enum class Overlay { None, Pin, Maintenance }
 /** The donor-facing giving flow (Paired phase). The kiosk now boots straight into [Amount] (no
  *  attract screen); [Idle] is retained only as a defensive default. Processing = the card was read
  *  and we're verifying with the server (so the tap is acknowledged immediately). */
-enum class GivingStep { Idle, Amount, Details, Card, Processing, Thanks, Error }
+enum class GivingStep { Idle, Amount, LargeAmount, Details, Card, Processing, Thanks, Error }
 
 /** How long a non-main campaign tab may sit idle before the kiosk returns to the main tab. */
 const val KIOSK_AUTO_RETURN_MS = 45_000L
@@ -350,7 +350,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         idleResetJob?.cancel()
         val g = local.value.giving
         val step = g.step
-        if (step != GivingStep.Details && step != GivingStep.Card && step != GivingStep.Error) {
+        if (step != GivingStep.LargeAmount && step != GivingStep.Details && step != GivingStep.Card && step != GivingStep.Error) {
             if (local.value.idleReturnStartedMs != null) local.update { it.copy(idleReturnStartedMs = null) }
             return
         }
@@ -362,7 +362,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         idleResetJob = viewModelScope.launch {
             delay(timeout)
             val s = local.value.giving.step
-            if (s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error) cancelGiving()
+            if (s == GivingStep.LargeAmount || s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error) cancelGiving()
         }
     }
 
@@ -416,26 +416,58 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         updateGiving { it.copy(monthly = monthly, error = null) }
     }
 
-    /** Toggle covering the estimated card fee (only offered when the campaign allows it). */
+    /** Toggle covering the estimated card fee (only offered when the campaign allows it). A Zakat
+     *  campaign forces fee-covering on, so the toggle is ignored there. */
     fun setCoverFees(v: Boolean) {
         onUserActivity()
+        if (activeCampaign()?.forceCoverFees == true) return // Zakat: the fee is always covered
         updateGiving { it.copy(coverFees = v) }
     }
 
-    /** Pick an amount (minor units). Goes to the details step when the admin asks for name/email —
-     *  or always for monthly (which requires name + email) — otherwise straight to the card. */
+    /** Pick an amount (minor units). For a large gift (≥ the admin's threshold) we first suggest a
+     *  cheaper way to give (bank transfer / Zelle); otherwise proceed to details/card. */
     fun chooseAmount(amountMinor: Long) {
         if (amountMinor <= 0) return
+        cancelAutoReturn() // a donation is starting — don't yank the donor back to the main tab
         val cfg = ui.value.config
+        val threshold = cfg?.largeAmountThresholdMinor ?: 0L
+        val hasAlternative = !cfg?.largeAmountNote.isNullOrBlank() || !cfg?.largeAmountImage.isNullOrBlank()
+        if (threshold > 0 && amountMinor >= threshold && hasAlternative) {
+            // Interpose the large-donation screen — the donor can read the alternative, then either
+            // give by card anyway or cancel. The idle-abandon timer + ring cover this step too.
+            updateGiving { it.copy(amountMinor = amountMinor, error = null, step = GivingStep.LargeAmount) }
+            return
+        }
+        proceedAfterAmount(amountMinor)
+    }
+
+    /** From the large-donation suggestion, the donor chose to give by card anyway. */
+    fun proceedDespiteLargeAmount() {
+        val amt = local.value.giving.amountMinor
+        if (amt <= 0) { resetGiving(); return }
+        proceedAfterAmount(amt)
+    }
+
+    /** Decide the next step for a chosen amount: the details step for name/email prompts, monthly, OR
+     *  when the campaign covers fees (its toggle/Zakat note lives there); otherwise straight to card.
+     *  A Zakat (forceCoverFees) campaign always covers the fee, so we set that on the giving state. */
+    private fun proceedAfterAmount(amountMinor: Long) {
+        val cfg = ui.value.config
+        val campaign = activeCampaign()
         val monthly = local.value.giving.monthly
-        // Show the details step for name/email prompts, monthly, OR when the campaign offers cover-fees
-        // (its toggle lives on that step, showing the exact extra it adds).
+        val forced = campaign?.forceCoverFees == true
         val wantsDetails = monthly ||
             (cfg?.namePolicy ?: "off") != "off" ||
             (cfg?.emailPolicy ?: "off") != "off" ||
-            activeCampaign()?.coverFees == true
-        cancelAutoReturn() // a donation is starting — don't yank the donor back to the main tab
-        updateGiving { it.copy(amountMinor = amountMinor, error = null, step = if (wantsDetails) GivingStep.Details else GivingStep.Card) }
+            campaign?.coverFees == true
+        updateGiving {
+            it.copy(
+                amountMinor = amountMinor,
+                coverFees = if (forced) true else it.coverFees,
+                error = null,
+                step = if (wantsDetails) GivingStep.Details else GivingStep.Card,
+            )
+        }
         if (!wantsDetails) startCollect()
     }
 

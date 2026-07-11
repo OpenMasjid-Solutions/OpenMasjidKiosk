@@ -1,7 +1,7 @@
 {
   "name": "openmasjid-kiosk-server",
   "private": true,
-  "version": "0.9.7",
+  "version": "0.9.8",
   "description": "API + admin web host + setup page + SQLite store for OpenMasjid Kiosk",
   "license": "AGPL-3.0-only",
   "scripts": {

@@ -279,6 +279,13 @@ export interface GivingConfig {
   maxBrightness: boolean;
   /** Small tagline shown at the bottom of the kiosk giving screen ('' hides it). */
   footerText: string;
+  /** When a donation is at/above this many MINOR units, the kiosk gently suggests a cheaper
+   *  alternative (bank transfer / Zelle QR) before the card. 0 disables the prompt. */
+  largeAmountThresholdMinor: number;
+  /** The note shown on that large-amount screen (bank details / instructions). */
+  largeAmountNote: string;
+  /** '/uploads/…' | 'https://…' | '' — an optional QR/image on the large-amount screen. */
+  largeAmountImage: string;
 }
 
 /** Per-campaign kiosk appearance: 'light' (bright), 'dark', or 'auto' (bright unless a dark bg image). */
@@ -321,6 +328,9 @@ export interface Campaign {
   customMaxMinor: number;
   monthlyEnabled: boolean;
   coverFees: boolean;
+  /** Zakat-only: forces every donation on this campaign to cover the card fee (the donor is
+   *  told fees must be covered because it's Zakat). Implies coverFees. */
+  forceCoverFees: boolean;
   /** '' inherits the global default thank-you. */
   thankYouMessage: string;
   /** Kiosk appearance for this tab. */
@@ -349,6 +359,7 @@ export type CampaignPatch = Partial<
     | 'customMaxMinor'
     | 'monthlyEnabled'
     | 'coverFees'
+    | 'forceCoverFees'
     | 'thankYouMessage'
     | 'theme'
     | 'stripeAccountId'

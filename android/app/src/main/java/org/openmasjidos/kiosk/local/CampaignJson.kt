@@ -41,6 +41,7 @@ object CampaignJson {
             customMaxMinor = o.optLong("customMaxMinor", 1_000_000),
             monthlyEnabled = o.optBoolean("monthlyEnabled", false),
             coverFees = o.optBoolean("coverFees", false),
+            forceCoverFees = o.optBoolean("forceCoverFees", false),
             thankYouMessage = o.optString("thankYouMessage", ""),
             theme = o.optString("theme", "auto"),
             isMain = o.optBoolean("isMain", false),
@@ -68,6 +69,7 @@ object CampaignJson {
                     .put("customMaxMinor", c.customMaxMinor)
                     .put("monthlyEnabled", c.monthlyEnabled)
                     .put("coverFees", c.coverFees)
+                    .put("forceCoverFees", c.forceCoverFees)
                     .put("thankYouMessage", c.thankYouMessage)
                     .put("theme", c.theme)
                     .put("isMain", c.isMain)

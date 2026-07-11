@@ -68,6 +68,37 @@ test('updateCampaign keeps only /uploads or http(s) image URLs, rejecting others
   assert.equal(up.logo, 'https://example.org/logo.png');
 });
 
+test('forceCoverFees (Zakat) implies coverFees and survives round-trip + getKioskConfig', () => {
+  const s = freshStore();
+  const c = s.createCampaign({ title: 'Zakat', coverFees: false, forceCoverFees: true })!;
+  // Forcing the fee also switches on the "offer" flag so downstream logic (and the tablet) treat it as covered.
+  assert.equal(c.forceCoverFees, true);
+  assert.equal(c.coverFees, true);
+  const { config } = s.getKioskConfig('acct_primary');
+  const camp = (config.campaigns as { id: string; coverFees: boolean; forceCoverFees: boolean }[]).find((x) => x.id === c.id)!;
+  assert.equal(camp.forceCoverFees, true);
+  assert.equal(camp.coverFees, true);
+  // Turning it off again clears both (unless the donor-facing offer is separately on).
+  const off = s.updateCampaign(c.id, { forceCoverFees: false, coverFees: false })!;
+  assert.equal(off.forceCoverFees, false);
+  assert.equal(off.coverFees, false);
+});
+
+test('setGiving clamps the large-donation threshold to ≥0 and only keeps valid alternative images', () => {
+  const s = freshStore();
+  s.setGiving({ largeAmountThresholdMinor: -50, largeAmountNote: '  give by bank  ', largeAmountImage: 'javascript:alert(1)' });
+  let g = s.getGiving();
+  assert.equal(g.largeAmountThresholdMinor, 0); // negatives clamped
+  assert.equal(g.largeAmountImage, ''); // unsafe URL rejected
+  s.setGiving({ largeAmountThresholdMinor: 25000, largeAmountImage: '/uploads/qr_abcd1234.png' });
+  g = s.getGiving();
+  assert.equal(g.largeAmountThresholdMinor, 25000);
+  assert.equal(g.largeAmountImage, '/uploads/qr_abcd1234.png');
+  const { config } = s.getKioskConfig('acct_primary');
+  assert.equal(config.largeAmountThresholdMinor, 25000);
+  assert.equal(config.largeAmountImage, '/uploads/qr_abcd1234.png');
+});
+
 test('the main campaign cannot be deleted; a normal campaign can', () => {
   const s = freshStore();
   const main = s.getMainCampaign()!;

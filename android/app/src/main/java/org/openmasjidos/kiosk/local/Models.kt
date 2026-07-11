@@ -47,6 +47,9 @@ data class Campaign(
     val customMaxMinor: Long = 1_000_000,
     val monthlyEnabled: Boolean = false,
     val coverFees: Boolean = false,
+    /** Zakat-only: the card fee is ALWAYS added and the donor is told it's required because this is
+     *  Zakat (the full Zakat must reach the masjid). Implies [coverFees]. */
+    val forceCoverFees: Boolean = false,
     /** '' inherits the global default thank-you. */
     val thankYouMessage: String = "",
     /** Kiosk appearance for this tab: 'auto' (bright by default), 'light', or 'dark'. */
@@ -74,6 +77,11 @@ data class KioskConfig(
     val feeFixedMinor: Long = 30,        //                    + a small fixed fee
     val maxBrightness: Boolean = true,   // force the tablet to full screen brightness
     val footerText: String = "OpenMasjid Solutions", // bottom tagline ('' hides it)
+    /** Large-donation alternative: at/above this many MINOR units the kiosk suggests a cheaper way
+     *  to give (bank transfer / Zelle QR) before the card. 0 disables it. */
+    val largeAmountThresholdMinor: Long = 0,
+    val largeAmountNote: String = "",
+    val largeAmountImage: String = "", // '/uploads/…' | 'https://…' | ''
     val mainCampaignId: String = "",
     val campaigns: List<Campaign> = emptyList(),
 ) {

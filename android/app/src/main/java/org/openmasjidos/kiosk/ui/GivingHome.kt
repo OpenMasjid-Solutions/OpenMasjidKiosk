@@ -55,6 +55,8 @@ import org.openmasjidos.kiosk.ui.theme.InkLight
 import org.openmasjidos.kiosk.ui.theme.InkMutedDark
 import org.openmasjidos.kiosk.ui.theme.InkMutedLight
 import org.openmasjidos.kiosk.ui.theme.PrimaryDark
+import org.openmasjidos.kiosk.ui.theme.SurfaceOverlayDark
+import org.openmasjidos.kiosk.ui.theme.SurfaceRaisedDark
 
 /**
  * The always-on giving home (§9, redesigned): the kiosk boots straight into the MAIN campaign's
@@ -125,9 +127,11 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                             onDonorName = vm::setDonorName,
                             onDonorEmail = vm::setDonorEmail,
                             onSubmitDetails = vm::submitDetails,
+                            onProceedLarge = vm::proceedDespiteLargeAmount,
                             onRetry = vm::retryGiving,
                             onEnterManually = vm::enterManually,
                             onCancel = vm::cancelGiving,
+                            loadImage = { url -> vm.image(url)?.asImageBitmap() },
                         )
                     }
                 } else {
@@ -248,8 +252,8 @@ private fun accentOf(c: Campaign?): Color {
     return Color(0xFF000000L or v)
 }
 
-/** Resolve the giving-screen colour set: a bright, vibrant look (dark text on frosted-glass tiles)
- *  or the calm dark scene (light text on subtle glass). */
+/** Resolve the giving-screen colour set: a bright, vibrant look (dark text on solid white tiles) or
+ *  the calm dark scene (light text on solid elevated tiles). Flat and opaque — no glass. */
 private fun sceneStyleFor(bright: Boolean, accent: Color): SceneStyle = if (bright) {
     SceneStyle(
         bright = true,
@@ -257,10 +261,10 @@ private fun sceneStyleFor(bright: Boolean, accent: Color): SceneStyle = if (brig
         onAccent = if (accent.luminance() > 0.6f) InkLight else Color.White,
         onScene = InkLight,
         onSceneMuted = InkMutedLight,
-        tile = Color.White.copy(alpha = 0.62f),
+        tile = Color.White,
         tileInk = InkLight,
-        card = Color.White.copy(alpha = 0.3f),
-        cardBorder = Color.White.copy(alpha = 0.6f),
+        card = Color.White,
+        cardBorder = Color.White,
     )
 } else {
     SceneStyle(
@@ -269,9 +273,9 @@ private fun sceneStyleFor(bright: Boolean, accent: Color): SceneStyle = if (brig
         onAccent = if (accent.luminance() > 0.6f) InkDark else Color.White,
         onScene = InkDark,
         onSceneMuted = InkMutedDark,
-        tile = Color.White.copy(alpha = 0.12f),
+        tile = SurfaceOverlayDark,
         tileInk = InkDark,
-        card = Color.White.copy(alpha = 0.06f),
-        cardBorder = Color.White.copy(alpha = 0.14f),
+        card = SurfaceRaisedDark,
+        cardBorder = SurfaceOverlayDark,
     )
 }

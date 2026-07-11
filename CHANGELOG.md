@@ -3,6 +3,17 @@
 
 # Changelog
 
+## 0.9.8
+- **Zakat: require covering the card fee.** A new campaign switch, **“Require donors to cover card
+  fees (only for Zakat)”** (Admin → Campaigns), always adds the card fee to a Zakat gift and tells the
+  donor on the kiosk that the fee is added *because it’s Zakat*, so the full Zakat reaches the masjid.
+- **A gentler option for large gifts.** In **Kiosk settings** you can set a **large-donation
+  threshold** plus a note and an image (e.g. a Zelle/bank-transfer QR code). When someone chooses a
+  gift at or above that amount, the kiosk first suggests the cheaper way to give — they can still tap
+  **“Give by card”** and continue, knowing card fees are higher on large amounts.
+- **Cleaner, flat giving screen.** Removed the glassy look — the amount buttons and the typed-card
+  screen are now solid, flat and easy to read (GiveALittle-style), in both the bright and dark themes.
+
 ## 0.9.7
 - **Fixed the typed-card screen.** The card form was overflowing off the top of the screen (only the
   Pay/Cancel buttons showed) and sat see-through over the giving screen — so a donor couldn’t actually
