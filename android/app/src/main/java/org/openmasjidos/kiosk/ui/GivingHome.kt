@@ -258,7 +258,10 @@ private fun sceneStyleFor(bright: Boolean, accent: Color): SceneStyle = if (brig
     SceneStyle(
         bright = true,
         accent = accent,
-        onAccent = if (accent.luminance() > 0.6f) InkLight else Color.White,
+        // Text on the solid accent (buttons + the two-tone "Donate" band): a DARK ink on a light accent,
+        // white on a dark one. Crossover ≈ 0.4 luminance (well above the 0.179 WCAG break-even) so a
+        // mid-bright accent like the default cyan gets readable dark text, not low-contrast white.
+        onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
         onScene = InkLight,
         onSceneMuted = InkMutedLight,
         tile = Color.White,
@@ -270,7 +273,9 @@ private fun sceneStyleFor(bright: Boolean, accent: Color): SceneStyle = if (brig
     SceneStyle(
         bright = false,
         accent = accent,
-        onAccent = if (accent.luminance() > 0.6f) InkDark else Color.White,
+        // Same contrast rule as the bright scene — dark ink on a light accent (InkDark is near-white
+        // and would vanish on a pale accent band), white on a dark accent.
+        onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
         onScene = InkDark,
         onSceneMuted = InkMutedDark,
         tile = SurfaceOverlayDark,

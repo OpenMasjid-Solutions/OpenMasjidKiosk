@@ -559,8 +559,16 @@ object ReaderManager {
             ReaderConn.Discovering -> if (_state.value.transport == autoTransport) return
             else -> Unit
         }
+        // Heal a STALE non-connected UI state first: a silent drop can null the SDK's connectedReader
+        // without firing onDisconnect, leaving conn == Connected. If we didn't reset it here,
+        // tryAutoConnect()'s own `Connected -> return` guard would bail and the kiosk would sit showing
+        // "Connected" forever while unable to take a card — the exact case this watchdog exists for.
+        val prev = _state.value.conn
+        if (prev != ReaderConn.NotConnected) {
+            _state.update { it.copy(conn = ReaderConn.NotConnected, connectedLabel = null, battery = null) }
+            repo?.log("warn", "reader_health_stale", "reader gone (was $prev) — reconnecting")
+        }
         // Coalesce with any pending backoff reconnect and try now with a clean slate.
-        repo?.log("info", "reader_health_reconnect", "watchdog")
         mainHandler.removeCallbacks(reconnectRunnable)
         autoFailures = 0
         tryAutoConnect()
