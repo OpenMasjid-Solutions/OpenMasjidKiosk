@@ -31,6 +31,7 @@ object CampaignJson {
             id = o.optString("id", ""),
             title = o.optString("title", ""),
             description = o.optString("description", ""),
+            primaryColor = o.optString("primaryColor", ""),
             accentColor = o.optString("accentColor", ""),
             backgroundImage = o.optString("backgroundImage", ""),
             coverImage = o.optString("coverImage", ""),
@@ -59,6 +60,7 @@ object CampaignJson {
                     .put("id", c.id)
                     .put("title", c.title)
                     .put("description", c.description)
+                    .put("primaryColor", c.primaryColor)
                     .put("accentColor", c.accentColor)
                     .put("backgroundImage", c.backgroundImage)
                     .put("coverImage", c.coverImage)

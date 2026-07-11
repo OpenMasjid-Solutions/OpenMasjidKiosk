@@ -31,7 +31,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -45,11 +44,13 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import org.openmasjidos.kiosk.GivingStep
 import org.openmasjidos.kiosk.KIOSK_AUTO_RETURN_MS
 import org.openmasjidos.kiosk.KioskViewModel
 import org.openmasjidos.kiosk.UiState
 import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.readers.ReaderConn
+import org.openmasjidos.kiosk.ui.theme.GoldDark
 import org.openmasjidos.kiosk.ui.theme.InkDark
 import org.openmasjidos.kiosk.ui.theme.InkLight
 import org.openmasjidos.kiosk.ui.theme.InkMutedDark
@@ -71,17 +72,20 @@ import org.openmasjidos.kiosk.ui.theme.SurfaceRaisedDark
 fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
     val campaign = ui.activeCampaign
     val accent = accentOf(campaign)
-    // Bright by default: 'auto'/'light' with no background image → a vibrant accent gradient + dark
-    // text on frosted-glass tiles; 'dark' (or a background image) → the calm dark scene + light text.
+    val primary = primaryOf(campaign)
+    // Bright by default: 'auto'/'light' with no background image → a soft PRIMARY-colour background
+    // (light at top → primary at the bottom) with dark text + white tiles (the "Donate" band is the
+    // accent); 'dark' (or a background image) → the calm dark scene + light text.
     val hasImage = !campaign?.backgroundImage.isNullOrBlank()
     val bright = !hasImage && (campaign?.theme ?: "auto") != "dark"
-    val style = sceneStyleFor(bright, accent)
+    // The bright background base: the campaign's primary colour, or a light tint of the accent when
+    // no primary is set (keeps older single-colour campaigns looking right).
+    val sceneBase = primary ?: lerp(accent, Color.White, 0.35f)
+    val style = sceneStyleFor(bright, sceneBase, accent)
     val darkBrush = SceneBrush
     val bgBrush = if (bright) {
-        Brush.linearGradient(
-            colors = listOf(lerp(accent, Color.White, 0.55f), lerp(accent, Color.White, 0.14f), accent),
-            start = Offset.Zero,
-            end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
+        Brush.verticalGradient(
+            colors = listOf(lerp(sceneBase, Color.White, 0.35f), sceneBase, lerp(sceneBase, Color.Black, 0.05f)),
         )
     } else {
         darkBrush
@@ -107,6 +111,14 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
             },
     ) {
         CampaignBackground(vm, campaign?.backgroundImage.orEmpty(), bgBrush)
+        // Fireworks celebration, drawn behind the thank-you content so the message stays readable.
+        // Admin-enabled and only for gifts at/above the configured threshold (0 = every gift).
+        val cfg = ui.config
+        if (cfg?.celebrateEnabled == true && ui.giving.step == GivingStep.Thanks &&
+            ui.giving.amountMinor >= cfg.celebrateThresholdMinor
+        ) {
+            Fireworks(colors = listOf(accent, sceneBase, Color.White, GoldDark), modifier = Modifier.fillMaxSize())
+        }
         Column(Modifier.fillMaxSize()) {
             HomeTopBar(ui, style, onSelect = vm::selectCampaign)
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -252,9 +264,25 @@ private fun accentOf(c: Campaign?): Color {
     return Color(0xFF000000L or v)
 }
 
-/** Resolve the giving-screen colour set: a bright, vibrant look (dark text on solid white tiles) or
- *  the calm dark scene (light text on solid elevated tiles). Flat and opaque — no glass. */
-private fun sceneStyleFor(bright: Boolean, accent: Color): SceneStyle = if (bright) {
+/** Parse a campaign's '#rrggbb' PRIMARY (background) colour, or null when unset (caller then derives
+ *  a light background from the accent — keeping older single-colour campaigns looking right). */
+private fun primaryOf(c: Campaign?): Color? {
+    val hex = c?.primaryColor?.removePrefix("#")?.takeIf { it.length == 6 } ?: return null
+    val v = hex.toLongOrNull(16) ?: return null
+    return Color(0xFF000000L or v)
+}
+
+/** A near-black ink for the bright scene — big bold amounts + headings read pure-black on the light
+ *  primary background and on the white tiles (matching the reference giving screen). */
+private val InkBlack = Color(0xFF0A0F14)
+
+/** Resolve the giving-screen colour set from the scene's background base + the accent. Bright: dark
+ *  text on a light PRIMARY background, white (slightly glassy) tiles with big black numbers, and an
+ *  accent "Donate" band. Dark: the calm dark scene, light text on solid elevated tiles. */
+private fun sceneStyleFor(bright: Boolean, sceneBase: Color, accent: Color): SceneStyle = if (bright) {
+    // If the primary background is light (the normal case) use dark text; if the admin picked a dark
+    // primary, fall back to white text so headings stay readable.
+    val lightBg = sceneBase.luminance() > 0.45f
     SceneStyle(
         bright = true,
         accent = accent,
@@ -262,10 +290,10 @@ private fun sceneStyleFor(bright: Boolean, accent: Color): SceneStyle = if (brig
         // white on a dark one. Crossover ≈ 0.4 luminance (well above the 0.179 WCAG break-even) so a
         // mid-bright accent like the default cyan gets readable dark text, not low-contrast white.
         onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
-        onScene = InkLight,
-        onSceneMuted = InkMutedLight,
-        tile = Color.White,
-        tileInk = InkLight,
+        onScene = if (lightBg) InkBlack else Color.White,
+        onSceneMuted = if (lightBg) InkMutedLight else Color.White.copy(alpha = 0.85f),
+        tile = Color.White.copy(alpha = 0.92f), // slight liquid-glass — the background tints through a touch
+        tileInk = InkBlack,                      // big BOLD BLACK numbers, like the reference
         card = Color.White,
         cardBorder = Color.White,
     )

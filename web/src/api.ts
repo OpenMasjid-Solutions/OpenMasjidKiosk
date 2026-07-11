@@ -286,6 +286,10 @@ export interface GivingConfig {
   largeAmountNote: string;
   /** '/uploads/…' | 'https://…' | '' — an optional QR/image on the large-amount screen. */
   largeAmountImage: string;
+  /** Play a fireworks celebration on the thank-you screen after a successful donation. */
+  celebrateEnabled: boolean;
+  /** Only celebrate when the gift is at least this many MINOR units (0 = celebrate every gift). */
+  celebrateThresholdMinor: number;
 }
 
 /** Per-campaign kiosk appearance: 'light' (bright), 'dark', or 'auto' (bright unless a dark bg image). */
@@ -316,7 +320,9 @@ export interface Campaign {
   id: string;
   title: string;
   description: string;
-  /** '#rrggbb', or '' to inherit the default accent. */
+  /** '#rrggbb' background colour for this tab, or '' to inherit. Drives the giving-screen gradient. */
+  primaryColor: string;
+  /** '#rrggbb', or '' to inherit the default accent. Drives the tiles' "Donate" band + buttons. */
   accentColor: string;
   /** '/uploads/…' | 'https://…' | '' — this tab's full-screen background. */
   backgroundImage: string;
@@ -349,6 +355,7 @@ export type CampaignPatch = Partial<
     Campaign,
     | 'title'
     | 'description'
+    | 'primaryColor'
     | 'accentColor'
     | 'backgroundImage'
     | 'coverImage'

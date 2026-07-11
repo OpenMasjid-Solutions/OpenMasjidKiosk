@@ -64,6 +64,8 @@ class DeviceStore(private val context: Context) {
         val CFG_LARGE_THRESHOLD = longPreferencesKey("cfg_large_threshold")
         val CFG_LARGE_NOTE = stringPreferencesKey("cfg_large_note")
         val CFG_LARGE_IMAGE = stringPreferencesKey("cfg_large_image")
+        val CFG_CELEBRATE = booleanPreferencesKey("cfg_celebrate")
+        val CFG_CELEBRATE_THRESHOLD = longPreferencesKey("cfg_celebrate_threshold")
         val CFG_MAIN_CAMPAIGN = stringPreferencesKey("cfg_main_campaign")
         val CFG_CAMPAIGNS = stringPreferencesKey("cfg_campaigns") // JSON array of campaigns
 
@@ -110,6 +112,8 @@ class DeviceStore(private val context: Context) {
                 largeAmountThresholdMinor = p[Keys.CFG_LARGE_THRESHOLD] ?: 0L,
                 largeAmountNote = p[Keys.CFG_LARGE_NOTE].orEmpty(),
                 largeAmountImage = p[Keys.CFG_LARGE_IMAGE].orEmpty(),
+                celebrateEnabled = p[Keys.CFG_CELEBRATE] ?: false,
+                celebrateThresholdMinor = p[Keys.CFG_CELEBRATE_THRESHOLD] ?: 0L,
                 mainCampaignId = p[Keys.CFG_MAIN_CAMPAIGN].orEmpty(),
                 campaigns = CampaignJson.parseString(p[Keys.CFG_CAMPAIGNS]),
             )
@@ -144,6 +148,8 @@ class DeviceStore(private val context: Context) {
             p[Keys.CFG_LARGE_THRESHOLD] = config.largeAmountThresholdMinor
             p[Keys.CFG_LARGE_NOTE] = config.largeAmountNote
             p[Keys.CFG_LARGE_IMAGE] = config.largeAmountImage
+            p[Keys.CFG_CELEBRATE] = config.celebrateEnabled
+            p[Keys.CFG_CELEBRATE_THRESHOLD] = config.celebrateThresholdMinor
             p[Keys.CFG_MAIN_CAMPAIGN] = config.mainCampaignId
             p[Keys.CFG_CAMPAIGNS] = CampaignJson.toJsonString(config.campaigns)
         }

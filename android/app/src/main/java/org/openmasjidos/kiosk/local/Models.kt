@@ -35,7 +35,9 @@ data class Campaign(
     val id: String,
     val title: String,
     val description: String = "",
-    /** '#rrggbb' or '' to inherit the kiosk default accent. */
+    /** '#rrggbb' background colour for this tab, or '' to inherit. Drives the giving-screen gradient. */
+    val primaryColor: String = "",
+    /** '#rrggbb' or '' to inherit the kiosk default accent. Drives the "Donate" band + buttons. */
     val accentColor: String = "",
     /** Full-screen background image URL ('/uploads/…' or 'https://…') or '' for the default scene. */
     val backgroundImage: String = "",
@@ -82,6 +84,10 @@ data class KioskConfig(
     val largeAmountThresholdMinor: Long = 0,
     val largeAmountNote: String = "",
     val largeAmountImage: String = "", // '/uploads/…' | 'https://…' | ''
+    /** Play a fireworks celebration on the thank-you screen after a successful donation. */
+    val celebrateEnabled: Boolean = false,
+    /** Only celebrate when the gift is at least this many MINOR units (0 = celebrate every gift). */
+    val celebrateThresholdMinor: Long = 0,
     val mainCampaignId: String = "",
     val campaigns: List<Campaign> = emptyList(),
 ) {

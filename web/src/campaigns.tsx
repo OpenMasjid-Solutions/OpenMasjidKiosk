@@ -50,6 +50,8 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went
 const MAX_PRESETS = 6;
 /** Shown in the colour picker while a campaign inherits the default accent (it needs a value). */
 const DEFAULT_ACCENT = '#22d3ee';
+/** Shown in the primary-colour picker while a campaign inherits the default background. */
+const DEFAULT_PRIMARY = '#a8f2b7';
 /** A friendly starting set for a brand-new campaign (major units; the admin edits them). */
 const DEFAULT_NEW_PRESETS = ['5', '10', '25', '50', '100'];
 
@@ -180,6 +182,8 @@ function GlobalSettingsCard() {
   const [largeThreshold, setLargeThreshold] = useState(''); // major units; '' = off
   const [largeNote, setLargeNote] = useState('');
   const [largeImage, setLargeImage] = useState('');
+  const [celebrateEnabled, setCelebrateEnabled] = useState(false);
+  const [celebrateThreshold, setCelebrateThreshold] = useState(''); // major units; '' = every gift
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState('');
@@ -195,6 +199,8 @@ function GlobalSettingsCard() {
     setLargeThreshold(s.giving.largeAmountThresholdMinor > 0 ? toMajorStr(s.giving.largeAmountThresholdMinor, s.currency) : '');
     setLargeNote(s.giving.largeAmountNote ?? '');
     setLargeImage(s.giving.largeAmountImage ?? '');
+    setCelebrateEnabled(s.giving.celebrateEnabled === true);
+    setCelebrateThreshold(s.giving.celebrateThresholdMinor > 0 ? toMajorStr(s.giving.celebrateThresholdMinor, s.currency) : '');
   }, []);
 
   useEffect(() => {
@@ -222,6 +228,8 @@ function GlobalSettingsCard() {
         largeAmountThresholdMinor: toMinor(largeThreshold, currency), // 0 when blank = off
         largeAmountNote: largeNote,
         largeAmountImage: largeImage.trim(),
+        celebrateEnabled,
+        celebrateThresholdMinor: toMinor(celebrateThreshold, currency), // 0 when blank = every gift
       });
       hydrate(fresh);
       setSaved(true);
@@ -322,6 +330,30 @@ function GlobalSettingsCard() {
               onChange={setLargeImage}
             />
           </div>
+
+          <Toggle
+            label="Celebrate donations with fireworks"
+            hint="Plays a short, joyful fireworks animation on the thank-you screen after a successful gift."
+            checked={celebrateEnabled}
+            onChange={setCelebrateEnabled}
+          />
+          {celebrateEnabled && (
+            <div className="field" style={{ maxWidth: '16rem' }}>
+              <label className="label" htmlFor="g-celebrate">Only for gifts of at least <span className="faint">({currency})</span></label>
+              <div className="preset-input">
+                <span className="preset-sym" aria-hidden="true">{symbolFor(currency) || currency}</span>
+                <input
+                  id="g-celebrate"
+                  className="input"
+                  value={celebrateThreshold}
+                  inputMode="decimal"
+                  placeholder="e.g. 100"
+                  onChange={(e) => setCelebrateThreshold(e.target.value.replace(/[^\d.]/g, ''))}
+                />
+              </div>
+              <span className="hint">Leave blank to celebrate every donation.</span>
+            </div>
+          )}
 
           {err && <p className="form-error">{err}</p>}
           <div className="row" style={{ gap: '0.6rem', flexWrap: 'wrap', marginBlockStart: '0.4rem' }}>
@@ -448,6 +480,7 @@ function CampaignEditor({
   const [allowCustom, setAllowCustom] = useState(campaign?.allowCustom ?? true);
   const [customMin, setCustomMin] = useState(campaign ? toMajorStr(campaign.customMinMinor, currency) : '1');
   const [customMax, setCustomMax] = useState(campaign ? toMajorStr(campaign.customMaxMinor, currency) : '');
+  const [primaryColor, setPrimaryColor] = useState(campaign?.primaryColor ?? '');
   const [accentColor, setAccentColor] = useState(campaign?.accentColor ?? '');
   const [theme, setTheme] = useState<CampaignTheme>(campaign?.theme ?? 'auto');
   const [backgroundImage, setBackgroundImage] = useState(campaign?.backgroundImage ?? '');
@@ -507,6 +540,7 @@ function CampaignEditor({
     const patch: CampaignPatch = {
       title: t,
       description: description.trim(),
+      primaryColor,
       accentColor,
       theme,
       backgroundImage: backgroundImage.trim(),
@@ -573,6 +607,7 @@ function CampaignEditor({
             monthlyEnabled={monthlyEnabled}
             thankYou={thankYou}
             currency={currency}
+            primaryColor={primaryColor}
             accentColor={accentColor}
             backgroundImage={backgroundImage}
             logo={logo}
@@ -627,7 +662,21 @@ function CampaignEditor({
           )}
 
           <div className="field">
-            <span className="label">Accent colour</span>
+            <span className="label">Primary colour <span className="faint">(background)</span></span>
+            <div className="accent-row">
+              <input type="color" className="accent-swatch-input" aria-label="Primary colour" value={primaryColor || DEFAULT_PRIMARY} onChange={(e) => setPrimaryColor(e.target.value)} />
+              <span className="hint" style={{ margin: 0 }}>{primaryColor ? primaryColor : 'Using the default background'}</span>
+              {primaryColor && (
+                <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPrimaryColor('')}>
+                  Reset to default
+                </button>
+              )}
+            </div>
+            <p className="hint">Tints the giving screen's background — a soft wash of this colour behind the amount tiles.</p>
+          </div>
+
+          <div className="field">
+            <span className="label">Accent colour <span className="faint">(buttons)</span></span>
             <div className="accent-row">
               <input type="color" className="accent-swatch-input" aria-label="Accent colour" value={accentColor || DEFAULT_ACCENT} onChange={(e) => setAccentColor(e.target.value)} />
               <span className="hint" style={{ margin: 0 }}>{accentColor ? accentColor : 'Using your default accent'}</span>
@@ -637,6 +686,7 @@ function CampaignEditor({
                 </button>
               )}
             </div>
+            <p className="hint">The colour of the “Donate” band on each amount tile, and the buttons.</p>
           </div>
 
           <div className="field">
@@ -832,6 +882,7 @@ function KioskPreview({
   monthlyEnabled,
   thankYou,
   currency,
+  primaryColor,
   accentColor,
   backgroundImage,
   logo,
@@ -842,22 +893,26 @@ function KioskPreview({
   monthlyEnabled: boolean;
   thankYou: string;
   currency: string;
+  primaryColor: string;
   accentColor: string;
   backgroundImage: string;
   logo: string;
 }) {
   const bg = safeImageUrl(backgroundImage);
   const safeLogo = safeImageUrl(logo);
-  // A dark scrim over the background keeps the (light) preview text readable on any image.
-  const screenStyle: CSSProperties | undefined = bg
+  const primary = primaryColor || DEFAULT_PRIMARY;
+  // With a background image → the calm dark scrim (light text). Otherwise → a soft PRIMARY-colour
+  // wash (light at top → primary at the bottom) with dark text + white tiles, like the reference.
+  const bright = !bg;
+  const screenStyle: CSSProperties = bg
     ? { backgroundImage: `linear-gradient(rgba(4,14,20,0.5), rgba(4,14,20,0.68)), url("${bg}")`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' }
-    : undefined;
+    : { background: `linear-gradient(180deg, color-mix(in srgb, ${primary} 42%, #ffffff), ${primary})` };
   const accentBg: CSSProperties | undefined = accentColor ? { background: accentColor } : undefined;
   const accentOn: CSSProperties | undefined = accentColor ? { background: accentColor, color: '#04121a' } : undefined;
 
   return (
     <div className="kiosk-preview" aria-hidden="true">
-      <div className="kp-screen" style={screenStyle}>
+      <div className={`kp-screen${bright ? ' kp-screen--bright' : ''}`} style={screenStyle}>
         {safeLogo && <img className="kp-logo" src={safeLogo} alt="" />}
         <div className="kp-title">{title.trim() || 'Support your masjid'}</div>
         <div className="kp-sub">Choose an amount to give</div>

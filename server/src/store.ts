@@ -83,6 +83,10 @@ export interface GivingConfig {
   largeAmountNote: string;
   /** Optional image (e.g. a Zelle/bank QR code) shown in the large-donation dialog. */
   largeAmountImage: string;
+  /** Play a fireworks celebration on the thank-you screen after a successful donation. */
+  celebrateEnabled: boolean;
+  /** Only celebrate when the gift is at least this many MINOR units (0 = celebrate every gift). */
+  celebrateThresholdMinor: number;
 }
 
 const GIVING_DEFAULTS: GivingConfig = {
@@ -101,6 +105,8 @@ const GIVING_DEFAULTS: GivingConfig = {
   largeAmountThresholdMinor: 0,
   largeAmountNote: '',
   largeAmountImage: '',
+  celebrateEnabled: false,
+  celebrateThresholdMinor: 0,
 };
 
 /** A giving campaign (an "appeal") the kiosk shows as a tab — its own amounts, colour,
@@ -112,7 +118,11 @@ export interface Campaign {
   id: string;
   title: string;
   description: string;
-  /** Accent colour hex ('#rrggbb') or '' to inherit the kiosk default (cyan). */
+  /** Primary colour hex ('#rrggbb') — drives the giving screen's background gradient. '' inherits
+   *  the accent (or the kiosk default). Think of it as the campaign's "wallpaper" colour. */
+  primaryColor: string;
+  /** Accent colour hex ('#rrggbb') or '' to inherit the kiosk default (cyan). Drives the tiles'
+   *  "Donate" band, pills and buttons. */
   accentColor: string;
   /** Full-screen background image URL for this campaign's tab, or '' for the default scene. */
   backgroundImage: string;
@@ -150,6 +160,7 @@ export interface Campaign {
 /** Defaults for a freshly-created campaign (seeded from the global giving defaults). */
 const CAMPAIGN_DEFAULTS: Omit<Campaign, 'id' | 'title' | 'sortOrder' | 'createdAt' | 'isMain'> = {
   description: '',
+  primaryColor: '',
   accentColor: '',
   backgroundImage: '',
   coverImage: '',
@@ -295,6 +306,7 @@ export class Store {
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL DEFAULT '',
         description TEXT NOT NULL DEFAULT '',
+        primary_color TEXT NOT NULL DEFAULT '',
         accent_color TEXT NOT NULL DEFAULT '',
         background_image TEXT NOT NULL DEFAULT '',
         cover_image TEXT NOT NULL DEFAULT '',
@@ -336,6 +348,7 @@ export class Store {
       const cols = (this.db.prepare('PRAGMA table_info(campaigns)').all() as { name: string }[]).map((c) => c.name);
       if (!cols.includes('theme')) this.db.exec("ALTER TABLE campaigns ADD COLUMN theme TEXT NOT NULL DEFAULT 'auto'");
       if (!cols.includes('force_cover_fees')) this.db.exec('ALTER TABLE campaigns ADD COLUMN force_cover_fees INTEGER NOT NULL DEFAULT 0');
+      if (!cols.includes('primary_color')) this.db.exec("ALTER TABLE campaigns ADD COLUMN primary_color TEXT NOT NULL DEFAULT ''");
     }
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
@@ -529,6 +542,8 @@ export class Store {
       const s = String(merged.largeAmountImage ?? '').trim().slice(0, 500);
       merged.largeAmountImage = /^\/uploads\/[A-Za-z0-9._-]+$/.test(s) || /^https?:\/\/[^"'\\\s]+$/i.test(s) ? s : '';
     }
+    merged.celebrateEnabled = merged.celebrateEnabled === true;
+    merged.celebrateThresholdMinor = Math.max(0, Math.round(Number(merged.celebrateThresholdMinor) || 0));
     this.setRaw('giving', JSON.stringify(merged));
     this.bumpConfigVersion();
     return merged;
@@ -556,6 +571,7 @@ export class Store {
       id: String(r.id),
       title: String(r.title),
       description: String(r.description),
+      primaryColor: String(r.primary_color ?? ''),
       accentColor: String(r.accent_color),
       backgroundImage: String(r.background_image),
       coverImage: String(r.cover_image),
@@ -597,6 +613,7 @@ export class Store {
       ...c,
       title: String(c.title ?? '').trim().slice(0, 120) || 'Donations',
       description: String(c.description ?? '').slice(0, 1000),
+      primaryColor: hex(String(c.primaryColor ?? '')),
       accentColor: hex(String(c.accentColor ?? '')),
       backgroundImage: img(String(c.backgroundImage ?? '')),
       coverImage: img(String(c.coverImage ?? '')),
@@ -618,13 +635,14 @@ export class Store {
   private writeCampaign(c: Campaign): void {
     this.db
       .prepare(
-        `INSERT INTO campaigns (id, title, description, accent_color, background_image, cover_image, logo,
+        `INSERT INTO campaigns (id, title, description, primary_color, accent_color, background_image, cover_image, logo,
            presets_minor, allow_custom, custom_min_minor, custom_max_minor, monthly_enabled, cover_fees,
            force_cover_fees, thank_you_message, theme, stripe_account_id, live, is_main, sort_order, created_at)
-         VALUES (@id, @title, @description, @accentColor, @backgroundImage, @coverImage, @logo,
+         VALUES (@id, @title, @description, @primaryColor, @accentColor, @backgroundImage, @coverImage, @logo,
            @presetsJson, @allowCustom, @customMinMinor, @customMaxMinor, @monthlyEnabled, @coverFees,
            @forceCoverFees, @thankYouMessage, @theme, @stripeAccountId, @live, @isMain, @sortOrder, @createdAt)
          ON CONFLICT(id) DO UPDATE SET title=excluded.title, description=excluded.description,
+           primary_color=excluded.primary_color,
            accent_color=excluded.accent_color, background_image=excluded.background_image,
            cover_image=excluded.cover_image, logo=excluded.logo, presets_minor=excluded.presets_minor,
            allow_custom=excluded.allow_custom, custom_min_minor=excluded.custom_min_minor,
@@ -638,6 +656,7 @@ export class Store {
         id: c.id,
         title: c.title,
         description: c.description,
+        primaryColor: c.primaryColor,
         accentColor: c.accentColor,
         backgroundImage: c.backgroundImage,
         coverImage: c.coverImage,
@@ -928,6 +947,7 @@ export class Store {
         id: c.id,
         title: c.title,
         description: c.description,
+        primaryColor: c.primaryColor,
         accentColor: c.accentColor,
         backgroundImage: c.backgroundImage,
         coverImage: c.coverImage,
@@ -961,6 +981,8 @@ export class Store {
         largeAmountThresholdMinor: g.largeAmountThresholdMinor,
         largeAmountNote: g.largeAmountNote,
         largeAmountImage: g.largeAmountImage,
+        celebrateEnabled: g.celebrateEnabled === true,
+        celebrateThresholdMinor: g.celebrateThresholdMinor,
         // Cover-fee estimate so the tablet can display the same total the server will charge.
         feeBps: FEE_BPS,
         feeFixedMinor: FEE_FIXED_MINOR,

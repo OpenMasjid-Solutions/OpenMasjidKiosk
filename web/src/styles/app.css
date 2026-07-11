@@ -423,8 +423,15 @@ button.status-pill:hover { filter: brightness(1.08); }
   border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;
   background: #0c1a24; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
-.kp-tile-amt { padding: 0.7rem 0.35rem 0.45rem; font-weight: 800; font-size: 1.5rem; line-height: 1; color: #eafff8; text-align: center; }
+.kp-tile-amt { padding: 0.7rem 0.35rem 0.45rem; font-weight: 800; font-size: 1.7rem; line-height: 1; color: #eafff8; text-align: center; }
 .kp-tile-donate { padding: 0.32rem; font-weight: 700; font-size: 0.78rem; text-align: center; background: var(--color-primary); color: #04121a; }
+/* Bright preview (no background image): a light PRIMARY wash with dark text + white tiles + big
+   black numbers, matching the reference giving screen. */
+.kp-screen--bright .kp-title,
+.kp-screen--bright .kp-sub { color: #0b1220; }
+.kp-screen--bright .kp-tile { background: rgba(255, 255, 255, 0.92); box-shadow: 0 6px 14px rgba(0, 0, 0, 0.12); }
+.kp-screen--bright .kp-tile-amt { color: #0a0f14; }
+.kp-screen--bright .kp-freq__seg { color: #0b1220; }
 .kp-empty { grid-column: 1 / -1; font-size: 0.78rem; color: #9fc7bd; padding: 0.8rem; }
 .kp-other {
   margin-block-start: 0.5rem; border-radius: 12px; padding: 0.6rem; font-weight: 700; font-size: 0.95rem;

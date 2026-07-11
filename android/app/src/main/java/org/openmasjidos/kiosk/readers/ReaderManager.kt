@@ -214,9 +214,10 @@ object ReaderManager {
         _state.update {
             it.copy(transport = transport, conn = ReaderConn.Discovering, discovered = emptyList(), error = null)
         }
-        // Manual scans run until stopped (timeout 0); the USB auto-scan is time-bounded so it ends
-        // (and goes idle) instead of "looking forever" on a kiosk that actually uses Bluetooth.
-        val timeout = if (auto) 15 else 0
+        // Manual scans run until stopped (timeout 0); the auto-scan is time-bounded so it ends (and
+        // goes idle) instead of "looking forever". 30s gives a sleepy/slow-advertising Bluetooth M2
+        // enough time to be found on each auto attempt (the health watchdog retries every 45s anyway).
+        val timeout = if (auto) 30 else 0
         val config = when (transport) {
             ReaderTransport.Bluetooth -> BluetoothDiscoveryConfiguration(timeout, isSimulated = false)
             ReaderTransport.Simulated -> BluetoothDiscoveryConfiguration(timeout, isSimulated = true)

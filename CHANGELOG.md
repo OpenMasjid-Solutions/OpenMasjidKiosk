@@ -3,6 +3,20 @@
 
 # Changelog
 
+## 0.9.10
+- **Two colours: a primary and an accent.** Each campaign now has a **Primary colour** (a soft wash
+  behind the giving screen) and an **Accent colour** (the “Donate” band on each amount tile and the
+  buttons) — like the reference design. Set both in Admin → Campaigns.
+- **Bigger, bolder amounts + a touch of glass.** The amount numbers are now large and heavy black on
+  clean white tiles with a subtle glass sheen, so they read at a glance from across the room.
+- **Fireworks on a gift.** Turn on **“Celebrate donations with fireworks”** in Kiosk settings and a
+  short, joyful fireworks animation plays on the thank-you screen — for every gift, or only for gifts
+  at or above an amount you choose. (Respects the tablet’s reduced-motion setting.)
+- **Campaign logo now shows.** The logo you set on a campaign now appears at the top of that
+  campaign’s giving screen.
+- **Bluetooth reader:** longer auto-discovery window so a slow/asleep reader is found more reliably on
+  each reconnect attempt (on top of the v0.9.9 background health checks).
+
 ## 0.9.9
 - **Bigger, bolder amount buttons.** The six giving amounts are now much larger and use a two-tone
   design — a big amount on the tile with a solid coloured **“Donate”** band beneath — so they read

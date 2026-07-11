@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -43,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -109,7 +111,7 @@ fun GivingScreen(
     val chargeMinor = displayCharge(giving, campaign, config)
     when (giving.step) {
         GivingStep.Amount, GivingStep.Idle ->
-            AmountStep(giving, campaign, currency, style, readerConnected, config?.footerText ?: "OpenMasjid Solutions", onSetMonthly, onChooseAmount, modifier)
+            AmountStep(giving, campaign, currency, style, readerConnected, config?.footerText ?: "OpenMasjid Solutions", onSetMonthly, onChooseAmount, loadImage, modifier)
         else -> CenteredScene(modifier) {
             when (giving.step) {
                 GivingStep.LargeAmount -> LargeAmountStep(giving, config, currency, style, loadImage, onProceedLarge, onCancel)
@@ -148,6 +150,7 @@ private fun AmountStep(
     footerText: String,
     onSetMonthly: (Boolean) -> Unit,
     onChoose: (Long) -> Unit,
+    loadImage: suspend (String) -> ImageBitmap?,
     modifier: Modifier = Modifier,
 ) {
     var showPad by remember { mutableStateOf(false) }
@@ -159,6 +162,21 @@ private fun AmountStep(
         modifier = modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 22.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // Campaign logo (if the admin set one) sits above the title.
+        val logoUrl = campaign.logo
+        if (logoUrl.isNotBlank()) {
+            val logo by produceState<ImageBitmap?>(initialValue = null, logoUrl) {
+                value = runCatching { loadImage(logoUrl) }.getOrNull()
+            }
+            logo?.let {
+                Image(
+                    bitmap = it,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.heightIn(max = 96.dp).fillMaxWidth(0.6f).padding(bottom = 10.dp),
+                )
+            }
+        }
         Text(
             text = campaign.title.ifBlank { "Support your masjid" },
             style = MaterialTheme.typography.displayMedium,
@@ -230,19 +248,23 @@ private fun AmountStep(
     }
 }
 
-/** A big, flat GiveALittle-style amount tile with a TWO-TONE design: a huge amount on the tile fill,
- *  over a solid accent "Donate" footer band. No glass — no translucency, sheen or rim; a clean two-
- *  colour card with a soft shadow, so the amount reads instantly across a room. */
+/** A big GiveALittle-style amount tile with a TWO-TONE design: a huge, BOLD BLACK amount on the tile
+ *  fill (with a slight liquid-glass sheen), over a solid accent "Donate" footer band. The amount reads
+ *  instantly across a room. */
 @Composable
 private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
     // The amount is as large as fits; it steps down for longer values so a big number never clips
     // (this Compose version has no text auto-size).
     val amountSize = when {
-        label.length <= 4 -> 60.sp
-        label.length <= 6 -> 48.sp
-        label.length <= 8 -> 38.sp
-        else -> 30.sp
+        label.length <= 4 -> 72.sp
+        label.length <= 6 -> 56.sp
+        label.length <= 8 -> 44.sp
+        else -> 34.sp
     }
+    // A slight glass sheen across the top of the tile — a soft white highlight fading to nothing.
+    val sheen = Brush.verticalGradient(
+        listOf(Color.White.copy(alpha = if (style.bright) 0.5f else 0.10f), Color.Transparent),
+    )
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(24.dp),
@@ -250,15 +272,18 @@ private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Mo
         contentColor = style.tileInk,
         // A hairline keeps a white tile defined on the light scene; the dark scene relies on the fill.
         border = if (style.bright) BorderStroke(1.dp, Color.Black.copy(alpha = 0.06f)) else null,
-        shadowElevation = if (style.bright) 4.dp else 2.dp,
+        shadowElevation = if (style.bright) 6.dp else 2.dp,
         modifier = modifier,
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth().background(sheen).padding(horizontal = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
                     label,
                     fontSize = amountSize,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.Black,
                     color = style.tileInk,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

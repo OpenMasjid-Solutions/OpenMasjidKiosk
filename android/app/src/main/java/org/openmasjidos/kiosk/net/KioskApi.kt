@@ -152,6 +152,8 @@ class KioskApi(private val client: OkHttpClient) {
             largeAmountThresholdMinor = cfg.optLong("largeAmountThresholdMinor", 0L),
             largeAmountNote = cfg.optString("largeAmountNote", ""),
             largeAmountImage = cfg.optString("largeAmountImage", ""),
+            celebrateEnabled = cfg.optBoolean("celebrateEnabled", false),
+            celebrateThresholdMinor = cfg.optLong("celebrateThresholdMinor", 0L),
             mainCampaignId = cfg.optString("mainCampaignId", ""),
             campaigns = campaigns,
         )

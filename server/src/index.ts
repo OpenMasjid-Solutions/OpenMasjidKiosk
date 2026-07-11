@@ -476,6 +476,8 @@ async function main(): Promise<void> {
       largeAmountThresholdMinor: z.number().int().min(0).optional(),
       largeAmountNote: z.string().max(600).optional(),
       largeAmountImage: z.string().max(500).optional(),
+      celebrateEnabled: z.boolean().optional(),
+      celebrateThresholdMinor: z.number().int().min(0).optional(),
       attractTitle: z.string().max(120).optional(),
       masjidName: z.string().max(160).optional(),
     })
@@ -502,6 +504,7 @@ async function main(): Promise<void> {
     .object({
       title: z.string().max(120).optional(),
       description: z.string().max(1000).optional(),
+      primaryColor: z.string().max(9).optional(),
       accentColor: z.string().max(9).optional(),
       backgroundImage: z.string().max(500).optional(),
       coverImage: z.string().max(500).optional(),
