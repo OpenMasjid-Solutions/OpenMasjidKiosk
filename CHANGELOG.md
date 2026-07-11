@@ -3,6 +3,17 @@
 
 # Changelog
 
+## 0.9.9
+- **Bigger, bolder amount buttons.** The six giving amounts are now much larger and use a two-tone
+  design — a big amount on the tile with a solid coloured **“Donate”** band beneath — so they read
+  instantly across a room.
+- **Seamless “Enter card details”.** Tapping to type a card no longer flashes a “Sorry — that didn’t
+  go through” message for a moment before the card form opens; it now goes straight to a calm
+  “Opening card entry…” and then the card page.
+- **More reliable card reader.** The kiosk now keeps the reader connected with regular background
+  checks: if the reader ever drops silently (a cable knock, a Bluetooth blip, waking from sleep) the
+  kiosk notices within seconds and reconnects on its own, and corrects its status display to match.
+
 ## 0.9.8
 - **Zakat: require covering the card fee.** A new campaign switch, **“Require donors to cover card
   fees (only for Zakat)”** (Admin → Campaigns), always adds the card fee to a Zakat gift and tells the

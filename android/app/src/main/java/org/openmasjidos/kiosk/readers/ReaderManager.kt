@@ -119,6 +119,22 @@ object ReaderManager {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val reconnectRunnable = Runnable { tryAutoConnect() }
 
+    // ---- Reader health watchdog -------------------------------------------------------------------
+    // Callbacks (onDisconnect / onReaderReconnectFailed / connect onFailure) drive most reconnects,
+    // but a reader can also drop SILENTLY (a cable brown-out, a BLE stack hiccup, the app returning
+    // from background) without any callback firing — leaving a kiosk that looks fine but can't take a
+    // card. A cheap periodic watchdog is the backstop: every HEALTH_CHECK_MS it reconciles our state
+    // with the SDK's ground truth and, if auto-connect is on and nothing is connected, kicks a fresh
+    // reconnect. This is what makes the reader "always connect + regular checks".
+    @Volatile private var healthChecksStarted = false
+    private const val HEALTH_CHECK_MS = 45_000L // background reader reconciliation cadence
+    private val healthCheckRunnable = object : Runnable {
+        override fun run() {
+            runCatching { healthCheck() }
+            mainHandler.postDelayed(this, HEALTH_CHECK_MS)
+        }
+    }
+
     /** Bumped on every scan start AND every cancel. A discovery round's listener/callback captures
      *  its generation and ignores late events once a newer round (or a cancel/connect) has moved on,
      *  so a stale onFailure can't clobber a fresh Discovering/Connecting state. */
@@ -470,6 +486,7 @@ object ReaderManager {
         autoSerial = serial?.takeIf { it.isNotBlank() }
         autoLocationId = locationId
         if (changed) { autoFailures = 0; loggedPermWarning = false }
+        startHealthChecks() // keep the reader connected with regular background checks
         tryAutoConnect()
     }
 
@@ -511,6 +528,42 @@ object ReaderManager {
             return
         }
         startDiscovery(autoTransport, auto = true)
+    }
+
+    /** Start the periodic health watchdog (idempotent). Called once auto-connect is enabled. */
+    private fun startHealthChecks() {
+        if (healthChecksStarted) return
+        healthChecksStarted = true
+        mainHandler.postDelayed(healthCheckRunnable, HEALTH_CHECK_MS)
+    }
+
+    /** Periodic reconciliation against the SDK's ground truth (Terminal.connectedReader):
+     *  - If the SDK is connected but our UI state drifted, correct it.
+     *  - If the SDK is NOT connected, auto-connect is on, and we aren't already trying, kick a clean
+     *    reconnect — this catches SILENT drops that fired no callback.
+     *  Runs on the main thread; only touches state + posts to mainHandler. */
+    private fun healthCheck() {
+        if (!autoEnabled || autoLocationId.isBlank()) return
+        if (!Terminal.isInitialized()) return
+        val sdkConnected = runCatching { Terminal.getInstance().connectedReader != null }.getOrDefault(false)
+        if (sdkConnected) {
+            // Truly connected — heal any stale non-connected UI state (e.g. a missed reconnect-succeeded).
+            if (_state.value.conn != ReaderConn.Connected && _state.value.conn != ReaderConn.Updating) {
+                _state.update { it.copy(conn = ReaderConn.Connected, error = null) }
+            }
+            return
+        }
+        // Not connected. Don't disturb an in-flight attempt (or a manual scan for another transport).
+        when (_state.value.conn) {
+            ReaderConn.Connecting, ReaderConn.Updating -> return
+            ReaderConn.Discovering -> if (_state.value.transport == autoTransport) return
+            else -> Unit
+        }
+        // Coalesce with any pending backoff reconnect and try now with a clean slate.
+        repo?.log("info", "reader_health_reconnect", "watchdog")
+        mainHandler.removeCallbacks(reconnectRunnable)
+        autoFailures = 0
+        tryAutoConnect()
     }
 
     /** Schedule a reconnect. [fresh] (an unexpected drop) retries fast; repeated connect failures

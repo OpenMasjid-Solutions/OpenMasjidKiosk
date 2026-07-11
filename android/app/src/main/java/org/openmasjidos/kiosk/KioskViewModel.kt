@@ -7,6 +7,7 @@ import android.app.Application
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -86,6 +87,10 @@ data class GivingState(
     val monthlyOutcome: MonthlyOutcome = MonthlyOutcome.None,
     /** Non-null → the UI should present Stripe's card form for keyed/manual entry, then report back. */
     val manual: ManualEntry? = null,
+    /** True while we're creating the keyed-entry PaymentIntent (before [manual] is ready). Lets the
+     *  card screen show a calm "opening card entry" state instead of the reader's tap prompt, so
+     *  switching to keyed entry is seamless. */
+    val preparingManual: Boolean = false,
 )
 
 /**
@@ -534,7 +539,17 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val email = g.donorEmail.trim().ifBlank { null }
             val idem = UUID.randomUUID().toString()
             repo.log("info", "donation_started", "${g.amountMinor} minor · $kind · ${campaign.title}")
-            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, campaign.id, name, email, monthly, manual = false, coverFees = g.coverFees, idem) }.getOrNull()
+            // NB: rethrow CancellationException on every suspend call below. This job is cancelled
+            // when the donor switches to keyed entry (enterManually → startManualCollect); if we
+            // swallowed the cancellation we'd fall through and briefly flash the "Sorry" error screen
+            // before the card form opened. Rethrowing ends the superseded job silently.
+            val pi = try {
+                repo.createPaymentIntent(g.amountMinor, campaign.id, name, email, monthly, manual = false, coverFees = g.coverFees, idem)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                null
+            }
             if (pi == null) {
                 repo.log("warn", "donation_create_failed", "$kind")
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start the payment. Please try again.") }
@@ -544,7 +559,14 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             // Show the server's authoritative charge from here on (matches what Stripe will take,
             // even if this kiosk's cover-fee/Zakat config hasn't synced yet).
             updateGiving { it.copy(serverChargeMinor = pi.chargeMinor) }
-            val piId = runCatching { PaymentController.collectAndConfirm(pi.clientSecret) }.getOrNull()
+            val piId = try {
+                PaymentController.collectAndConfirm(pi.clientSecret)
+            } catch (c: CancellationException) {
+                ReaderManager.clearPrompt()
+                throw c
+            } catch (e: Exception) {
+                null
+            }
             ReaderManager.clearPrompt()
             if (piId == null) {
                 repo.log("warn", "donation_collect_failed", pi.id)
@@ -584,7 +606,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     private fun startManualCollect() {
         val g = local.value.giving
         val campaign = activeCampaign()
-        updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null, manual = null) }
+        // preparingManual → the card screen shows a calm "opening card entry" state (not the reader's
+        // tap prompt) so switching from the reader to keyed entry is seamless.
+        updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null, manual = null, preparingManual = true) }
         givingJob?.cancel()
         PaymentController.cancelCollect()
         ReaderManager.clearPrompt()
@@ -593,17 +617,23 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val email = g.donorEmail.trim().ifBlank { null }
             val idem = UUID.randomUUID().toString()
             repo.log("info", "donation_started", "${g.amountMinor} minor · manual · ${campaign?.title ?: ""}")
-            val pi = runCatching { repo.createPaymentIntent(g.amountMinor, campaign?.id, name, email, monthly = false, manual = true, coverFees = g.coverFees, idem) }.getOrNull()
+            val pi = try {
+                repo.createPaymentIntent(g.amountMinor, campaign?.id, name, email, monthly = false, manual = true, coverFees = g.coverFees, idem)
+            } catch (c: CancellationException) {
+                throw c // superseded/cancelled — don't flash an error
+            } catch (e: Exception) {
+                null
+            }
             // The publishable key comes back with the manual PI; fall back to the one in config (the
             // server always injects it now) so a blank field on the PI can't strand keyed entry.
             val pk = pi?.publishableKey?.takeIf { it.isNotBlank() } ?: ui.value.config?.publishableKey?.takeIf { it.isNotBlank() }
             if (pi == null || pi.clientSecret.isBlank() || pk.isNullOrBlank()) {
                 repo.log("warn", "donation_create_failed", "manual")
-                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start card entry. Please try again.") }
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start card entry. Please try again.", preparingManual = false) }
                 repo.flushLogs()
                 return@launch
             }
-            updateGiving { it.copy(serverChargeMinor = pi.chargeMinor, manual = ManualEntry(pi.id, pi.clientSecret, pk, pi.chargeMinor, ui.value.config?.currency.orEmpty())) }
+            updateGiving { it.copy(serverChargeMinor = pi.chargeMinor, preparingManual = false, manual = ManualEntry(pi.id, pi.clientSecret, pk, pi.chargeMinor, ui.value.config?.currency.orEmpty())) }
         }
     }
 

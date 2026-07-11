@@ -5,6 +5,7 @@ package org.openmasjidos.kiosk.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,6 +51,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.openmasjidos.kiosk.GivingState
 import org.openmasjidos.kiosk.GivingStep
 import org.openmasjidos.kiosk.MonthlyOutcome
@@ -112,7 +114,7 @@ fun GivingScreen(
             when (giving.step) {
                 GivingStep.LargeAmount -> LargeAmountStep(giving, config, currency, style, loadImage, onProceedLarge, onCancel)
                 GivingStep.Details -> DetailsStep(giving, campaign, config, currency, style, onDonorName, onDonorEmail, onSetCoverFees, onSubmitDetails, onCancel)
-                GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard, onEnterManually, onCancel)
+                GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard, giving.preparingManual, onEnterManually, onCancel)
                 GivingStep.Processing -> ProcessingStep(chargeMinor, currency, style)
                 GivingStep.Thanks -> ThanksStep(giving, campaign, currency, chargeMinor, style, onCancel)
                 GivingStep.Error -> ErrorStep(giving.error, style, onRetry, onCancel)
@@ -228,11 +230,19 @@ private fun AmountStep(
     }
 }
 
-/** A big, flat GiveALittle-style amount tile: a solid opaque card with the huge amount and a small
- *  "Donate" label. No glass — no translucency, sheen or rim; just a clean fill with a soft shadow,
- *  so the amounts read instantly at a glance. */
+/** A big, flat GiveALittle-style amount tile with a TWO-TONE design: a huge amount on the tile fill,
+ *  over a solid accent "Donate" footer band. No glass — no translucency, sheen or rim; a clean two-
+ *  colour card with a soft shadow, so the amount reads instantly across a room. */
 @Composable
 private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    // The amount is as large as fits; it steps down for longer values so a big number never clips
+    // (this Compose version has no text auto-size).
+    val amountSize = when {
+        label.length <= 4 -> 60.sp
+        label.length <= 6 -> 48.sp
+        label.length <= 8 -> 38.sp
+        else -> 30.sp
+    }
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(24.dp),
@@ -243,11 +253,23 @@ private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Mo
         shadowElevation = if (style.bright) 4.dp else 2.dp,
         modifier = modifier,
     ) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(label, style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold, color = style.tileInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(4.dp))
-                Text("Donate", style = MaterialTheme.typography.titleMedium, color = style.accent, fontWeight = FontWeight.SemiBold)
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    label,
+                    fontSize = amountSize,
+                    fontWeight = FontWeight.Bold,
+                    color = style.tileInk,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                )
+            }
+            Box(
+                modifier = Modifier.fillMaxWidth().background(style.accent).padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("Donate", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = style.onAccent)
             }
         }
     }
@@ -460,6 +482,7 @@ private fun ColumnScope.CardStep(
     style: SceneStyle,
     readerPrompt: String?,
     manualEnabled: Boolean,
+    preparing: Boolean,
     onEnterManually: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -468,12 +491,14 @@ private fun ColumnScope.CardStep(
     CircularProgressIndicator(color = style.accent)
     Spacer(Modifier.height(20.dp))
     Text(
-        text = readerPrompt?.takeIf { it.isNotBlank() } ?: "Tap, insert or swipe your card",
+        // While the keyed-entry PaymentIntent is being created, show a calm "opening" line instead of
+        // the reader's tap prompt, so switching from the reader to keyed entry is seamless.
+        text = if (preparing) "Opening secure card entry…" else (readerPrompt?.takeIf { it.isNotBlank() } ?: "Tap, insert or swipe your card"),
         style = MaterialTheme.typography.headlineSmall,
         color = style.onScene,
         textAlign = TextAlign.Center,
     )
-    if (manualEnabled) {
+    if (manualEnabled && !preparing) {
         Spacer(Modifier.height(20.dp))
         Button(
             onClick = onEnterManually,

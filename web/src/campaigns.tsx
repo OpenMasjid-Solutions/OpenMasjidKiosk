@@ -873,7 +873,8 @@ function KioskPreview({
           ) : (
             presetsMinor.map((m, i) => (
               <div className="kp-tile" key={i}>
-                {formatMoney(m, currency)}
+                <span className="kp-tile-amt">{formatMoney(m, currency)}</span>
+                <span className="kp-tile-donate" style={accentOn}>Donate</span>
               </div>
             ))
           )}
