@@ -74,6 +74,11 @@ data class GivingState(
     val monthly: Boolean = false,
     /** Donor opted to cover the estimated card fee (only offered when the campaign allows it). */
     val coverFees: Boolean = false,
+    /** The authoritative amount the SERVER will charge (base + any cover-fee, incl. a forced Zakat
+     *  fee), returned when the PaymentIntent is created. 0 until then. The card/processing/thank-you
+     *  screens display this — never a locally-estimated total — so the tablet can never show one
+     *  amount while Stripe charges another (e.g. a kiosk whose Zakat config hasn't synced yet). */
+    val serverChargeMinor: Long = 0L,
     val donorName: String = "",
     val donorEmail: String = "",
     val busy: Boolean = false,
@@ -536,6 +541,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 repo.flushLogs()
                 return@launch
             }
+            // Show the server's authoritative charge from here on (matches what Stripe will take,
+            // even if this kiosk's cover-fee/Zakat config hasn't synced yet).
+            updateGiving { it.copy(serverChargeMinor = pi.chargeMinor) }
             val piId = runCatching { PaymentController.collectAndConfirm(pi.clientSecret) }.getOrNull()
             ReaderManager.clearPrompt()
             if (piId == null) {
@@ -595,7 +603,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 repo.flushLogs()
                 return@launch
             }
-            updateGiving { it.copy(manual = ManualEntry(pi.id, pi.clientSecret, pk, pi.chargeMinor, ui.value.config?.currency.orEmpty())) }
+            updateGiving { it.copy(serverChargeMinor = pi.chargeMinor, manual = ManualEntry(pi.id, pi.clientSecret, pk, pi.chargeMinor, ui.value.config?.currency.orEmpty())) }
         }
     }
 

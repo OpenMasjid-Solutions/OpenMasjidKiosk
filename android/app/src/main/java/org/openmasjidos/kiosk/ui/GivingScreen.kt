@@ -559,10 +559,12 @@ private fun ColumnScope.ErrorStep(error: String?, style: SceneStyle, onRetry: ()
 
 // ── Amount / fee helpers ─────────────────────────────────────────────────────
 
-/** The amount to display/charge: base grossed up by the cover-fee estimate when opted in. Matches
- *  the server's grossUpForFees + is gated on the campaign allowing cover-fees (never diverges). */
+/** The amount to display/charge. Once the PaymentIntent exists we show the SERVER's authoritative
+ *  charge (so the tablet can never display one total while Stripe takes another — e.g. a kiosk whose
+ *  Zakat cover-fee config hasn't synced yet). Before then, it's the local estimate: the base grossed
+ *  up by the cover-fee when opted in or forced (Zakat), matching the server's grossUpForFees. */
 private fun displayCharge(giving: GivingState, campaign: Campaign, config: KioskConfig?): Long {
-    // Fees are covered when the donor opted in, or when the campaign forces it (Zakat).
+    if (giving.serverChargeMinor > 0) return giving.serverChargeMinor
     val cover = campaign.coverFees && (giving.coverFees || campaign.forceCoverFees)
     if (!cover || giving.amountMinor <= 0) return giving.amountMinor
     return giving.amountMinor + feeExtra(giving.amountMinor, config)
