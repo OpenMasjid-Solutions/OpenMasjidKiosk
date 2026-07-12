@@ -48,6 +48,10 @@ import { safeImageUrl } from './ui';
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
 
 const MAX_PRESETS = 6;
+/** Campaign title/description limits — kept tight so the tab name and the kiosk header never overflow
+ *  or get cut off on the giving screen. */
+const TITLE_MAX = 48;
+const DESC_MAX = 180;
 /** Shown in the colour picker while a campaign inherits the default accent (it needs a value). */
 const DEFAULT_ACCENT = '#22d3ee';
 /** Shown in the primary-colour picker while a campaign inherits the default background. */
@@ -641,12 +645,14 @@ function CampaignEditor({
 
           <div className="field" style={{ marginBlockStart: '1rem' }}>
             <label className="label" htmlFor="c-title">Title</label>
-            <input id="c-title" className="input" value={title} maxLength={120} placeholder="e.g. General fund, Zakat, Building fund" onChange={(e) => setTitle(e.target.value)} autoFocus />
+            <input id="c-title" className="input" value={title} maxLength={TITLE_MAX} placeholder="e.g. General fund, Zakat, Building fund" onChange={(e) => setTitle(e.target.value.slice(0, TITLE_MAX))} autoFocus />
+            <span className="hint" style={{ textAlign: 'end' }}>{title.length}/{TITLE_MAX} — this is the tab name, so keep it short.</span>
           </div>
 
           <div className="field">
             <label className="label" htmlFor="c-desc">Description <span className="faint">(optional)</span></label>
-            <textarea id="c-desc" className="input" rows={2} maxLength={1000} value={description} placeholder="A short line about this appeal." onChange={(e) => setDescription(e.target.value)} />
+            <textarea id="c-desc" className="input" rows={3} maxLength={DESC_MAX} value={description} placeholder="A short line about this appeal." onChange={(e) => setDescription(e.target.value.slice(0, DESC_MAX))} />
+            <span className="hint" style={{ textAlign: 'end' }}>{description.length}/{DESC_MAX} — keep it brief so it fits the kiosk screen without being cut off.</span>
           </div>
 
           <ImageField id="c-cover" label="Cover image (optional)" hint="Shown on the giving card." value={coverImage} onChange={setCoverImage} />

@@ -188,10 +188,12 @@ private fun AmountStep(
         )
         Text(
             text = campaign.description.ifBlank { "Choose an amount to give" },
-            style = MaterialTheme.typography.headlineSmall,
+            // A supporting paragraph — kept modest so a fuller description fits without being cut off.
+            fontSize = 18.sp,
+            lineHeight = 24.sp,
             color = style.onSceneMuted,
             textAlign = TextAlign.Center,
-            maxLines = 2,
+            maxLines = 4,
             overflow = TextOverflow.Ellipsis,
         )
         // One-time vs monthly (only when the campaign enabled it, the reader can take it, and one is
@@ -253,13 +255,13 @@ private fun AmountStep(
  *  instantly across a room. */
 @Composable
 private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    // The amount is as large as fits; it steps down for longer values so a big number never clips
-    // (this Compose version has no text auto-size).
+    // The amount is as large as fits — it should fill the tile. Steps down for longer values so a big
+    // number never clips (this Compose version has no text auto-size).
     val amountSize = when {
-        label.length <= 4 -> 72.sp
-        label.length <= 6 -> 56.sp
-        label.length <= 8 -> 44.sp
-        else -> 34.sp
+        label.length <= 4 -> 100.sp
+        label.length <= 6 -> 78.sp
+        label.length <= 8 -> 58.sp
+        else -> 46.sp
     }
     // A slight glass sheen across the top of the tile — a soft white highlight fading to nothing.
     val sheen = Brush.verticalGradient(
@@ -277,7 +279,7 @@ private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Mo
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Box(
-                modifier = Modifier.weight(1f).fillMaxWidth().background(sheen).padding(horizontal = 8.dp),
+                modifier = Modifier.weight(1f).fillMaxWidth().background(sheen).padding(horizontal = 6.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -290,11 +292,12 @@ private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Mo
                     textAlign = TextAlign.Center,
                 )
             }
+            // A tall, prominent accent "Donate" band — the clear call to action on every tile.
             Box(
-                modifier = Modifier.fillMaxWidth().background(style.accent).padding(vertical = 12.dp),
+                modifier = Modifier.fillMaxWidth().background(style.accent).padding(vertical = 18.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("Donate", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = style.onAccent)
+                Text("Donate", fontSize = 27.sp, fontWeight = FontWeight.Bold, color = style.onAccent)
             }
         }
     }

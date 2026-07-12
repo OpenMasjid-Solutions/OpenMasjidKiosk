@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.9.11
+- **Much bigger, bolder amounts.** The donation numbers now fill the tile — large and heavy — so
+  they're easy to read across the room, and the **“Donate”** button band is taller with bigger text
+  so it's the obvious thing to tap.
+- **Colour-coded, bigger tabs.** Each campaign tab is now tinted with that campaign's own colour and
+  is larger and bolder, so it's clear which appeals you can switch between.
+- **No more cut-off descriptions.** Campaign titles and descriptions now have a character limit (with
+  a live counter in the editor), and the giving screen fits a fuller description without clipping.
+
 ## 0.9.10
 - **Two colours: a primary and an accent.** Each campaign now has a **Primary colour** (a soft wash
   behind the giving screen) and an **Accent colour** (the “Donate” band on each amount tile and the

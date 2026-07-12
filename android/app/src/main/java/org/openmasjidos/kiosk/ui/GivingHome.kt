@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -185,26 +186,31 @@ private fun HomeTopBar(ui: UiState, style: SceneStyle, onSelect: (String) -> Uni
 @Composable
 private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, style: SceneStyle, onSelect: (String) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
     ) {
-        val idleTab = if (style.bright) Color.Black.copy(alpha = 0.06f) else Color.White.copy(alpha = 0.06f)
         campaigns.forEach { c ->
             val selected = c.id == selectedId
-            val acc = accentOf(c)
+            // Each tab is colour-coded by its OWN campaign colour (its primary, or accent when unset).
+            val tabColor = primaryOf(c) ?: accentOf(c)
+            val onTab = if (tabColor.luminance() > 0.4f) InkBlack else Color.White
             Surface(
                 onClick = { onSelect(c.id) },
-                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 4.dp, bottomEnd = 4.dp),
-                color = if (selected) acc.copy(alpha = 0.26f) else idleTab,
-                border = if (selected) BorderStroke(1.5.dp, acc) else null,
+                shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 6.dp, bottomEnd = 6.dp),
+                // Selected: a solid fill of the campaign colour. Unselected: a soft tint of it with a
+                // bold coloured outline, so every tab still shows its own colour and reads clearly.
+                color = if (selected) tabColor else tabColor.copy(alpha = 0.20f),
+                border = BorderStroke(2.dp, tabColor),
+                shadowElevation = if (selected) 6.dp else 0.dp,
             ) {
                 Text(
                     text = c.title.ifBlank { "Appeal" },
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (selected) style.onScene else style.onSceneMuted,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (selected) onTab else style.onScene,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 11.dp),
+                    modifier = Modifier.padding(horizontal = 26.dp, vertical = 16.dp),
                 )
             }
         }
