@@ -8,6 +8,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -188,12 +189,13 @@ private fun AmountStep(
         )
         Text(
             text = campaign.description.ifBlank { "Choose an amount to give" },
-            // A supporting paragraph — kept modest so a fuller description fits without being cut off.
+            // A supporting paragraph — kept modest so a fuller description fits without being cut off,
+            // and capped at 3 lines so it never squeezes the amount grid on a short screen.
             fontSize = 18.sp,
             lineHeight = 24.sp,
             color = style.onSceneMuted,
             textAlign = TextAlign.Center,
-            maxLines = 4,
+            maxLines = 3,
             overflow = TextOverflow.Ellipsis,
         )
         // One-time vs monthly (only when the campaign enabled it, the reader can take it, and one is
@@ -255,14 +257,6 @@ private fun AmountStep(
  *  instantly across a room. */
 @Composable
 private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    // The amount is as large as fits — it should fill the tile. Steps down for longer values so a big
-    // number never clips (this Compose version has no text auto-size).
-    val amountSize = when {
-        label.length <= 4 -> 100.sp
-        label.length <= 6 -> 78.sp
-        label.length <= 8 -> 58.sp
-        else -> 46.sp
-    }
     // A slight glass sheen across the top of the tile — a soft white highlight fading to nothing.
     val sheen = Brush.verticalGradient(
         listOf(Color.White.copy(alpha = if (style.bright) 0.5f else 0.10f), Color.Transparent),
@@ -278,13 +272,21 @@ private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Mo
         modifier = modifier,
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Box(
+            BoxWithConstraints(
                 modifier = Modifier.weight(1f).fillMaxWidth().background(sheen).padding(horizontal = 6.dp),
                 contentAlignment = Alignment.Center,
             ) {
+                // Size the number to FILL the tile: as large as the available width allows (≈0.62em per
+                // glyph for this bold face), capped by the tile height. Big on a 10" landscape wall
+                // mount, automatically smaller in portrait / on small tablets — so a money value like
+                // "$100" is never clipped or ellipsized to "$10…".
+                val glyphs = label.length.coerceAtLeast(2)
+                val byWidth = maxWidth.value / (glyphs * 0.62f)
+                val byHeight = maxHeight.value * 0.74f
+                val amountSize = byWidth.coerceAtMost(byHeight).coerceIn(26f, 120f)
                 Text(
                     label,
-                    fontSize = amountSize,
+                    fontSize = amountSize.sp,
                     fontWeight = FontWeight.Black,
                     color = style.tileInk,
                     maxLines = 1,

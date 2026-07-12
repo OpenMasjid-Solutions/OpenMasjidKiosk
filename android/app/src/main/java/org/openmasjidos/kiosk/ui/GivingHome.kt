@@ -193,7 +193,7 @@ private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, style: S
             val selected = c.id == selectedId
             // Each tab is colour-coded by its OWN campaign colour (its primary, or accent when unset).
             val tabColor = primaryOf(c) ?: accentOf(c)
-            val onTab = if (tabColor.luminance() > 0.4f) InkBlack else Color.White
+            val onTab = bestTextOn(tabColor)
             Surface(
                 onClick = { onSelect(c.id) },
                 shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 6.dp, bottomEnd = 6.dp),
@@ -287,6 +287,15 @@ private fun primaryOf(c: Campaign?): Color? {
 /** A near-black ink for the bright scene — big bold amounts + headings read pure-black on the light
  *  primary background and on the white tiles (matching the reference giving screen). */
 private val InkBlack = Color(0xFF0A0F14)
+
+/** Pick whichever of dark ink / white gives the higher contrast on [bg] (a solid fill), so text on a
+ *  filled colour is always legible regardless of the colour's brightness. */
+private fun bestTextOn(bg: Color): Color {
+    val l = bg.luminance()
+    val onBlack = (l + 0.05f) / 0.05f       // contrast ratio vs a near-black ink
+    val onWhite = 1.05f / (l + 0.05f)        // contrast ratio vs white
+    return if (onBlack >= onWhite) InkBlack else Color.White
+}
 
 /** Resolve the giving-screen colour set from the accent + whether the scene reads light. Bright +
  *  [lightScene]: dark text on a light PRIMARY background. Bright + dark primary: light text on a
