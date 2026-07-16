@@ -243,3 +243,45 @@ test('upgrading a PRE-campaigns install (donations table with no campaign column
   s!.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('upgrading a legacy campaign with force_cover_fees=1 (pre-`type`) maps it to type=zakat', () => {
+  // Regression: v0.9.8–v0.9.11 had a force-fee toggle before the `type` field existed. On upgrade a
+  // force=1 row must become type='zakat' (consistent + intent-preserving), NOT type='donation' + force=1
+  // (which would keep the kiosk forcing the fee while the admin panel shows it as optional).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiosk-type-'));
+  const dbPath = path.join(dir, 'kiosk.db');
+  const legacy = new Database(dbPath);
+  // A v0.9.11-era campaigns table: has force_cover_fees but NO `type` column.
+  legacy.exec(
+    `CREATE TABLE campaigns (
+       id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+       primary_color TEXT NOT NULL DEFAULT '', accent_color TEXT NOT NULL DEFAULT '',
+       background_image TEXT NOT NULL DEFAULT '', cover_image TEXT NOT NULL DEFAULT '', logo TEXT NOT NULL DEFAULT '',
+       presets_minor TEXT NOT NULL DEFAULT '[]', allow_custom INTEGER NOT NULL DEFAULT 1,
+       custom_min_minor INTEGER NOT NULL DEFAULT 100, custom_max_minor INTEGER NOT NULL DEFAULT 1000000,
+       monthly_enabled INTEGER NOT NULL DEFAULT 1, cover_fees INTEGER NOT NULL DEFAULT 0,
+       force_cover_fees INTEGER NOT NULL DEFAULT 0, thank_you_message TEXT NOT NULL DEFAULT '',
+       theme TEXT NOT NULL DEFAULT 'auto', stripe_account_id TEXT NOT NULL DEFAULT '',
+       live INTEGER NOT NULL DEFAULT 1, is_main INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0,
+       created_at TEXT NOT NULL
+     );`,
+  );
+  const now = new Date().toISOString();
+  legacy.prepare(`INSERT INTO campaigns (id, title, cover_fees, force_cover_fees, is_main, sort_order, created_at) VALUES ('cmp_z','Zakat',1,1,1,0,?)`).run(now);
+  legacy.prepare(`INSERT INTO campaigns (id, title, cover_fees, force_cover_fees, is_main, sort_order, created_at) VALUES ('cmp_d','General',0,0,0,1,?)`).run(now);
+  legacy.close();
+
+  let s: Store | undefined;
+  assert.doesNotThrow(() => {
+    s = new Store(dbPath);
+  });
+  const z = s!.getCampaign('cmp_z')!;
+  assert.equal(z.type, 'zakat'); // legacy forced row → zakat (intent preserved, row consistent)
+  assert.equal(z.forceCoverFees, true);
+  assert.equal(z.coverFees, true);
+  const d = s!.getCampaign('cmp_d')!;
+  assert.equal(d.type, 'donation'); // a non-forced legacy row stays a donation
+  assert.equal(d.forceCoverFees, false);
+  s!.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

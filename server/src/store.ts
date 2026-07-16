@@ -358,8 +358,17 @@ export class Store {
       if (!cols.includes('theme')) this.db.exec("ALTER TABLE campaigns ADD COLUMN theme TEXT NOT NULL DEFAULT 'auto'");
       if (!cols.includes('force_cover_fees')) this.db.exec('ALTER TABLE campaigns ADD COLUMN force_cover_fees INTEGER NOT NULL DEFAULT 0');
       if (!cols.includes('primary_color')) this.db.exec("ALTER TABLE campaigns ADD COLUMN primary_color TEXT NOT NULL DEFAULT ''");
-      // Legacy campaigns default to 'donation' (a valid required type) with fees not forced.
-      if (!cols.includes('type')) this.db.exec("ALTER TABLE campaigns ADD COLUMN type TEXT NOT NULL DEFAULT 'donation'");
+      // Legacy campaigns default to 'donation' (a valid required type). BUT v0.9.8–v0.9.11 already had a
+      // `force_cover_fees` "require the fee" toggle (pre-`type`), so a legacy row can be force=1 with no
+      // type. Leaving it as 'donation' + force=1 is inconsistent — the kiosk would keep forcing the fee
+      // while the admin panel shows it as an optional-fee donation. Those rows were effectively Zakat, so
+      // map them to type='zakat' (preserving intent + making the row consistent). Only safe inside this
+      // one-time upgrade: pre-migration no row has a type yet, so force=1 unambiguously means "was forced"
+      // (a NEW install's force=1 tuition campaign already has its correct type from the CREATE + writes).
+      if (!cols.includes('type')) {
+        this.db.exec("ALTER TABLE campaigns ADD COLUMN type TEXT NOT NULL DEFAULT 'donation'");
+        this.db.exec("UPDATE campaigns SET type = 'zakat' WHERE force_cover_fees = 1");
+      }
     }
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
