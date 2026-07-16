@@ -68,20 +68,40 @@ test('updateCampaign keeps only /uploads or http(s) image URLs, rejecting others
   assert.equal(up.logo, 'https://example.org/logo.png');
 });
 
-test('forceCoverFees (Zakat) implies coverFees and survives round-trip + getKioskConfig', () => {
+test('campaign TYPE drives the fee rule (deriveFees): zakat forces, donation offers, tuition = require toggle', () => {
   const s = freshStore();
-  const c = s.createCampaign({ title: 'Zakat', coverFees: false, forceCoverFees: true })!;
-  // Forcing the fee also switches on the "offer" flag so downstream logic (and the tablet) treat it as covered.
-  assert.equal(c.forceCoverFees, true);
-  assert.equal(c.coverFees, true);
+
+  // Zakat: always forces the fee (offering implied) — even if the client sends forceCoverFees:false.
+  const zakat = s.createCampaign({ title: 'Zakat', type: 'zakat', coverFees: false, forceCoverFees: false })!;
+  assert.equal(zakat.type, 'zakat');
+  assert.equal(zakat.forceCoverFees, true);
+  assert.equal(zakat.coverFees, true);
+  // Survives round-trip + getKioskConfig (with the type projected for the tablet's wording).
   const { config } = s.getKioskConfig('acct_primary');
-  const camp = (config.campaigns as { id: string; coverFees: boolean; forceCoverFees: boolean }[]).find((x) => x.id === c.id)!;
+  const camp = (config.campaigns as { id: string; type: string; coverFees: boolean; forceCoverFees: boolean }[]).find((x) => x.id === zakat.id)!;
+  assert.equal(camp.type, 'zakat');
   assert.equal(camp.forceCoverFees, true);
   assert.equal(camp.coverFees, true);
-  // Turning it off again clears both (unless the donor-facing offer is separately on).
-  const off = s.updateCampaign(c.id, { forceCoverFees: false, coverFees: false })!;
-  assert.equal(off.forceCoverFees, false);
-  assert.equal(off.coverFees, false);
+
+  // Donation: never forces; coverFees stays the admin's optional offer (forcing is ignored).
+  const don = s.createCampaign({ title: 'General', type: 'donation', coverFees: true, forceCoverFees: true })!;
+  assert.equal(don.forceCoverFees, false);
+  assert.equal(don.coverFees, true);
+  const donOff = s.updateCampaign(don.id, { coverFees: false })!;
+  assert.equal(donOff.coverFees, false);
+  assert.equal(donOff.forceCoverFees, false);
+
+  // Tuition: the require toggle drives both — offered iff required.
+  const tuiReq = s.createCampaign({ title: 'Tuition', type: 'tuition', forceCoverFees: true })!;
+  assert.equal(tuiReq.forceCoverFees, true);
+  assert.equal(tuiReq.coverFees, true);
+  const tuiOff = s.updateCampaign(tuiReq.id, { forceCoverFees: false })!;
+  assert.equal(tuiOff.forceCoverFees, false);
+  assert.equal(tuiOff.coverFees, false);
+
+  // An unknown/missing type falls back to 'donation'.
+  const legacy = s.createCampaign({ title: 'Legacy', coverFees: true } as never)!;
+  assert.equal(legacy.type, 'donation');
 });
 
 test('setGiving clamps the large-donation threshold to ≥0 and only keeps valid alternative images', () => {

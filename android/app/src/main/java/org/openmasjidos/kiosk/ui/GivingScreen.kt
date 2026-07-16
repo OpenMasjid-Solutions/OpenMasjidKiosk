@@ -455,19 +455,19 @@ private fun ColumnScope.DetailsStep(
             modifier = Modifier.fillMaxWidth(),
         )
     }
-    // Cover-fees lives here, next to name/email, and shows the exact extra it adds. A Zakat campaign
-    // FORCES it on (no toggle) with a note that the fee is added because it's Zakat; otherwise it's a
-    // donor opt-in toggle.
+    // Cover-fees lives here, next to name/email, and shows the exact extra it adds. A forced-fee
+    // campaign (Zakat, or a Tuition set to require it) covers it with no toggle and a type-specific
+    // note; a Donation with the offer on shows a donor opt-in toggle.
     val feeClarify = "This is the Visa / Mastercard / Amex card fee — not a platform fee. OpenMasjid Solutions is free, unlimited, forever."
     if (campaign.forceCoverFees && !giving.monthly) {
         Spacer(Modifier.height(16.dp))
         val extra = feeExtra(giving.amountMinor, config)
-        Text(
-            "Because this is Zakat, the card fee (+${formatMoney(extra, currency)}) is added so the full Zakat reaches the masjid.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = style.onScene,
-            fontWeight = FontWeight.SemiBold,
-        )
+        val forcedNote = if (campaign.type == "zakat") {
+            "Because this is Zakat, the card fee (+${formatMoney(extra, currency)}) is added so the full Zakat reaches the masjid."
+        } else {
+            "The card fee (+${formatMoney(extra, currency)}) is added so the masjid receives the full amount."
+        }
+        Text(forcedNote, style = MaterialTheme.typography.bodyMedium, color = style.onScene, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(4.dp))
         Text(feeClarify, style = MaterialTheme.typography.bodySmall, color = style.onSceneMuted)
     } else if (campaign.coverFees && !giving.monthly) {

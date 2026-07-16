@@ -38,6 +38,7 @@ import {
   type CampaignPatch,
   type CampaignsData,
   type CampaignTheme,
+  type CampaignType,
   type GivingSettings,
   type PromptPolicy,
   type StripeAccountRef,
@@ -505,6 +506,7 @@ function CampaignEditor({
   const isMain = campaign?.isMain ?? false;
 
   const [title, setTitle] = useState(campaign?.title ?? '');
+  const [type, setType] = useState<CampaignType>(campaign?.type ?? 'donation');
   const [description, setDescription] = useState(campaign?.description ?? '');
   const [presets, setPresets] = useState<string[]>(campaign ? campaign.presetsMinor.map((m) => toMajorStr(m, currency)) : [...DEFAULT_NEW_PRESETS]);
   const [allowCustom, setAllowCustom] = useState(campaign?.allowCustom ?? true);
@@ -527,6 +529,18 @@ function CampaignEditor({
   const [del, setDel] = useState(false);
   const [confirmingDel, setConfirmingDel] = useState(false);
   const [err, setErr] = useState('');
+
+  // Keep the local fee state honest with the type→fee rule as the admin switches type, so the labels
+  // match what the server will actually save (the server re-derives authoritatively via deriveFees).
+  useEffect(() => {
+    if (type === 'zakat') {
+      setForceCoverFees(true);
+      setCoverFees(true);
+    } else if (type === 'donation') {
+      setForceCoverFees(false);
+    }
+    // tuition: leave forceCoverFees to the admin's "require" toggle.
+  }, [type]);
 
   // Close on Escape (matches the Devices logs modal).
   useEffect(() => {
@@ -569,6 +583,7 @@ function CampaignEditor({
     }
     const patch: CampaignPatch = {
       title: t,
+      type,
       description: description.trim(),
       primaryColor,
       accentColor,
@@ -581,7 +596,9 @@ function CampaignEditor({
       customMinMinor: min,
       customMaxMinor: max,
       monthlyEnabled,
-      coverFees: coverFees || forceCoverFees, // forcing implies offering
+      // Donation offers coverFees; Zakat/Tuition offer it only when the fee is enforced. The server
+      // re-derives this authoritatively (deriveFees) — this just keeps the client in sync.
+      coverFees: type === 'donation' ? coverFees : forceCoverFees,
       forceCoverFees,
       thankYouMessage: thankYou,
       stripeAccountId,
@@ -647,6 +664,22 @@ function CampaignEditor({
             <label className="label" htmlFor="c-title">Title</label>
             <input id="c-title" className="input" value={title} maxLength={TITLE_MAX} placeholder="e.g. General fund, Zakat, Building fund" onChange={(e) => setTitle(e.target.value)} autoFocus />
             <span className={title.length > TITLE_MAX ? 'form-error' : 'hint'} style={{ textAlign: 'end' }}>{title.length}/{TITLE_MAX} — this is the tab name, so keep it short.</span>
+          </div>
+
+          <div className="field">
+            <label className="label" htmlFor="c-type">Type</label>
+            <select id="c-type" className="input" value={type} onChange={(e) => setType(e.target.value as CampaignType)}>
+              <option value="donation">Donation</option>
+              <option value="zakat">Zakat</option>
+              <option value="tuition">Tuition</option>
+            </select>
+            <p className="hint">
+              {type === 'zakat'
+                ? 'Zakat always covers the card fee, so the full Zakat reaches the masjid.'
+                : type === 'tuition'
+                  ? 'For tuition you can require the payer to cover the card fee.'
+                  : 'For a donation you can offer donors the option to cover the card fee.'}
+            </p>
           </div>
 
           <div className="field">
@@ -751,20 +784,27 @@ function CampaignEditor({
             </div>
           )}
 
-          <Toggle
-            label="Offer donors the option to cover card fees"
-            hint="Adds an estimated card fee (≈2.9% + a small fixed fee) so your masjid keeps the full amount. The donor chooses on the tablet."
-            checked={coverFees || forceCoverFees}
-            onChange={setCoverFees}
-            disabled={forceCoverFees}
-          />
-
-          <Toggle
-            label="Require donors to cover card fees (only for Zakat)"
-            hint="For a Zakat campaign the full Zakat must reach the masjid, so the card fee is always added and the donor is told it's because this is Zakat. Leave off for every other appeal."
-            checked={forceCoverFees}
-            onChange={setForceCoverFees}
-          />
+          {/* Card-fee control, driven by the campaign type (the server re-derives + enforces it). */}
+          {type === 'zakat' ? (
+            <p className="hint">
+              Card fees are covered by the donor (required for Zakat) — the masjid receives the full Zakat. The kiosk
+              tells the donor the fee is added because it's Zakat.
+            </p>
+          ) : type === 'tuition' ? (
+            <Toggle
+              label="Require the payer to cover the card fee"
+              hint="Adds the card fee (≈2.9% + a small fixed fee) to the payment so the masjid keeps the full amount. Leave off and the masjid absorbs the fee."
+              checked={forceCoverFees}
+              onChange={setForceCoverFees}
+            />
+          ) : (
+            <Toggle
+              label="Offer donors the option to cover card fees"
+              hint="Shows a toggle on the tablet so the donor can add an estimated card fee (≈2.9% + a small fixed fee) — their choice."
+              checked={coverFees}
+              onChange={setCoverFees}
+            />
+          )}
 
           <Toggle
             label="Offer a monthly (recurring) option"

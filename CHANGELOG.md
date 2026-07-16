@@ -3,6 +3,14 @@
 
 # Changelog
 
+## 0.9.12
+- **Campaign type (Donation / Zakat / Tuition).** Every campaign now has a required **Type** that sets
+  the card-fee rule (matching OpenMasjid Donations):
+  - **Donation** — you can *offer* donors the option to cover the card fee (their choice on the tablet).
+  - **Zakat** — the fee is *always* covered by the donor, so the full Zakat reaches the masjid; the
+    kiosk tells the donor it's added because it's Zakat.
+  - **Tuition** — you choose whether to *require* the payer to cover the fee.
+
 ## 0.9.11
 - **Much bigger, bolder amounts.** The donation numbers now fill the tile — large and heavy — so
   they're easy to read across the room, and the **“Donate”** button band is taller with bigger text

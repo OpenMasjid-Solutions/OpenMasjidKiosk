@@ -295,6 +295,10 @@ export interface GivingConfig {
 /** Per-campaign kiosk appearance: 'light' (bright), 'dark', or 'auto' (bright unless a dark bg image). */
 export type CampaignTheme = 'auto' | 'light' | 'dark';
 
+/** Campaign type — required; drives the card-fee rule. Donation: admin may offer fee-covering.
+ *  Zakat: fee always covered by the donor. Tuition: admin chooses whether to require it. */
+export type CampaignType = 'donation' | 'zakat' | 'tuition';
+
 /** The full giving-designer state: the giving config + the currency, masjid name and attract
  *  headline that share the same live-push mechanism. */
 export interface GivingSettings {
@@ -319,6 +323,8 @@ export const saveGiving = (body: GivingPatch) =>
 export interface Campaign {
   id: string;
   title: string;
+  /** Required campaign type — drives the card-fee rule (see coverFees/forceCoverFees). */
+  type: CampaignType;
   description: string;
   /** '#rrggbb' background colour for this tab, or '' to inherit. Drives the giving-screen gradient. */
   primaryColor: string;
@@ -354,6 +360,7 @@ export type CampaignPatch = Partial<
   Pick<
     Campaign,
     | 'title'
+    | 'type'
     | 'description'
     | 'primaryColor'
     | 'accentColor'

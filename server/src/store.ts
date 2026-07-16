@@ -114,9 +114,16 @@ const GIVING_DEFAULTS: GivingConfig = {
  *  Exactly one campaign is the **main** one (the always-present first tab). Amounts are integer
  *  MINOR units. Colours are '#rrggbb' or '' (inherit the default). Images are URLs (an uploaded
  *  '/uploads/…' path, or an external https URL) or '' (use the default look / masjid logo). */
+/** Every campaign has a type, which drives the card-fee rule (see deriveFees): a **Donation** lets the
+ *  admin offer fee-covering; **Zakat** always enforces it (so the full Zakat reaches the masjid);
+ *  **Tuition** lets the admin choose whether to require it. (Mirrors OpenMasjidDonations.) */
+export type CampaignType = 'donation' | 'zakat' | 'tuition';
+
 export interface Campaign {
   id: string;
   title: string;
+  /** Required campaign type — drives the fee rule (see coverFees/forceCoverFees + deriveFees). */
+  type: CampaignType;
   description: string;
   /** Primary colour hex ('#rrggbb') — drives the giving screen's background gradient. '' inherits
    *  the accent (or the kiosk default). Think of it as the campaign's "wallpaper" colour. */
@@ -159,6 +166,7 @@ export interface Campaign {
 
 /** Defaults for a freshly-created campaign (seeded from the global giving defaults). */
 const CAMPAIGN_DEFAULTS: Omit<Campaign, 'id' | 'title' | 'sortOrder' | 'createdAt' | 'isMain'> = {
+  type: 'donation',
   description: '',
   primaryColor: '',
   accentColor: '',
@@ -305,6 +313,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS campaigns (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL DEFAULT '',
+        type TEXT NOT NULL DEFAULT 'donation',
         description TEXT NOT NULL DEFAULT '',
         primary_color TEXT NOT NULL DEFAULT '',
         accent_color TEXT NOT NULL DEFAULT '',
@@ -349,6 +358,8 @@ export class Store {
       if (!cols.includes('theme')) this.db.exec("ALTER TABLE campaigns ADD COLUMN theme TEXT NOT NULL DEFAULT 'auto'");
       if (!cols.includes('force_cover_fees')) this.db.exec('ALTER TABLE campaigns ADD COLUMN force_cover_fees INTEGER NOT NULL DEFAULT 0');
       if (!cols.includes('primary_color')) this.db.exec("ALTER TABLE campaigns ADD COLUMN primary_color TEXT NOT NULL DEFAULT ''");
+      // Legacy campaigns default to 'donation' (a valid required type) with fees not forced.
+      if (!cols.includes('type')) this.db.exec("ALTER TABLE campaigns ADD COLUMN type TEXT NOT NULL DEFAULT 'donation'");
     }
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
@@ -570,6 +581,7 @@ export class Store {
     return {
       id: String(r.id),
       title: String(r.title),
+      type: (['donation', 'zakat', 'tuition'] as const).includes(String(r.type) as CampaignType) ? (String(r.type) as CampaignType) : 'donation',
       description: String(r.description),
       primaryColor: String(r.primary_color ?? ''),
       accentColor: String(r.accent_color),
@@ -609,9 +621,27 @@ export class Store {
       .slice(0, 6);
     const min = Math.max(1, Math.round(Number(c.customMinMinor) || GIVING_DEFAULTS.customMinMinor));
     const max = Math.max(min, Math.round(Number(c.customMaxMinor) || GIVING_DEFAULTS.customMaxMinor));
+    // The campaign TYPE is the single source of truth for the fee rule (so a hand-crafted API body
+    // can't create a non-enforcing Zakat campaign): Zakat always forces the fee (offering implied);
+    // Donation never forces (coverFees stays the admin's optional offer); Tuition leaves it to the
+    // admin's require toggle (offered iff required). Mirrors OpenMasjidDonations' deriveFees.
+    const type: CampaignType = (['donation', 'zakat', 'tuition'] as const).includes(c.type as CampaignType) ? (c.type as CampaignType) : 'donation';
+    let coverFees: boolean;
+    let forceCoverFees: boolean;
+    if (type === 'zakat') {
+      forceCoverFees = true;
+      coverFees = true;
+    } else if (type === 'tuition') {
+      forceCoverFees = c.forceCoverFees === true;
+      coverFees = forceCoverFees;
+    } else {
+      forceCoverFees = false;
+      coverFees = c.coverFees === true;
+    }
     return {
       ...c,
       title: String(c.title ?? '').trim().slice(0, 120) || 'Donations',
+      type,
       description: String(c.description ?? '').slice(0, 1000),
       primaryColor: hex(String(c.primaryColor ?? '')),
       accentColor: hex(String(c.accentColor ?? '')),
@@ -623,8 +653,8 @@ export class Store {
       customMinMinor: min,
       customMaxMinor: max,
       monthlyEnabled: c.monthlyEnabled !== false,
-      coverFees: c.coverFees === true || c.forceCoverFees === true, // forcing implies offering
-      forceCoverFees: c.forceCoverFees === true,
+      coverFees,
+      forceCoverFees,
       thankYouMessage: String(c.thankYouMessage ?? '').slice(0, 500),
       theme: (['auto', 'light', 'dark'] as const).includes(c.theme as 'auto' | 'light' | 'dark') ? c.theme : 'auto',
       stripeAccountId: String(c.stripeAccountId ?? '').trim().slice(0, 120),
@@ -635,13 +665,13 @@ export class Store {
   private writeCampaign(c: Campaign): void {
     this.db
       .prepare(
-        `INSERT INTO campaigns (id, title, description, primary_color, accent_color, background_image, cover_image, logo,
+        `INSERT INTO campaigns (id, title, type, description, primary_color, accent_color, background_image, cover_image, logo,
            presets_minor, allow_custom, custom_min_minor, custom_max_minor, monthly_enabled, cover_fees,
            force_cover_fees, thank_you_message, theme, stripe_account_id, live, is_main, sort_order, created_at)
-         VALUES (@id, @title, @description, @primaryColor, @accentColor, @backgroundImage, @coverImage, @logo,
+         VALUES (@id, @title, @type, @description, @primaryColor, @accentColor, @backgroundImage, @coverImage, @logo,
            @presetsJson, @allowCustom, @customMinMinor, @customMaxMinor, @monthlyEnabled, @coverFees,
            @forceCoverFees, @thankYouMessage, @theme, @stripeAccountId, @live, @isMain, @sortOrder, @createdAt)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, description=excluded.description,
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, type=excluded.type, description=excluded.description,
            primary_color=excluded.primary_color,
            accent_color=excluded.accent_color, background_image=excluded.background_image,
            cover_image=excluded.cover_image, logo=excluded.logo, presets_minor=excluded.presets_minor,
@@ -655,6 +685,7 @@ export class Store {
       .run({
         id: c.id,
         title: c.title,
+        type: c.type,
         description: c.description,
         primaryColor: c.primaryColor,
         accentColor: c.accentColor,
@@ -946,6 +977,7 @@ export class Store {
       .map((c) => ({
         id: c.id,
         title: c.title,
+        type: c.type,
         description: c.description,
         primaryColor: c.primaryColor,
         accentColor: c.accentColor,

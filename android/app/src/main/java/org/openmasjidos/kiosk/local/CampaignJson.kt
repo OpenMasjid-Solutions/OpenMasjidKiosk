@@ -30,6 +30,7 @@ object CampaignJson {
         return Campaign(
             id = o.optString("id", ""),
             title = o.optString("title", ""),
+            type = o.optString("type", "donation"),
             description = o.optString("description", ""),
             primaryColor = o.optString("primaryColor", ""),
             accentColor = o.optString("accentColor", ""),
@@ -59,6 +60,7 @@ object CampaignJson {
                 JSONObject()
                     .put("id", c.id)
                     .put("title", c.title)
+                    .put("type", c.type)
                     .put("description", c.description)
                     .put("primaryColor", c.primaryColor)
                     .put("accentColor", c.accentColor)

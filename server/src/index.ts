@@ -503,6 +503,7 @@ async function main(): Promise<void> {
   const CampaignBody = z
     .object({
       title: z.string().max(120).optional(),
+      type: z.enum(['donation', 'zakat', 'tuition']).optional(),
       description: z.string().max(1000).optional(),
       primaryColor: z.string().max(9).optional(),
       accentColor: z.string().max(9).optional(),

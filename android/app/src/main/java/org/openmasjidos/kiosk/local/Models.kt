@@ -34,6 +34,9 @@ data class PairingRecord(
 data class Campaign(
     val id: String,
     val title: String,
+    /** Campaign type: 'donation' | 'zakat' | 'tuition'. Drives the card-fee wording (the actual fee
+     *  rule is already resolved server-side into coverFees/forceCoverFees). */
+    val type: String = "donation",
     val description: String = "",
     /** '#rrggbb' background colour for this tab, or '' to inherit. Drives the giving-screen gradient. */
     val primaryColor: String = "",
