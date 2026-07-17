@@ -535,7 +535,10 @@ function CampaignEditor({
   const [coverImage, setCoverImage] = useState(campaign?.coverImage ?? '');
   const [logo, setLogo] = useState(campaign?.logo ?? '');
   const [stripeAccountId, setStripeAccountId] = useState(campaign?.stripeAccountId ?? '');
-  const [deviceIds, setDeviceIds] = useState<string[]>(campaign?.deviceIds ?? []);
+  // Prune any phantom ids (kiosks that were removed since this campaign was last saved) so the chip UI
+  // reflects only real kiosks and can't get stuck in an inconsistent "targeted at a device that no
+  // longer exists" state. The server also cleans these up when a device is revoked.
+  const [deviceIds, setDeviceIds] = useState<string[]>((campaign?.deviceIds ?? []).filter((id) => devices.some((d) => d.id === id)));
   const [coverFees, setCoverFees] = useState(campaign?.coverFees ?? false);
   const [forceCoverFees, setForceCoverFees] = useState(campaign?.forceCoverFees ?? false);
   const [monthlyEnabled, setMonthlyEnabled] = useState(campaign?.monthlyEnabled ?? true);

@@ -1154,9 +1154,20 @@ export class Store {
     return this.getDevice(id);
   }
 
-  /** Revoke a device (kills its token; the kiosk returns to pairing on its next heartbeat). */
+  /** Revoke a device (kills its token; the kiosk returns to pairing on its next heartbeat). Also
+   *  removes this device's id from every campaign's targeting list, so a campaign that was aimed at
+   *  this (now-gone) kiosk doesn't silently vanish from the whole fleet — a targeted campaign whose
+   *  only kiosk is revoked falls back to "all kiosks" ([] = all) rather than showing nowhere. */
   revokeDevice(id: string): void {
     this.db.prepare('UPDATE devices SET revoked = 1 WHERE id = ?').run(id);
+    let changed = false;
+    for (const c of this.listCampaigns()) {
+      if (c.deviceIds.includes(id)) {
+        this.writeCampaign(this.sanitizeCampaign({ ...c, deviceIds: c.deviceIds.filter((x) => x !== id) }));
+        changed = true;
+      }
+    }
+    if (changed) this.bumpConfigVersion(); // affected kiosks refetch their (now-corrected) campaign set
   }
 
   updateHeartbeat(

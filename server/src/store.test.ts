@@ -129,6 +129,15 @@ test('per-device: campaign targeting filters getKioskConfig, and orientation is 
   assert.equal(s.getKioskConfig('', b.id).config.orientation, 'auto'); // per-device, B unaffected
   s.setDeviceOrientation(a.id, 'nonsense');
   assert.equal(s.getDevice(a.id)!.orientation, 'auto'); // invalid rejected
+
+  // Revoking a device scrubs its id from every campaign's targeting, so a campaign aimed only at it
+  // doesn't silently vanish fleet-wide — it falls back to "all kiosks" ([] = all).
+  const both = s.createCampaign({ title: 'Both', deviceIds: [a.id, b.id] })!;
+  const onlyB = s.createCampaign({ title: 'B only', deviceIds: [b.id] })!;
+  s.revokeDevice(b.id);
+  assert.deepEqual(s.getCampaign(both.id)!.deviceIds, [a.id]); // b pruned, still targeted at a
+  assert.deepEqual(s.getCampaign(onlyB.id)!.deviceIds, []); // its only kiosk gone → all kiosks
+  assert.ok(idsFor(a.id).includes(onlyB.id)); // and it now shows on the surviving kiosk
 });
 
 test('setGiving clamps the large-donation threshold to ≥0 and only keeps valid alternative images', () => {
