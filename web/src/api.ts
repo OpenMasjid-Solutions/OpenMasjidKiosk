@@ -220,7 +220,12 @@ export interface Device {
   identify: boolean;
   revoked: boolean;
   online: boolean;
+  /** Forced screen orientation set from here (not the tablet's auto-rotate). */
+  orientation: DeviceOrientation;
 }
+
+/** Forced kiosk screen orientation. 'auto' = follow the tablet's own sensor. */
+export type DeviceOrientation = 'auto' | 'landscape' | 'portrait' | 'landscapeReverse' | 'portraitReverse';
 
 /** One structured log line from a kiosk (payments, reader events, errors). */
 export interface DeviceLog {
@@ -244,6 +249,10 @@ export const createPairCode = () => request<PairCode>('/api/admin/devices/pair-c
 
 export const renameDevice = (id: string, name: string) =>
   request<Device>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ name }) });
+
+/** Set a kiosk's forced screen orientation (delivered to the tablet on its next check-in). */
+export const setDeviceOrientation = (id: string, orientation: DeviceOrientation) =>
+  request<Device>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ orientation }) });
 
 export const revokeDevice = (id: string) =>
   request<{ ok: true }>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -347,6 +356,8 @@ export interface Campaign {
   thankYouMessage: string;
   /** Kiosk appearance for this tab. */
   theme: CampaignTheme;
+  /** Which kiosks show this campaign. Empty = all kiosks; otherwise only these device ids. */
+  deviceIds: string[];
   /** '' = the primary (reader) Stripe account. */
   stripeAccountId: string;
   live: boolean;
@@ -376,6 +387,7 @@ export type CampaignPatch = Partial<
     | 'forceCoverFees'
     | 'thankYouMessage'
     | 'theme'
+    | 'deviceIds'
     | 'stripeAccountId'
     | 'live'
   >
@@ -386,6 +398,8 @@ export type CampaignPatch = Partial<
 export interface CampaignsData {
   campaigns: Campaign[];
   currency: string;
+  /** The paired kiosks a campaign can be targeted at ("show on which kiosk"). */
+  devices: { id: string; name: string }[];
   accounts: StripeAccountRef[];
   /** The reader (primary) account id; a campaign on a different account is keyed-entry only. */
   primaryAccountId: string;

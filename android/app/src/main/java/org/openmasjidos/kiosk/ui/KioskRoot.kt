@@ -4,6 +4,7 @@
 package org.openmasjidos.kiosk.ui
 
 import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.view.WindowManager
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,6 +68,23 @@ fun KioskRoot(
         (ctx0 as? Activity)?.let { act ->
             act.window.attributes = act.window.attributes.apply {
                 screenBrightness = if (maxBright) 1f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
+        }
+    }
+
+    // Force the screen orientation set from the web UI (Admin → Devices), overriding the tablet's own
+    // auto-rotate. 'auto' hands control back to the device. A fixed value pins the wall kiosk upright
+    // regardless of how the tablet is mounted. (MainActivity handles the orientation config-change so
+    // this doesn't recreate the activity — Compose just recomposes and the layout adapts.)
+    val orientation = ui.config?.orientation ?: "auto"
+    LaunchedEffect(orientation) {
+        (ctx0 as? Activity)?.let { act ->
+            act.requestedOrientation = when (orientation) {
+                "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                "landscapeReverse" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+                "portraitReverse" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+                else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
         }
     }

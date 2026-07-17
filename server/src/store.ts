@@ -152,6 +152,9 @@ export interface Campaign {
   /** Kiosk appearance for this campaign's tab: 'light' (bright), 'dark', or 'auto' (bright unless a
    *  dark background image is set). Drives the vibrant bright look the giving screen defaults to. */
   theme: string;
+  /** Which kiosks show this campaign. Empty = ALL kiosks (the default). Otherwise only the listed
+   *  device ids see it (the main campaign is always shown regardless). */
+  deviceIds: string[];
   /** Which Stripe account this campaign settles to. '' = the kiosk's primary account (the one the
    *  reader connects to). A different id routes the money elsewhere — but the physical reader is
    *  locked to the primary account, so a cross-account campaign is taken by keyed entry. */
@@ -182,6 +185,7 @@ const CAMPAIGN_DEFAULTS: Omit<Campaign, 'id' | 'title' | 'sortOrder' | 'createdA
   forceCoverFees: false,
   thankYouMessage: '',
   theme: 'auto',
+  deviceIds: [],
   stripeAccountId: '',
   live: true,
 };
@@ -234,7 +238,14 @@ export interface Device {
   configVersion: number;
   identify: boolean;
   revoked: boolean;
+  /** Screen orientation the tablet is forced to (set from the web UI, NOT the device's auto-rotate):
+   *  'auto' (follow the device) | 'landscape' | 'portrait' | 'landscapeReverse' | 'portraitReverse'. */
+  orientation: string;
 }
+
+/** Valid device orientations (see Device.orientation). 'auto' = follow the tablet's own sensor. */
+export const DEVICE_ORIENTATIONS = ['auto', 'landscape', 'portrait', 'landscapeReverse', 'portraitReverse'] as const;
+export type DeviceOrientation = (typeof DEVICE_ORIENTATIONS)[number];
 
 /** Short, URL-safe id with a kind prefix, e.g. "dev_a1b2c3d4". */
 export function rid(prefix: string): string {
@@ -271,7 +282,8 @@ export class Store {
         app_version TEXT NOT NULL DEFAULT '',
         config_version INTEGER NOT NULL DEFAULT 0,
         identify INTEGER NOT NULL DEFAULT 0,
-        revoked INTEGER NOT NULL DEFAULT 0
+        revoked INTEGER NOT NULL DEFAULT 0,
+        orientation TEXT NOT NULL DEFAULT 'auto'
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_token ON devices(token_hash);
 
@@ -330,6 +342,7 @@ export class Store {
         thank_you_message TEXT NOT NULL DEFAULT '',
         theme TEXT NOT NULL DEFAULT 'auto',
         stripe_account_id TEXT NOT NULL DEFAULT '',
+        device_ids TEXT NOT NULL DEFAULT '[]',
         live INTEGER NOT NULL DEFAULT 1,
         is_main INTEGER NOT NULL DEFAULT 0,
         sort_order INTEGER NOT NULL DEFAULT 0,
@@ -369,6 +382,13 @@ export class Store {
         this.db.exec("ALTER TABLE campaigns ADD COLUMN type TEXT NOT NULL DEFAULT 'donation'");
         this.db.exec("UPDATE campaigns SET type = 'zakat' WHERE force_cover_fees = 1");
       }
+      // Per-campaign device targeting (which kiosks show this campaign; '[]' = all).
+      if (!cols.includes('device_ids')) this.db.exec("ALTER TABLE campaigns ADD COLUMN device_ids TEXT NOT NULL DEFAULT '[]'");
+    }
+    // Per-device screen orientation (set from the web UI).
+    {
+      const dcols = (this.db.prepare('PRAGMA table_info(devices)').all() as { name: string }[]).map((c) => c.name);
+      if (!dcols.includes('orientation')) this.db.exec("ALTER TABLE devices ADD COLUMN orientation TEXT NOT NULL DEFAULT 'auto'");
     }
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
@@ -587,6 +607,13 @@ export class Store {
     } catch {
       /* keep [] */
     }
+    let deviceIds: string[] = [];
+    try {
+      const arr = JSON.parse(String(r.device_ids ?? '[]'));
+      if (Array.isArray(arr)) deviceIds = arr.map((s) => String(s)).filter((s) => s.length > 0);
+    } catch {
+      /* keep [] */
+    }
     return {
       id: String(r.id),
       title: String(r.title),
@@ -606,6 +633,7 @@ export class Store {
       forceCoverFees: !!r.force_cover_fees,
       thankYouMessage: String(r.thank_you_message),
       theme: String(r.theme || 'auto'),
+      deviceIds,
       stripeAccountId: String(r.stripe_account_id),
       live: !!r.live,
       isMain: !!r.is_main,
@@ -630,6 +658,8 @@ export class Store {
       .slice(0, 6);
     const min = Math.max(1, Math.round(Number(c.customMinMinor) || GIVING_DEFAULTS.customMinMinor));
     const max = Math.max(min, Math.round(Number(c.customMaxMinor) || GIVING_DEFAULTS.customMaxMinor));
+    // Device targeting: unique non-empty strings (which kiosks show this campaign; [] = all). Capped.
+    const deviceIds = Array.from(new Set((Array.isArray(c.deviceIds) ? c.deviceIds : []).map((s) => String(s).trim()).filter((s) => s.length > 0 && s.length <= 60))).slice(0, 200);
     // The campaign TYPE is the single source of truth for the fee rule (so a hand-crafted API body
     // can't create a non-enforcing Zakat campaign): Zakat always forces the fee (offering implied);
     // Donation never forces (coverFees stays the admin's optional offer); Tuition leaves it to the
@@ -666,6 +696,7 @@ export class Store {
       forceCoverFees,
       thankYouMessage: String(c.thankYouMessage ?? '').slice(0, 500),
       theme: (['auto', 'light', 'dark'] as const).includes(c.theme as 'auto' | 'light' | 'dark') ? c.theme : 'auto',
+      deviceIds,
       stripeAccountId: String(c.stripeAccountId ?? '').trim().slice(0, 120),
       live: c.live !== false,
     };
@@ -676,10 +707,10 @@ export class Store {
       .prepare(
         `INSERT INTO campaigns (id, title, type, description, primary_color, accent_color, background_image, cover_image, logo,
            presets_minor, allow_custom, custom_min_minor, custom_max_minor, monthly_enabled, cover_fees,
-           force_cover_fees, thank_you_message, theme, stripe_account_id, live, is_main, sort_order, created_at)
+           force_cover_fees, thank_you_message, theme, device_ids, stripe_account_id, live, is_main, sort_order, created_at)
          VALUES (@id, @title, @type, @description, @primaryColor, @accentColor, @backgroundImage, @coverImage, @logo,
            @presetsJson, @allowCustom, @customMinMinor, @customMaxMinor, @monthlyEnabled, @coverFees,
-           @forceCoverFees, @thankYouMessage, @theme, @stripeAccountId, @live, @isMain, @sortOrder, @createdAt)
+           @forceCoverFees, @thankYouMessage, @theme, @deviceIdsJson, @stripeAccountId, @live, @isMain, @sortOrder, @createdAt)
          ON CONFLICT(id) DO UPDATE SET title=excluded.title, type=excluded.type, description=excluded.description,
            primary_color=excluded.primary_color,
            accent_color=excluded.accent_color, background_image=excluded.background_image,
@@ -688,7 +719,7 @@ export class Store {
            custom_max_minor=excluded.custom_max_minor, monthly_enabled=excluded.monthly_enabled,
            cover_fees=excluded.cover_fees, force_cover_fees=excluded.force_cover_fees,
            thank_you_message=excluded.thank_you_message,
-           theme=excluded.theme, stripe_account_id=excluded.stripe_account_id, live=excluded.live,
+           theme=excluded.theme, device_ids=excluded.device_ids, stripe_account_id=excluded.stripe_account_id, live=excluded.live,
            is_main=excluded.is_main, sort_order=excluded.sort_order`,
       )
       .run({
@@ -710,6 +741,7 @@ export class Store {
         forceCoverFees: c.forceCoverFees ? 1 : 0,
         thankYouMessage: c.thankYouMessage,
         theme: c.theme,
+        deviceIdsJson: JSON.stringify(c.deviceIds ?? []),
         stripeAccountId: c.stripeAccountId,
         live: c.live ? 1 : 0,
         isMain: c.isMain ? 1 : 0,
@@ -978,11 +1010,15 @@ export class Store {
    *  carries `readerCapable` — whether the physical reader (locked to the primary account) can take
    *  it, or it must use keyed entry (a cross-account campaign). Pass the primary account id so this
    *  can be computed; '' treats every campaign as reader-capable (single-account kiosks). */
-  getKioskConfig(primaryAccountId = ''): { version: number; config: Record<string, unknown> } {
+  getKioskConfig(primaryAccountId = '', deviceId = ''): { version: number; config: Record<string, unknown> } {
     const g = this.getGiving();
     const main = this.getMainCampaign();
     const campaigns = this.listCampaigns()
       .filter((c) => c.live || c.isMain) // main is always shown; others only when live
+      // Device targeting: the main campaign is always shown; others show on ALL kiosks (empty
+      // deviceIds) or only on the kiosks they list. A blank deviceId (no device context) sees the
+      // untargeted set.
+      .filter((c) => c.isMain || c.deviceIds.length === 0 || (deviceId !== '' && c.deviceIds.includes(deviceId)))
       .map((c) => ({
         id: c.id,
         title: c.title,
@@ -1013,6 +1049,8 @@ export class Store {
         currency: this.getCurrency(),
         locationId: this.getLocation()?.id ?? '',
         masjidName: this.getMasjid().name,
+        // The forced screen orientation for THIS device (from the web UI); 'auto' = follow the tablet.
+        orientation: (deviceId !== '' ? this.getDevice(deviceId)?.orientation : '') || 'auto',
         // Global giving policy (per-campaign amounts/monthly/thank-you live on each campaign).
         manualEntryEnabled: g.manualEntryEnabled,
         namePolicy: g.namePolicy,
@@ -1071,7 +1109,18 @@ export class Store {
       configVersion: Number(r.config_version),
       identify: !!r.identify,
       revoked: !!r.revoked,
+      orientation: (DEVICE_ORIENTATIONS as readonly string[]).includes(String(r.orientation)) ? String(r.orientation) : 'auto',
     };
+  }
+
+  /** Set a device's forced screen orientation (from the web UI). Bumps the config version so the
+   *  tablet refetches + applies it. Returns the updated device (null if unknown). */
+  setDeviceOrientation(id: string, orientation: string): Device | null {
+    const o: DeviceOrientation = (DEVICE_ORIENTATIONS as readonly string[]).includes(orientation) ? (orientation as DeviceOrientation) : 'auto';
+    const res = this.db.prepare('UPDATE devices SET orientation = ? WHERE id = ?').run(o, id);
+    if (res.changes === 0) return null;
+    this.bumpConfigVersion(); // the tablet picks up the new orientation on its next heartbeat
+    return this.getDevice(id);
   }
 
   createDevice(input: { name: string; platform: string; tokenHash: string }): Device {

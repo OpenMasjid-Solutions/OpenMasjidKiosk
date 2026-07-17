@@ -58,6 +58,19 @@ const DEFAULT_ACCENT = '#22d3ee';
 /** Shown in the primary-colour picker while a campaign inherits the default background. */
 const DEFAULT_PRIMARY = '#a8f2b7';
 
+/** Curated theme presets — a primary (background) + accent (buttons) that go well together. Picking
+ *  one just POPULATES the two colour fields; the admin can still tweak either afterwards. */
+const THEME_PRESETS: { name: string; primary: string; accent: string }[] = [
+  { name: 'Emerald', primary: '#a8f2b7', accent: '#1fa37a' },
+  { name: 'Ocean', primary: '#bfe3ff', accent: '#2563eb' },
+  { name: 'Sunset', primary: '#ffd9b3', accent: '#ea580c' },
+  { name: 'Royal', primary: '#e0d4ff', accent: '#7c3aed' },
+  { name: 'Rose', primary: '#ffd6e5', accent: '#e11d63' },
+  { name: 'Gold', primary: '#fdeec2', accent: '#c99a2e' },
+  { name: 'Teal', primary: '#bff2ee', accent: '#0d9488' },
+  { name: 'Midnight', primary: '#1e293b', accent: '#38bdf8' },
+];
+
 // ── Colour helpers (mirror the kiosk's scene logic so the preview matches the device) ─────────────
 function hexToRgb(hex: string): [number, number, number] | null {
   const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
@@ -187,6 +200,7 @@ export function CampaignsSection() {
           campaign={editor}
           currency={data.currency}
           accounts={data.accounts}
+          devices={data.devices}
           primaryAccountId={data.primaryAccountId}
           hasLocal={data.hasLocal}
           onClose={() => setEditor(undefined)}
@@ -489,6 +503,7 @@ function CampaignEditor({
   campaign,
   currency,
   accounts,
+  devices,
   primaryAccountId,
   hasLocal,
   onClose,
@@ -497,6 +512,7 @@ function CampaignEditor({
   campaign: Campaign | null;
   currency: string;
   accounts: StripeAccountRef[];
+  devices: { id: string; name: string }[];
   primaryAccountId: string;
   hasLocal: boolean;
   onClose: () => void;
@@ -519,6 +535,7 @@ function CampaignEditor({
   const [coverImage, setCoverImage] = useState(campaign?.coverImage ?? '');
   const [logo, setLogo] = useState(campaign?.logo ?? '');
   const [stripeAccountId, setStripeAccountId] = useState(campaign?.stripeAccountId ?? '');
+  const [deviceIds, setDeviceIds] = useState<string[]>(campaign?.deviceIds ?? []);
   const [coverFees, setCoverFees] = useState(campaign?.coverFees ?? false);
   const [forceCoverFees, setForceCoverFees] = useState(campaign?.forceCoverFees ?? false);
   const [monthlyEnabled, setMonthlyEnabled] = useState(campaign?.monthlyEnabled ?? true);
@@ -601,6 +618,7 @@ function CampaignEditor({
       coverFees: type === 'donation' ? coverFees : forceCoverFees,
       forceCoverFees,
       thankYouMessage: thankYou,
+      deviceIds,
       stripeAccountId,
       live: isMain ? true : live, // the main campaign is always shown
     };
@@ -727,6 +745,29 @@ function CampaignEditor({
           )}
 
           <div className="field">
+            <span className="label">Colour theme <span className="faint">(presets)</span></span>
+            <div className="theme-presets">
+              {THEME_PRESETS.map((p) => (
+                <button
+                  key={p.name}
+                  type="button"
+                  className={`theme-preset${primaryColor === p.primary && accentColor === p.accent ? ' theme-preset--on' : ''}`}
+                  title={`${p.name} — sets the colours below (still editable)`}
+                  onClick={() => {
+                    setPrimaryColor(p.primary);
+                    setAccentColor(p.accent);
+                  }}
+                >
+                  <span className="theme-preset-sw" style={{ background: p.primary }} />
+                  <span className="theme-preset-sw" style={{ background: p.accent }} />
+                  <span className="theme-preset-name">{p.name}</span>
+                </button>
+              ))}
+            </div>
+            <p className="hint">Pick a preset to fill the two colours below — you can still fine-tune either one.</p>
+          </div>
+
+          <div className="field">
             <span className="label">Primary colour <span className="faint">(background)</span></span>
             <div className="accent-row">
               <input type="color" className="accent-swatch-input" aria-label="Primary colour" value={primaryColor || DEFAULT_PRIMARY} onChange={(e) => setPrimaryColor(e.target.value)} />
@@ -763,6 +804,48 @@ function CampaignEditor({
             </select>
             <p className="hint">The kiosk defaults to a bright, vibrant look. Choose Dark for a calm night-time screen.</p>
           </div>
+
+          {isMain ? (
+            <p className="hint">Your main campaign always shows on every kiosk.</p>
+          ) : devices.length === 0 ? (
+            <p className="hint">Pair a kiosk (Devices tab) to choose which kiosks show this campaign.</p>
+          ) : (
+            <div className="field">
+              <span className="label">Show on which kiosks</span>
+              <label className="toggle-row" style={{ marginBlockStart: '0.2rem' }}>
+                <span className="toggle-text"><span className="toggle-label">All kiosks</span></span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={deviceIds.length === 0}
+                  aria-label="Show on all kiosks"
+                  className={`switch${deviceIds.length === 0 ? ' switch--on' : ''}`}
+                  onClick={() => setDeviceIds(deviceIds.length === 0 ? devices.map((d) => d.id) : [])}
+                >
+                  <span className="switch-knob" />
+                </button>
+              </label>
+              {deviceIds.length > 0 && (
+                <div className="device-pick">
+                  {devices.map((d) => {
+                    const on = deviceIds.includes(d.id);
+                    return (
+                      <button
+                        key={d.id}
+                        type="button"
+                        className={`device-chip${on ? ' device-chip--on' : ''}`}
+                        aria-pressed={on}
+                        onClick={() => setDeviceIds(on ? deviceIds.filter((x) => x !== d.id) : [...deviceIds, d.id])}
+                      >
+                        {d.name || 'Kiosk'}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="hint">“All kiosks” shows this appeal everywhere; otherwise pick the specific kiosks.</p>
+            </div>
+          )}
 
           {showAccountPicker && (
             <div className="field">

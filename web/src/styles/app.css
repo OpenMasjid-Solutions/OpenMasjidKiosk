@@ -355,7 +355,32 @@ h1, h2, h3, p, ul { margin: 0; }
 .device-name:hover svg { color: var(--color-primary); }
 .device-sub { font-size: 0.8rem; }
 .device-name-input { max-width: 12rem; padding-block: 0.4rem; }
-.device-meta { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.device-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.device-orient { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; color: var(--color-ink-muted); }
+.device-orient-select {
+  font: inherit; padding: 0.2rem 0.4rem; border-radius: 8px; color: var(--color-ink);
+  background: var(--glass-bg-inset); border: 1px solid var(--color-border);
+}
+
+/* Theme presets (campaign editor): a row of two-swatch chips that fill the colour fields. */
+.theme-presets { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.theme-preset {
+  display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.6rem 0.35rem 0.4rem;
+  border-radius: 999px; border: 1.5px solid var(--color-border); background: var(--glass-bg-inset);
+  color: var(--color-ink); font: inherit; font-size: 0.85rem; cursor: pointer;
+}
+.theme-preset--on { border-color: var(--color-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 35%, transparent); }
+.theme-preset-sw { width: 0.95rem; height: 0.95rem; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15); }
+.theme-preset-sw + .theme-preset-sw { margin-inline-start: -0.5rem; }
+.theme-preset-name { margin-inline-start: 0.25rem; }
+
+/* Per-campaign device targeting chips ("show on which kiosk"). */
+.device-pick { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-block-start: 0.5rem; }
+.device-chip {
+  padding: 0.35rem 0.75rem; border-radius: 999px; border: 1.5px solid var(--color-border);
+  background: var(--glass-bg-inset); color: var(--color-ink-muted); font: inherit; font-size: 0.85rem; cursor: pointer;
+}
+.device-chip--on { border-color: var(--color-primary); color: var(--color-ink); background: color-mix(in srgb, var(--color-primary) 18%, transparent); }
 .device-warn { color: var(--color-warning); }
 /* The "Update available" pill doubles as a button that toggles the how-to steps. */
 button.status-pill { border: 0; cursor: pointer; font-family: inherit; }

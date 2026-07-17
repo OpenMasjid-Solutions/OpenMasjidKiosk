@@ -149,6 +149,7 @@ class KioskApi(private val client: OkHttpClient) {
             feeFixedMinor = cfg.optLong("feeFixedMinor", 30),
             maxBrightness = cfg.optBoolean("maxBrightness", true),
             footerText = cfg.optString("footerText", "OpenMasjid Solutions"),
+            orientation = cfg.optString("orientation", "auto"),
             largeAmountThresholdMinor = cfg.optLong("largeAmountThresholdMinor", 0L),
             largeAmountNote = cfg.optString("largeAmountNote", ""),
             largeAmountImage = cfg.optString("largeAmountImage", ""),

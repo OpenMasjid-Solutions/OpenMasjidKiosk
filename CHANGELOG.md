@@ -3,6 +3,18 @@
 
 # Changelog
 
+## 0.9.13
+- **Portrait-friendly kiosk.** The giving screen now adapts to a portrait tablet — the amount tiles
+  re-flow into two tall columns and everything scales to fit (landscape still uses the wide layout).
+- **Set the screen orientation from the web.** In **Admin → Devices**, each kiosk has an
+  **Orientation** control (Auto / Landscape / Portrait / flipped 180°). The tablet is forced to that
+  orientation regardless of its own auto-rotate, so a wall mount always sits upright.
+- **Choose which kiosks show a campaign.** Each campaign can be set to show on **all kiosks** or only
+  **specific** ones (Admin → Campaigns → “Show on which kiosks”). Your main campaign always shows
+  everywhere.
+- **Colour themes.** The campaign editor now has one-tap **colour presets** (a primary + accent that
+  go well together). Picking one just fills the colour fields — you can still fine-tune either.
+
 ## 0.9.12
 - **Campaign type (Donation / Zakat / Tuition).** Every campaign now has a required **Type** that sets
   the card-fee rule (matching OpenMasjid Donations):

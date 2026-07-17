@@ -410,10 +410,20 @@ async function main(): Promise<void> {
   app.post('/api/admin/devices/pair-code', { preHandler: requireAdmin }, async () => ({ data: store.createPairingCode(makePairingCode()) }));
 
   app.put('/api/admin/devices/:id', { preHandler: requireAdmin }, async (req, reply) => {
-    const parsed = z.object({ name: z.string().max(80) }).safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'Please enter a name.' });
-    const d = store.renameDevice((req.params as { id: string }).id, parsed.data.name.trim());
+    const parsed = z
+      .object({
+        name: z.string().max(80).optional(),
+        orientation: z.enum(['auto', 'landscape', 'portrait', 'landscapeReverse', 'portraitReverse']).optional(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success || (parsed.data.name === undefined && parsed.data.orientation === undefined)) {
+      return reply.code(400).send({ error: 'Please enter a name or orientation.' });
+    }
+    const id = (req.params as { id: string }).id;
+    let d = store.getDevice(id);
     if (!d) return reply.code(404).send({ error: 'Kiosk not found.' });
+    if (parsed.data.name !== undefined) d = store.renameDevice(id, parsed.data.name.trim()) ?? d;
+    if (parsed.data.orientation !== undefined) d = store.setDeviceOrientation(id, parsed.data.orientation) ?? d;
     return { data: deviceView(d) };
   });
 
@@ -505,6 +515,7 @@ async function main(): Promise<void> {
       title: z.string().max(120).optional(),
       type: z.enum(['donation', 'zakat', 'tuition']).optional(),
       description: z.string().max(1000).optional(),
+      deviceIds: z.array(z.string().max(60)).max(200).optional(),
       primaryColor: z.string().max(9).optional(),
       accentColor: z.string().max(9).optional(),
       backgroundImage: z.string().max(500).optional(),
@@ -534,7 +545,13 @@ async function main(): Promise<void> {
   };
 
   app.get('/api/admin/campaigns', { preHandler: requireAdmin }, async () => ({
-    data: { campaigns: store.listCampaigns(), currency: store.getCurrency(), ...(await campaignAccounts()) },
+    data: {
+      campaigns: store.listCampaigns(),
+      currency: store.getCurrency(),
+      // The paired kiosks a campaign can be targeted at (for the "show on which kiosk" picker).
+      devices: store.listDevices().map((d) => ({ id: d.id, name: d.name })),
+      ...(await campaignAccounts()),
+    },
   }));
 
   app.post('/api/admin/campaigns', { preHandler: requireAdmin }, async (req, reply) => {
@@ -721,7 +738,7 @@ async function main(): Promise<void> {
     // card form fails if PaymentConfiguration isn't set up first). The publishable key is public/safe;
     // a cross-account campaign's keyed PI returns its own key and the tablet re-inits just-in-time.
     const acct = await resolveAccount();
-    const cfg = store.getKioskConfig(acct?.id ?? '');
+    const cfg = store.getKioskConfig(acct?.id ?? '', d.id); // device-aware: orientation + targeted campaigns
     if (acct?.keys.publishableKey) (cfg.config as Record<string, unknown>).publishableKey = acct.keys.publishableKey;
     return { data: cfg };
   });

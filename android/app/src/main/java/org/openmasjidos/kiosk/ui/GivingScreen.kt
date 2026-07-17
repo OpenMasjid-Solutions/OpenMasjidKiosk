@@ -43,12 +43,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import android.content.res.Configuration
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -209,9 +211,15 @@ private fun AmountStep(
         }
         Spacer(Modifier.height(20.dp))
 
-        // The big-tile grid fills the whole screen: 3 columns (2 when there are few presets).
+        // The big-tile grid fills the whole screen. In PORTRAIT use 2 wide columns (taller tiles read
+        // better on a narrow screen); in landscape use 3 (2 when there are only a few presets).
         val presets = campaign.presetsMinor.take(6).ifEmpty { listOf(500L, 1000L, 2000L, 5000L, 10000L, 25000L) }
-        val cols = if (presets.size <= 4) 2 else 3
+        val portrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+        val cols = when {
+            portrait -> if (presets.size <= 2) 1 else 2
+            presets.size <= 4 -> 2
+            else -> 3
+        }
         Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             presets.chunked(cols).forEach { row ->
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(16.dp)) {

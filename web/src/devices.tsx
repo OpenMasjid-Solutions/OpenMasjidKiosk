@@ -30,6 +30,8 @@ import {
   identifyDevice,
   renameDevice,
   revokeDevice,
+  setDeviceOrientation,
+  type DeviceOrientation,
   setKioskPin,
   type Device,
   type DeviceLog,
@@ -225,6 +227,16 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
     }
   };
 
+  const changeOrientation = async (orientation: DeviceOrientation) => {
+    setErr('');
+    try {
+      await setDeviceOrientation(device.id, orientation);
+      onChange();
+    } catch (e) {
+      setErr(errMsg(e));
+    }
+  };
+
   const identify = async () => {
     setErr('');
     setNote('');
@@ -295,6 +307,20 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
             report "not charging" at 100% while plugged in). Reader + app version are what matter. */}
         <span className="status-pill">Reader: {readerLabel(device.readerStatus)}</span>
         <span className="status-pill">App v{device.appVersion || '—'}</span>
+        <label className="device-orient" title="Force this kiosk's screen orientation (overrides the tablet's auto-rotate)">
+          Orientation:
+          <select
+            className="device-orient-select"
+            value={device.orientation || 'auto'}
+            onChange={(e) => void changeOrientation(e.target.value as DeviceOrientation)}
+          >
+            <option value="auto">Auto (tablet decides)</option>
+            <option value="landscape">Landscape</option>
+            <option value="portrait">Portrait</option>
+            <option value="landscapeReverse">Landscape (flipped 180°)</option>
+            <option value="portraitReverse">Portrait (flipped 180°)</option>
+          </select>
+        </label>
         {outOfDate && (
           <button
             type="button"

@@ -104,6 +104,33 @@ test('campaign TYPE drives the fee rule (deriveFees): zakat forces, donation off
   assert.equal(legacy.type, 'donation');
 });
 
+test('per-device: campaign targeting filters getKioskConfig, and orientation is delivered per device', () => {
+  const s = freshStore();
+  const a = s.createDevice({ name: 'Foyer', platform: 'android', tokenHash: 'h_a' });
+  const b = s.createDevice({ name: 'Hall', platform: 'android', tokenHash: 'h_b' });
+
+  // A campaign targeted only at device A; an untargeted one (all kiosks).
+  const targeted = s.createCampaign({ title: 'Foyer only', deviceIds: [a.id] })!;
+  assert.deepEqual(targeted.deviceIds, [a.id]);
+  const everyone = s.createCampaign({ title: 'Everywhere' })!;
+  assert.deepEqual(everyone.deviceIds, []);
+
+  const idsFor = (dev: string) => (s.getKioskConfig('', dev).config.campaigns as { id: string }[]).map((c) => c.id);
+  // Device A sees main + targeted + everyone; device B sees main + everyone (NOT the A-targeted one).
+  assert.ok(idsFor(a.id).includes(targeted.id));
+  assert.ok(idsFor(a.id).includes(everyone.id));
+  assert.ok(!idsFor(b.id).includes(targeted.id));
+  assert.ok(idsFor(b.id).includes(everyone.id));
+
+  // Orientation: set from the "web", delivered to that device's config; invalid falls back to 'auto'.
+  assert.equal(s.getKioskConfig('', a.id).config.orientation, 'auto'); // default
+  s.setDeviceOrientation(a.id, 'portrait');
+  assert.equal(s.getKioskConfig('', a.id).config.orientation, 'portrait');
+  assert.equal(s.getKioskConfig('', b.id).config.orientation, 'auto'); // per-device, B unaffected
+  s.setDeviceOrientation(a.id, 'nonsense');
+  assert.equal(s.getDevice(a.id)!.orientation, 'auto'); // invalid rejected
+});
+
 test('setGiving clamps the large-donation threshold to ≥0 and only keeps valid alternative images', () => {
   const s = freshStore();
   s.setGiving({ largeAmountThresholdMinor: -50, largeAmountNote: '  give by bank  ', largeAmountImage: 'javascript:alert(1)' });
