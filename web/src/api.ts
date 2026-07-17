@@ -224,8 +224,9 @@ export interface Device {
   orientation: DeviceOrientation;
 }
 
-/** Forced kiosk screen orientation. 'auto' = follow the tablet's own sensor. */
-export type DeviceOrientation = 'auto' | 'landscape' | 'portrait' | 'landscapeReverse' | 'portraitReverse';
+/** Kiosk UI rotation in degrees ('0' = as mounted). The tablet rotates its own UI by this angle, so it
+ *  works even on tablets that ignore system orientation requests. */
+export type DeviceOrientation = '0' | '90' | '180' | '270';
 
 /** One structured log line from a kiosk (payments, reader events, errors). */
 export interface DeviceLog {

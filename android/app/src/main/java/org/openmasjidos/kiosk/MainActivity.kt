@@ -6,7 +6,6 @@ package org.openmasjidos.kiosk
 import android.Manifest
 import android.app.role.RoleManager
 import android.content.Intent
-import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -17,13 +16,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.openmasjidos.kiosk.kiosk.KioskController
 import org.openmasjidos.kiosk.readers.ReaderManager
 import org.openmasjidos.kiosk.ui.KioskRoot
+import org.openmasjidos.kiosk.ui.RotatedRoot
+import org.openmasjidos.kiosk.ui.orientationDegrees
 import org.openmasjidos.kiosk.ui.theme.SakinaTheme
 
 /**
@@ -77,6 +76,11 @@ class MainActivity : ComponentActivity() {
             // The kiosk is a dark-by-design giving station: force dark so a tablet set to LIGHT
             // system theme still renders the (dark-scene) donor + maintenance screens legibly.
             SakinaTheme(darkTheme = true) {
+                // Rotate the whole UI by the web-set angle (Admin → Devices). We rotate the CONTENT
+                // ourselves rather than asking the system (setRequestedOrientation), because many
+                // tablets ignore orientation requests — drawing it rotated always works.
+                val uiState by vm.ui.collectAsStateWithLifecycle()
+                RotatedRoot(orientationDegrees(uiState.config?.orientation)) {
                 KioskRoot(
                     vm = vm,
                     isDeviceOwner = deviceOwner,
@@ -119,42 +123,19 @@ class MainActivity : ComponentActivity() {
                         runCatching { startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                     },
                 )
+                }
             }
         }
 
         // Schedule the heartbeat backstop and run the live loop while paired.
         vm.start()
-
-        // Apply the web-set screen orientation (Admin → Devices) and re-apply whenever it changes.
-        // Done at the Activity level (and re-asserted in onResume) so it reliably overrides the tablet's
-        // own auto-rotate and survives a lock-task re-entry.
-        lifecycleScope.launch {
-            vm.ui.map { it.config?.orientation ?: "auto" }.distinctUntilChanged().collect(::applyOrientation)
-        }
-    }
-
-    /** Force the screen orientation set from the web UI, overriding the tablet's auto-rotate.
-     *  'auto' hands control back to the device. */
-    private fun applyOrientation(value: String) {
-        requestedOrientation = when (value) {
-            "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            "landscapeReverse" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
-            "portraitReverse" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
-            else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        }
     }
 
     override fun onResume() {
         super.onResume()
         // Idempotent: enters lock task (device owner) / re-applies immersive. Skipped once we've
         // ended kiosk mode for an update (exiting) so the browser/installer isn't yanked away.
-        if (!exiting) {
-            KioskController.enterKiosk(this)
-            // Re-assert the forced orientation — entering lock task / regaining focus can otherwise let
-            // an OEM reset it back to the sensor.
-            applyOrientation(vm.ui.value.config?.orientation ?: "auto")
-        }
+        if (!exiting) KioskController.enterKiosk(this)
     }
 
     /**

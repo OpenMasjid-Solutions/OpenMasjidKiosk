@@ -307,18 +307,17 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
             report "not charging" at 100% while plugged in). Reader + app version are what matter. */}
         <span className="status-pill">Reader: {readerLabel(device.readerStatus)}</span>
         <span className="status-pill">App v{device.appVersion || '—'}</span>
-        <label className="device-orient" title="Force this kiosk's screen orientation (overrides the tablet's auto-rotate)">
-          Orientation:
+        <label className="device-orient" title="Rotate this kiosk's screen. Pick whichever angle looks upright on your mount.">
+          Rotate screen:
           <select
             className="device-orient-select"
-            value={device.orientation || 'auto'}
+            value={device.orientation || '0'}
             onChange={(e) => void changeOrientation(e.target.value as DeviceOrientation)}
           >
-            <option value="auto">Auto (tablet decides)</option>
-            <option value="landscape">Landscape</option>
-            <option value="portrait">Portrait</option>
-            <option value="landscapeReverse">Landscape (flipped 180°)</option>
-            <option value="portraitReverse">Portrait (flipped 180°)</option>
+            <option value="0">Default (0°)</option>
+            <option value="90">90° ↻</option>
+            <option value="180">180°</option>
+            <option value="270">270° (−90°) ↺</option>
           </select>
         </label>
         {outOfDate && (

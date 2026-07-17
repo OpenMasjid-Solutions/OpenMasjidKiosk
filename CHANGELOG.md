@@ -3,6 +3,14 @@
 
 # Changelog
 
+## 0.9.15
+- **Screen rotation that actually works on any tablet.** The kiosk now **rotates its own UI** by the
+  angle you choose, instead of asking the tablet to rotate — many tablets ignore that request, which is
+  why the setting did nothing before. In **Admin → Devices**, “Rotate screen” now offers **0° / 90° /
+  180° / 270°**; pick whichever makes the screen upright on your mount. (Requires updating the tablet
+  app to this version.) The giving screen also re-flows to two columns when the rotated result is
+  portrait.
+
 ## 0.9.14
 - **Typed card entry is card-only now.** Entering a card by hand no longer shows the “Link” / bank-
   account (ACH) option — just the card number, expiry and CVC. (Requires updating the tablet app.)

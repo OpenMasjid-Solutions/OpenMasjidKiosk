@@ -243,9 +243,27 @@ export interface Device {
   orientation: string;
 }
 
-/** Valid device orientations (see Device.orientation). 'auto' = follow the tablet's own sensor. */
-export const DEVICE_ORIENTATIONS = ['auto', 'landscape', 'portrait', 'landscapeReverse', 'portraitReverse'] as const;
+/** Valid device orientations — a rotation applied to the kiosk UI in DEGREES ('0' = as mounted). We
+ *  rotate the app's own content by this angle (the tablet applies it itself), which works even on
+ *  tablets that ignore system orientation requests. '0' means no rotation. */
+export const DEVICE_ORIENTATIONS = ['0', '90', '180', '270'] as const;
 export type DeviceOrientation = (typeof DEVICE_ORIENTATIONS)[number];
+
+/** Legacy named orientations (from the first cut of this feature) → their rotation in degrees. */
+const LEGACY_ORIENTATION: Record<string, DeviceOrientation> = {
+  auto: '0',
+  landscape: '0',
+  portrait: '90',
+  landscapeReverse: '180',
+  portraitReverse: '270',
+};
+
+/** Normalise any stored/incoming orientation to a valid degree string (default '0'). */
+export function normalizeOrientation(v: unknown): DeviceOrientation {
+  const s = String(v ?? '');
+  if ((DEVICE_ORIENTATIONS as readonly string[]).includes(s)) return s as DeviceOrientation;
+  return LEGACY_ORIENTATION[s] ?? '0';
+}
 
 /** Short, URL-safe id with a kind prefix, e.g. "dev_a1b2c3d4". */
 export function rid(prefix: string): string {
@@ -1049,8 +1067,8 @@ export class Store {
         currency: this.getCurrency(),
         locationId: this.getLocation()?.id ?? '',
         masjidName: this.getMasjid().name,
-        // The forced screen orientation for THIS device (from the web UI); 'auto' = follow the tablet.
-        orientation: (deviceId !== '' ? this.getDevice(deviceId)?.orientation : '') || 'auto',
+        // The UI rotation in degrees for THIS device (from the web UI); '0' = as mounted.
+        orientation: (deviceId !== '' ? this.getDevice(deviceId)?.orientation : '') || '0',
         // Global giving policy (per-campaign amounts/monthly/thank-you live on each campaign).
         manualEntryEnabled: g.manualEntryEnabled,
         namePolicy: g.namePolicy,
@@ -1109,14 +1127,14 @@ export class Store {
       configVersion: Number(r.config_version),
       identify: !!r.identify,
       revoked: !!r.revoked,
-      orientation: (DEVICE_ORIENTATIONS as readonly string[]).includes(String(r.orientation)) ? String(r.orientation) : 'auto',
+      orientation: normalizeOrientation(r.orientation),
     };
   }
 
-  /** Set a device's forced screen orientation (from the web UI). Bumps the config version so the
-   *  tablet refetches + applies it. Returns the updated device (null if unknown). */
+  /** Set a device's UI rotation (from the web UI). Bumps the config version so the tablet refetches +
+   *  applies it. Returns the updated device (null if unknown). */
   setDeviceOrientation(id: string, orientation: string): Device | null {
-    const o: DeviceOrientation = (DEVICE_ORIENTATIONS as readonly string[]).includes(orientation) ? (orientation as DeviceOrientation) : 'auto';
+    const o = normalizeOrientation(orientation);
     const res = this.db.prepare('UPDATE devices SET orientation = ? WHERE id = ?').run(o, id);
     if (res.changes === 0) return null;
     this.bumpConfigVersion(); // the tablet picks up the new orientation on its next heartbeat

@@ -413,7 +413,8 @@ async function main(): Promise<void> {
     const parsed = z
       .object({
         name: z.string().max(80).optional(),
-        orientation: z.enum(['auto', 'landscape', 'portrait', 'landscapeReverse', 'portraitReverse']).optional(),
+        // A UI rotation in degrees ('0'/'90'/'180'/'270'); legacy named values are normalised in the store.
+        orientation: z.string().max(20).optional(),
       })
       .safeParse(req.body);
     if (!parsed.success || (parsed.data.name === undefined && parsed.data.orientation === undefined)) {

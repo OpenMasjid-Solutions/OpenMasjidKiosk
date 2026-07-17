@@ -122,13 +122,15 @@ test('per-device: campaign targeting filters getKioskConfig, and orientation is 
   assert.ok(!idsFor(b.id).includes(targeted.id));
   assert.ok(idsFor(b.id).includes(everyone.id));
 
-  // Orientation: set from the "web", delivered to that device's config; invalid falls back to 'auto'.
-  assert.equal(s.getKioskConfig('', a.id).config.orientation, 'auto'); // default
-  s.setDeviceOrientation(a.id, 'portrait');
-  assert.equal(s.getKioskConfig('', a.id).config.orientation, 'portrait');
-  assert.equal(s.getKioskConfig('', b.id).config.orientation, 'auto'); // per-device, B unaffected
+  // Orientation: a UI rotation in degrees, delivered to that device's config; default '0' (no rotation).
+  assert.equal(s.getKioskConfig('', a.id).config.orientation, '0'); // default
+  s.setDeviceOrientation(a.id, '90');
+  assert.equal(s.getKioskConfig('', a.id).config.orientation, '90');
+  assert.equal(s.getKioskConfig('', b.id).config.orientation, '0'); // per-device, B unaffected
+  s.setDeviceOrientation(a.id, 'portrait'); // legacy named value normalises to degrees
+  assert.equal(s.getDevice(a.id)!.orientation, '90');
   s.setDeviceOrientation(a.id, 'nonsense');
-  assert.equal(s.getDevice(a.id)!.orientation, 'auto'); // invalid rejected
+  assert.equal(s.getDevice(a.id)!.orientation, '0'); // invalid → no rotation
 
   // Revoking a device scrubs its id from every campaign's targeting, so a campaign aimed only at it
   // doesn't silently vanish fleet-wide — it falls back to "all kiosks" ([] = all).

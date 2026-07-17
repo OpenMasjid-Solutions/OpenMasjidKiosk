@@ -43,14 +43,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import android.content.res.Configuration
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -161,8 +159,12 @@ private fun AmountStep(
         CenteredScene(modifier) { Numpad(campaign, currency, style, onConfirm = onChoose, onBack = { showPad = false }) }
         return
     }
-    Column(
-        modifier = modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 22.dp),
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+      // Derive portrait from the MEASURED size — not LocalConfiguration — so it reflects the in-app
+      // content rotation (RotatedRoot): the window may be landscape while the rotated UI is portrait.
+      val portrait = maxHeight > maxWidth
+      Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 22.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // Campaign logo (if the admin set one) sits above the title.
@@ -214,7 +216,6 @@ private fun AmountStep(
         // The big-tile grid fills the whole screen. In PORTRAIT use 2 wide columns (taller tiles read
         // better on a narrow screen); in landscape use 3 (2 when there are only a few presets).
         val presets = campaign.presetsMinor.take(6).ifEmpty { listOf(500L, 1000L, 2000L, 5000L, 10000L, 25000L) }
-        val portrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
         val cols = when {
             portrait -> if (presets.size <= 2) 1 else 2
             presets.size <= 4 -> 2
@@ -257,6 +258,7 @@ private fun AmountStep(
                 color = style.onSceneMuted.copy(alpha = 0.7f),
             )
         }
+      }
     }
 }
 
