@@ -39,7 +39,7 @@
       }
       h1 { font-size: 1.7rem; margin: 0 0 4px; text-align: center; font-weight: 700; }
       .sub { color: #aebacd; text-align: center; margin: 0 0 22px; font-size: 1.05rem; }
-      #pe { margin-bottom: 18px; min-height: 44px; }
+      #pe { margin-bottom: 18px; padding: 16px 14px; background: #071726; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 12px; }
       #msg { color: #fca5a5; font-size: 0.95rem; margin: 0 0 14px; text-align: center; min-height: 1.1em; }
       button { width: 100%; border: 0; border-radius: 16px; cursor: pointer; font-weight: 700; }
       #pay { background: var(--accent); color: #04121a; padding: 18px; font-size: 1.25rem; }
@@ -85,16 +85,27 @@
         }
         var stripe = Stripe(pk);
         var accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#22d3ee';
-        var elements = stripe.elements({
-          clientSecret: cs,
-          appearance: {
-            theme: 'night',
-            variables: { colorPrimary: accent, borderRadius: '12px', fontSizeBase: '17px', spacingUnit: '5px' },
+        // CARD ONLY: the single Card Element collects just the card number / expiry / CVC (+ postal).
+        // We deliberately do NOT use the Payment Element — it surfaces "Link", which offers bank-account
+        // (ACH) debits that are impractical at a donation kiosk. The Card Element has no Link, no bank,
+        // no wallets by construction. 3-D Secure still renders in-page (no external browser).
+        var elements = stripe.elements();
+        var card = elements.create('card', {
+          hidePostalCode: false,
+          style: {
+            base: {
+              color: '#f4f7fb',
+              fontSize: '18px',
+              fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+              iconColor: accent,
+              '::placeholder': { color: '#8593ad' },
+            },
+            invalid: { color: '#fca5a5', iconColor: '#fca5a5' },
           },
         });
-        var paymentElement = elements.create('payment', { layout: 'accordion' });
-        paymentElement.mount('#pe');
-        paymentElement.on('ready', function () { payBtn.disabled = false; });
+        card.mount('#pe');
+        card.on('ready', function () { payBtn.disabled = false; });
+        card.on('change', function (e) { msg.textContent = e && e.error && e.error.message ? e.error.message : ''; });
 
         var busy = false;
         function resetBtn() { busy = false; payBtn.disabled = false; payBtn.textContent = payLabel; }
@@ -102,7 +113,7 @@
           if (busy) return;
           busy = true; msg.textContent = '';
           payBtn.disabled = true; payBtn.innerHTML = '<span class="spin"></span>';
-          stripe.confirmPayment({ elements: elements, redirect: 'if_required' }).then(function (result) {
+          stripe.confirmCardPayment(cs, { payment_method: { card: card } }).then(function (result) {
             if (result.error) {
               resetBtn();
               msg.textContent = result.error.message || 'That card didn’t go through.';

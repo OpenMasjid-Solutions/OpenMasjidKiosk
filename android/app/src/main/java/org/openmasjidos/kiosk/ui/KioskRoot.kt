@@ -4,7 +4,6 @@
 package org.openmasjidos.kiosk.ui
 
 import android.app.Activity
-import android.content.pm.ActivityInfo
 import android.view.WindowManager
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,22 +71,8 @@ fun KioskRoot(
         }
     }
 
-    // Force the screen orientation set from the web UI (Admin → Devices), overriding the tablet's own
-    // auto-rotate. 'auto' hands control back to the device. A fixed value pins the wall kiosk upright
-    // regardless of how the tablet is mounted. (MainActivity handles the orientation config-change so
-    // this doesn't recreate the activity — Compose just recomposes and the layout adapts.)
-    val orientation = ui.config?.orientation ?: "auto"
-    LaunchedEffect(orientation) {
-        (ctx0 as? Activity)?.let { act ->
-            act.requestedOrientation = when (orientation) {
-                "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                "landscapeReverse" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
-                "portraitReverse" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
-                else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            }
-        }
-    }
+    // (The web-set screen orientation is applied at the Activity level in MainActivity — it observes
+    //  the same config flow and re-asserts on resume, which is more robust than a one-shot effect here.)
 
     // Keyed/manual card entry runs Stripe.js Payment Element in an in-app WebView (ManualCardWebView)
     // presented as a full-screen overlay below when a keyed PaymentIntent is pending. Unlike Stripe's

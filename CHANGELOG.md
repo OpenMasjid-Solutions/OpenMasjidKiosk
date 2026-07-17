@@ -3,6 +3,13 @@
 
 # Changelog
 
+## 0.9.14
+- **Typed card entry is card-only now.** Entering a card by hand no longer shows the “Link” / bank-
+  account (ACH) option — just the card number, expiry and CVC. (Requires updating the tablet app.)
+- **More reliable web-set orientation.** The screen orientation you choose in Admin → Devices is now
+  applied and re-asserted at the app level, so it takes hold and sticks. **Note:** orientation is a
+  tablet-app feature — a kiosk must be updated to this version for the web control to move it.
+
 ## 0.9.13
 - **Portrait-friendly kiosk.** The giving screen now adapts to a portrait tablet — the amount tiles
   re-flow into two tall columns and everything scales to fit (landscape still uses the wide layout).
