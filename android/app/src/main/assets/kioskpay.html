@@ -2,8 +2,9 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!-- Copyright (C) 2026 OpenMasjid-Solutions -->
 <!--
-  Keyed / typed card entry for the kiosk, using Stripe.js Payment Element — the same approach as
-  OpenMasjidDonations. Served LOCALLY by WebViewAssetLoader over https://appassets.androidplatform.net,
+  Keyed / typed card entry for the kiosk, using Stripe.js CARD ELEMENT (card fields only — deliberately
+  NOT the Payment Element, which surfaces Link / bank-account debits we don't want at a kiosk). Served
+  LOCALLY by WebViewAssetLoader over https://appassets.androidplatform.net,
   so it runs inside our own (Lock-Task allow-listed) activity and NEVER launches an external browser:
   card authentication (3-D Secure) renders in an iframe on this page (redirect:'if_required'). The card
   number is entered into Stripe's iframe and tokenised on-device — our code/server never see the PAN.

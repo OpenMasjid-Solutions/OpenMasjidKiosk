@@ -20,8 +20,9 @@ import androidx.webkit.WebViewClientCompat
 import org.openmasjidos.kiosk.ManualResult
 
 /**
- * Keyed / typed card entry via Stripe.js Payment Element in an in-app WebView (the OpenMasjidDonations
- * approach). The page is served LOCALLY over https://appassets.androidplatform.net by
+ * Keyed / typed card entry via Stripe.js Card Element (card fields only — NOT the Payment Element,
+ * which surfaces Link / bank debits) in an in-app WebView. The page is served LOCALLY over
+ * https://appassets.androidplatform.net by
  * [WebViewAssetLoader], so it runs inside our own (Lock-Task allow-listed) activity and never launches
  * an external browser — card authentication (3-D Secure) renders in an iframe on the page. That's why
  * this works on a device-owner kiosk where Stripe's PaymentSheet (which opens a Chrome Custom Tab for

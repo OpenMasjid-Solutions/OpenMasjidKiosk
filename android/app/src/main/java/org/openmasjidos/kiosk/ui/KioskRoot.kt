@@ -74,11 +74,12 @@ fun KioskRoot(
     // (The web-set screen orientation is applied at the Activity level in MainActivity — it observes
     //  the same config flow and re-asserts on resume, which is more robust than a one-shot effect here.)
 
-    // Keyed/manual card entry runs Stripe.js Payment Element in an in-app WebView (ManualCardWebView)
-    // presented as a full-screen overlay below when a keyed PaymentIntent is pending. Unlike Stripe's
-    // PaymentSheet (which opens an external Chrome Custom Tab for 3DS/Link that a device-owner Lock
-    // Task kiosk blocks), the WebView keeps everything in-app. The VM verifies the result server-side
-    // before recording, same as the reader. The PAN is entered into Stripe's iframe, never our code.
+    // Keyed/manual card entry runs Stripe.js Card Element (card fields only — no Link/bank) in an in-app
+    // WebView (ManualCardWebView), presented as a full-screen overlay below when a keyed PaymentIntent is
+    // pending. Unlike Stripe's PaymentSheet (which opens an external Chrome Custom Tab for 3DS that a
+    // device-owner Lock Task kiosk blocks), the WebView keeps everything in-app. The VM verifies the
+    // result server-side before recording, same as the reader. The PAN is entered into Stripe's iframe,
+    // never our code.
     val manual = ui.giving.manual
 
     Box(modifier = modifier) {
@@ -129,7 +130,7 @@ fun KioskRoot(
                 }
             }
         }
-        // Keyed card entry (Stripe.js Payment Element in a WebView) — a full-screen overlay on top of
+        // Keyed card entry (Stripe.js Card Element in a WebView) — a full-screen overlay on top of
         // everything while a keyed PaymentIntent is pending. Stays in-app, so Lock Task never blocks it.
         manual?.let { m ->
             ManualCardWebView(
