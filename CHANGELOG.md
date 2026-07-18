@@ -3,6 +3,11 @@
 
 # Changelog
 
+## 0.9.17
+- **Bigger, easier on-screen keyboard.** The kiosk keyboard now has taller, thumb-friendly keys and a
+  **number row** across the top, so donors can type a name or email quickly. (Requires updating the
+  tablet app.)
+
 ## 0.9.16
 - **On-screen keyboard fixed for rotated kiosks.** When you rotate the screen, the donor name/email
   step now uses the kiosk's **own** on-screen keyboard, which rotates with the giving screen — the

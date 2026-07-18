@@ -46,22 +46,26 @@ fun KioskKeyboard(
     var shift by remember { mutableStateOf(false) }
     var symbols by remember { mutableStateOf(false) }
 
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!symbols) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // A persistent number row, so digits are always one tap away (no need to switch layers).
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                "1234567890".forEach { c -> PlainKey(c.toString(), style, onKey) }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 "qwertyuiop".forEach { c -> LetterKey(c, shift, style, onKey) { shift = false } }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Spacer(0.5f)
                 "asdfghjkl".forEach { c -> LetterKey(c, shift, style, onKey) { shift = false } }
                 Spacer(0.5f)
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Key("⇧", style, weight = 1.5f, active = shift, onClick = { shift = !shift })
                 "zxcvbnm".forEach { c -> LetterKey(c, shift, style, onKey) { shift = false } }
                 Key("⌫", style, weight = 1.5f, onClick = onBackspace)
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Key("123", style, weight = 1.5f, onClick = { symbols = true })
                 Key("@", style, onClick = { onKey("@") })
                 Key("space", style, weight = 4f, onClick = { onKey(" ") })
@@ -69,18 +73,18 @@ fun KioskKeyboard(
                 Key("Done", style, weight = 2f, accent = true, onClick = onDone)
             }
         } else {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 "1234567890".forEach { c -> PlainKey(c.toString(), style, onKey) }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 "@.-_+/#%&".forEach { c -> PlainKey(c.toString(), style, onKey) }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Key("ABC", style, weight = 1.5f, onClick = { symbols = false })
                 ",?!':;".forEach { c -> PlainKey(c.toString(), style, onKey) }
                 Key("⌫", style, weight = 1.5f, onClick = onBackspace)
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Key("ABC", style, weight = 1.5f, onClick = { symbols = false })
                 Key("space", style, weight = 5f, onClick = { onKey(" ") })
                 Key("Done", style, weight = 2f, accent = true, onClick = onDone)
@@ -110,12 +114,13 @@ private fun RowScope.Key(label: String, style: SceneStyle, weight: Float = 1f, a
         shape = RoundedCornerShape(8.dp),
         color = if (accent) style.accent else style.tile,
         contentColor = if (accent) style.onAccent else style.tileInk,
-        modifier = Modifier.weight(weight).height(54.dp),
+        // Tall, thumb-friendly keys so a donor can type quickly and accurately.
+        modifier = Modifier.weight(weight).height(72.dp),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(
                 label,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = if (accent || active) FontWeight.Bold else FontWeight.Medium,
             )
         }
