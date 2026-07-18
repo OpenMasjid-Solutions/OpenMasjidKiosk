@@ -99,6 +99,17 @@ function relLuminance(hex: string): number {
 /** A friendly starting set for a brand-new campaign (major units; the admin edits them). */
 const DEFAULT_NEW_PRESETS = ['5', '10', '25', '50', '100'];
 
+/** The campaign editor's tabs — the settings are grouped so the window stays tidy at any size. */
+type CampaignTabId = 'design' | 'amounts' | 'type' | 'payments' | 'kiosks' | 'message';
+const CAMPAIGN_TABS: { id: CampaignTabId; label: string }[] = [
+  { id: 'design', label: 'Design' },
+  { id: 'amounts', label: 'Amounts' },
+  { id: 'type', label: 'Type & fees' },
+  { id: 'payments', label: 'Payments' },
+  { id: 'kiosks', label: 'Kiosks' },
+  { id: 'message', label: 'Message' },
+];
+
 // ── The section ─────────────────────────────────────────────────────────────────
 export function CampaignsSection() {
   const [data, setData] = useState<CampaignsData | null>(null);
@@ -203,6 +214,7 @@ export function CampaignsSection() {
           devices={data.devices}
           primaryAccountId={data.primaryAccountId}
           hasLocal={data.hasLocal}
+          footerText={data.footerText}
           onClose={() => setEditor(undefined)}
           onSaved={() => {
             setEditor(undefined);
@@ -506,6 +518,7 @@ function CampaignEditor({
   devices,
   primaryAccountId,
   hasLocal,
+  footerText,
   onClose,
   onSaved,
 }: {
@@ -515,6 +528,7 @@ function CampaignEditor({
   devices: { id: string; name: string }[];
   primaryAccountId: string;
   hasLocal: boolean;
+  footerText: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -544,6 +558,7 @@ function CampaignEditor({
   const [monthlyEnabled, setMonthlyEnabled] = useState(campaign?.monthlyEnabled ?? true);
   const [thankYou, setThankYou] = useState(campaign?.thankYouMessage ?? '');
   const [live, setLive] = useState(campaign ? campaign.live : true);
+  const [tab, setTab] = useState<CampaignTabId>('design');
 
   const [busy, setBusy] = useState(false);
   const [del, setDel] = useState(false);
@@ -592,12 +607,14 @@ function CampaignEditor({
     }
     const presetsMinor = presets.map((p) => toMinor(p, currency)).filter((n) => n > 0);
     if (presetsMinor.length === 0) {
+      setTab('amounts'); // surface the offending field even if the admin was on another tab
       setErr('Add at least one suggested amount.');
       return;
     }
     const min = toMinor(customMin, currency) || 100;
     const max = toMinor(customMax, currency) || 1_000_000;
     if (allowCustom && max < min) {
+      setTab('amounts');
       setErr('The maximum custom amount must be at least the minimum.');
       return;
     }
@@ -667,279 +684,340 @@ function CampaignEditor({
         </div>
 
         <div className="modal-body">
-          <p className="hint" style={{ marginBlockEnd: '0.5rem' }}>Live preview</p>
-          <KioskPreview
-            title={title}
-            presetsMinor={previewPresets}
-            allowCustom={allowCustom}
-            monthlyEnabled={monthlyEnabled}
-            thankYou={thankYou}
-            currency={currency}
-            primaryColor={primaryColor}
-            accentColor={accentColor}
-            backgroundImage={backgroundImage}
-            logo={logo}
-          />
+          <div className="ce-grid">
+            <aside className="ce-preview">
+              <p className="hint" style={{ marginBlockEnd: '0.6rem', textAlign: 'center' }}>Live preview — what your kiosks show</p>
+              <DualPreview
+                title={title}
+                description={description}
+                presetsMinor={previewPresets}
+                allowCustom={allowCustom}
+                // The reader (and so Monthly) can't take a cross-account campaign — mirror the kiosk,
+                // which only offers Monthly when the campaign is reader-capable.
+                monthlyEnabled={monthlyEnabled && !crossAccount}
+                thankYou={thankYou}
+                currency={currency}
+                primaryColor={primaryColor}
+                accentColor={accentColor}
+                theme={theme}
+                backgroundImage={backgroundImage}
+                logo={logo}
+                footerText={footerText}
+              />
+            </aside>
 
-          <div className="field" style={{ marginBlockStart: '1rem' }}>
-            <label className="label" htmlFor="c-title">Title</label>
-            <input id="c-title" className="input" value={title} maxLength={TITLE_MAX} placeholder="e.g. General fund, Zakat, Building fund" onChange={(e) => setTitle(e.target.value)} autoFocus />
-            <span className={title.length > TITLE_MAX ? 'form-error' : 'hint'} style={{ textAlign: 'end' }}>{title.length}/{TITLE_MAX} — this is the tab name, so keep it short.</span>
-          </div>
+            <div className="ce-form">
+              <div className="field">
+                <label className="label" htmlFor="c-title">Title</label>
+                <input id="c-title" className="input" value={title} maxLength={TITLE_MAX} placeholder="e.g. General fund, Zakat, Building fund" onChange={(e) => setTitle(e.target.value)} autoFocus />
+                <span className={title.length > TITLE_MAX ? 'form-error' : 'hint'} style={{ textAlign: 'end' }}>{title.length}/{TITLE_MAX} — this is the tab name, so keep it short.</span>
+              </div>
 
-          <div className="field">
-            <label className="label" htmlFor="c-type">Type</label>
-            <select id="c-type" className="input" value={type} onChange={(e) => setType(e.target.value as CampaignType)}>
-              <option value="donation">Donation</option>
-              <option value="zakat">Zakat</option>
-              <option value="tuition">Tuition</option>
-            </select>
-            <p className="hint">
-              {type === 'zakat'
-                ? 'Zakat always covers the card fee, so the full Zakat reaches the masjid.'
-                : type === 'tuition'
-                  ? 'For tuition you can require the payer to cover the card fee.'
-                  : 'For a donation you can offer donors the option to cover the card fee.'}
-            </p>
-          </div>
-
-          <div className="field">
-            <label className="label" htmlFor="c-desc">Description <span className="faint">(optional)</span></label>
-            <textarea id="c-desc" className="input" rows={3} maxLength={DESC_MAX} value={description} placeholder="A short line about this appeal." onChange={(e) => setDescription(e.target.value)} />
-            <span className={description.length > DESC_MAX ? 'form-error' : 'hint'} style={{ textAlign: 'end' }}>{description.length}/{DESC_MAX} — keep it brief so it fits the kiosk screen without being cut off.</span>
-          </div>
-
-          <ImageField id="c-cover" label="Cover image (optional)" hint="Shown on the giving card." value={coverImage} onChange={setCoverImage} />
-          <ImageField id="c-bg" label="Background image (optional)" hint="This tab's full-screen background. Leave empty for the default look." value={backgroundImage} onChange={setBackgroundImage} />
-          <ImageField id="c-logo" label="Campaign logo (optional)" hint="Shown at the top of this campaign. Leave empty to use your masjid logo." value={logo} onChange={setLogo} />
-
-          <div className="field">
-            <span className="label">Suggested amounts <span className="faint">({currency})</span></span>
-            <div className="preset-grid">
-              {presets.map((p, i) => (
-                <div className="preset-input" key={i}>
-                  <span className="preset-sym" aria-hidden="true">{symbolFor(currency) || currency}</span>
-                  <input className="input" value={p} inputMode="decimal" aria-label={`Suggested amount ${i + 1}`} onChange={(e) => setPreset(i, e.target.value)} />
-                  <button className="preset-rm" onClick={() => removePreset(i)} aria-label="Remove amount" title="Remove">
-                    <X size={13} strokeWidth={3} />
+              <div className="ce-tabs" role="tablist" aria-label="Campaign settings">
+                {CAMPAIGN_TABS.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === t.id}
+                    className={`ce-tab${tab === t.id ? ' ce-tab--on' : ''}`}
+                    onClick={() => setTab(t.id)}
+                  >
+                    {t.label}
                   </button>
-                </div>
-              ))}
-            </div>
-            {presets.length < MAX_PRESETS && (
-              <button className="btn btn--ghost btn--sm" onClick={addPreset} style={{ marginBlockStart: '0.5rem' }}>
-                <Plus size={14} /> Add amount
-              </button>
-            )}
-          </div>
-
-          <Toggle label="Allow donors to enter their own amount" hint="Shows an “Other amount” number pad on the kiosk." checked={allowCustom} onChange={setAllowCustom} />
-          {allowCustom && (
-            <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
-              <div className="field" style={{ flex: 1, minWidth: '8rem' }}>
-                <label className="label" htmlFor="c-min">Minimum custom amount</label>
-                <input id="c-min" className="input" value={customMin} inputMode="decimal" onChange={(e) => setCustomMin(e.target.value.replace(/[^\d.]/g, ''))} />
-              </div>
-              <div className="field" style={{ flex: 1, minWidth: '8rem' }}>
-                <label className="label" htmlFor="c-max">Maximum custom amount</label>
-                <input id="c-max" className="input" value={customMax} inputMode="decimal" onChange={(e) => setCustomMax(e.target.value.replace(/[^\d.]/g, ''))} />
-              </div>
-            </div>
-          )}
-
-          <div className="field">
-            <span className="label">Colour theme <span className="faint">(presets)</span></span>
-            <div className="theme-presets">
-              {THEME_PRESETS.map((p) => (
-                <button
-                  key={p.name}
-                  type="button"
-                  className={`theme-preset${primaryColor === p.primary && accentColor === p.accent ? ' theme-preset--on' : ''}`}
-                  title={`${p.name} — sets the colours below (still editable)`}
-                  onClick={() => {
-                    setPrimaryColor(p.primary);
-                    setAccentColor(p.accent);
-                  }}
-                >
-                  <span className="theme-preset-sw" style={{ background: p.primary }} />
-                  <span className="theme-preset-sw" style={{ background: p.accent }} />
-                  <span className="theme-preset-name">{p.name}</span>
-                </button>
-              ))}
-            </div>
-            <p className="hint">Pick a preset to fill the two colours below — you can still fine-tune either one.</p>
-          </div>
-
-          <div className="field">
-            <span className="label">Primary colour <span className="faint">(background)</span></span>
-            <div className="accent-row">
-              <input type="color" className="accent-swatch-input" aria-label="Primary colour" value={primaryColor || DEFAULT_PRIMARY} onChange={(e) => setPrimaryColor(e.target.value)} />
-              <span className="hint" style={{ margin: 0 }}>{primaryColor ? primaryColor : 'Using the default background'}</span>
-              {primaryColor && (
-                <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPrimaryColor('')}>
-                  Reset to default
-                </button>
-              )}
-            </div>
-            <p className="hint">Tints the giving screen's background — a soft wash of this colour behind the amount tiles.</p>
-          </div>
-
-          <div className="field">
-            <span className="label">Accent colour <span className="faint">(buttons)</span></span>
-            <div className="accent-row">
-              <input type="color" className="accent-swatch-input" aria-label="Accent colour" value={accentColor || DEFAULT_ACCENT} onChange={(e) => setAccentColor(e.target.value)} />
-              <span className="hint" style={{ margin: 0 }}>{accentColor ? accentColor : 'Using your default accent'}</span>
-              {accentColor && (
-                <button type="button" className="btn btn--ghost btn--sm" onClick={() => setAccentColor('')}>
-                  Reset to default
-                </button>
-              )}
-            </div>
-            <p className="hint">The colour of the “Donate” band on each amount tile, and the buttons.</p>
-          </div>
-
-          <div className="field">
-            <label className="label" htmlFor="c-theme">Appearance</label>
-            <select id="c-theme" className="input" value={theme} onChange={(e) => setTheme(e.target.value as CampaignTheme)}>
-              <option value="auto">Auto — bright, or dark over a dark background image</option>
-              <option value="light">Bright (light)</option>
-              <option value="dark">Dark</option>
-            </select>
-            <p className="hint">The kiosk defaults to a bright, vibrant look. Choose Dark for a calm night-time screen.</p>
-          </div>
-
-          {isMain ? (
-            <p className="hint">Your main campaign always shows on every kiosk.</p>
-          ) : devices.length === 0 ? (
-            <p className="hint">Pair a kiosk (Devices tab) to choose which kiosks show this campaign.</p>
-          ) : (
-            <div className="field">
-              <span className="label">Show on which kiosks</span>
-              <label className="toggle-row" style={{ marginBlockStart: '0.2rem' }}>
-                <span className="toggle-text"><span className="toggle-label">All kiosks</span></span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={deviceIds.length === 0}
-                  aria-label="Show on all kiosks"
-                  className={`switch${deviceIds.length === 0 ? ' switch--on' : ''}`}
-                  onClick={() => setDeviceIds(deviceIds.length === 0 ? devices.map((d) => d.id) : [])}
-                >
-                  <span className="switch-knob" />
-                </button>
-              </label>
-              {deviceIds.length > 0 && (
-                <div className="device-pick">
-                  {devices.map((d) => {
-                    const on = deviceIds.includes(d.id);
-                    return (
-                      <button
-                        key={d.id}
-                        type="button"
-                        className={`device-chip${on ? ' device-chip--on' : ''}`}
-                        aria-pressed={on}
-                        onClick={() => setDeviceIds(on ? deviceIds.filter((x) => x !== d.id) : [...deviceIds, d.id])}
-                      >
-                        {d.name || 'Kiosk'}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              <p className="hint">“All kiosks” shows this appeal everywhere; otherwise pick the specific kiosks.</p>
-            </div>
-          )}
-
-          {showAccountPicker && (
-            <div className="field">
-              <label className="label" htmlFor="c-acct">Stripe account</label>
-              <select id="c-acct" className="input" value={stripeAccountId} onChange={(e) => setStripeAccountId(e.target.value)}>
-                <option value="">Primary account — the card reader's (recommended)</option>
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.label}
-                  </option>
                 ))}
-              </select>
-              {crossAccount && (
-                <p className="note-amber">
-                  This appeal uses a different Stripe account, so donations are taken by keyed card entry (typed card), not the reader. The reader only works
-                  for your primary account.
-                </p>
-              )}
-            </div>
-          )}
+              </div>
 
-          {/* Card-fee control, driven by the campaign type (the server re-derives + enforces it). */}
-          {type === 'zakat' ? (
-            <p className="hint">
-              Card fees are covered by the donor (required for Zakat) — the masjid receives the full Zakat. The kiosk
-              tells the donor the fee is added because it's Zakat.
-            </p>
-          ) : type === 'tuition' ? (
-            <Toggle
-              label="Require the payer to cover the card fee"
-              hint="Adds the card fee (≈2.9% + a small fixed fee) to the payment so the masjid keeps the full amount. Leave off and the masjid absorbs the fee."
-              checked={forceCoverFees}
-              onChange={setForceCoverFees}
-            />
-          ) : (
-            <Toggle
-              label="Offer donors the option to cover card fees"
-              hint="Shows a toggle on the tablet so the donor can add an estimated card fee (≈2.9% + a small fixed fee) — their choice."
-              checked={coverFees}
-              onChange={setCoverFees}
-            />
-          )}
+              <div className="ce-panel" role="tabpanel">
+                {tab === 'design' && (
+                  <>
+                    <div className="field">
+                      <span className="label">Colour theme <span className="faint">(presets)</span></span>
+                      <div className="theme-presets">
+                        {THEME_PRESETS.map((p) => (
+                          <button
+                            key={p.name}
+                            type="button"
+                            className={`theme-preset${primaryColor === p.primary && accentColor === p.accent ? ' theme-preset--on' : ''}`}
+                            title={`${p.name} — sets the colours below (still editable)`}
+                            onClick={() => {
+                              setPrimaryColor(p.primary);
+                              setAccentColor(p.accent);
+                            }}
+                          >
+                            <span className="theme-preset-sw" style={{ background: p.primary }} />
+                            <span className="theme-preset-sw" style={{ background: p.accent }} />
+                            <span className="theme-preset-name">{p.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="hint">Pick a preset to fill the two colours below — you can still fine-tune either one.</p>
+                    </div>
 
-          <Toggle
-            label="Offer a monthly (recurring) option"
-            hint="Monthly giving is taken on the card reader, so it isn't available on keyed-only or cross-account campaigns."
-            checked={monthlyEnabled}
-            onChange={setMonthlyEnabled}
-          />
+                    <div className="field">
+                      <span className="label">Primary colour <span className="faint">(background)</span></span>
+                      <div className="accent-row">
+                        <input type="color" className="accent-swatch-input" aria-label="Primary colour" value={primaryColor || DEFAULT_PRIMARY} onChange={(e) => setPrimaryColor(e.target.value)} />
+                        <span className="hint" style={{ margin: 0 }}>{primaryColor ? primaryColor : 'Using the default background'}</span>
+                        {primaryColor && (
+                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPrimaryColor('')}>
+                            Reset to default
+                          </button>
+                        )}
+                      </div>
+                      <p className="hint">Tints the giving screen's background — a soft wash of this colour behind the amount tiles.</p>
+                    </div>
 
-          <div className="field">
-            <label className="label" htmlFor="c-thanks">Custom thank-you for this campaign <span className="faint">(optional)</span></label>
-            <textarea id="c-thanks" className="input" rows={2} maxLength={500} value={thankYou} placeholder="Leave blank to use your default thank-you." onChange={(e) => setThankYou(e.target.value)} />
-          </div>
+                    <div className="field">
+                      <span className="label">Accent colour <span className="faint">(buttons)</span></span>
+                      <div className="accent-row">
+                        <input type="color" className="accent-swatch-input" aria-label="Accent colour" value={accentColor || DEFAULT_ACCENT} onChange={(e) => setAccentColor(e.target.value)} />
+                        <span className="hint" style={{ margin: 0 }}>{accentColor ? accentColor : 'Using your default accent'}</span>
+                        {accentColor && (
+                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setAccentColor('')}>
+                            Reset to default
+                          </button>
+                        )}
+                      </div>
+                      <p className="hint">The colour of the “Donate” band on each amount tile, and the buttons.</p>
+                    </div>
 
-          <Toggle
-            label="Live (visible to donors)"
-            hint={isMain ? 'Your main campaign is always shown, so this stays on.' : 'Hidden campaigns stay off the kiosk until you turn them on.'}
-            checked={isMain ? true : live}
-            onChange={setLive}
-            disabled={isMain}
-          />
+                    <div className="field">
+                      <label className="label" htmlFor="c-theme">Appearance</label>
+                      <select id="c-theme" className="input" value={theme} onChange={(e) => setTheme(e.target.value as CampaignTheme)}>
+                        <option value="auto">Auto — bright, or dark over a dark background image</option>
+                        <option value="light">Bright (light)</option>
+                        <option value="dark">Dark</option>
+                      </select>
+                      <p className="hint">The kiosk defaults to a bright, vibrant look. Choose Dark for a calm night-time screen.</p>
+                    </div>
 
-          {err && <p className="form-error">{err}</p>}
+                    <ImageField id="c-cover" label="Cover image (optional)" hint="Shown on the giving card." value={coverImage} onChange={setCoverImage} />
+                    <ImageField id="c-bg" label="Background image (optional)" hint="This tab's full-screen background. Leave empty for the default look." value={backgroundImage} onChange={setBackgroundImage} />
+                    <ImageField id="c-logo" label="Campaign logo (optional)" hint="Shown at the top of this campaign. Leave empty to use your masjid logo." value={logo} onChange={setLogo} />
+                  </>
+                )}
 
-          <div className="row-between" style={{ marginBlockStart: '0.6rem' }}>
-            {editing && !isMain ? (
-              confirmingDel ? (
+                {tab === 'amounts' && (
+                  <>
+                    <div className="field">
+                      <span className="label">Suggested amounts <span className="faint">({currency})</span></span>
+                      <div className="preset-grid">
+                        {presets.map((p, i) => (
+                          <div className="preset-input" key={i}>
+                            <span className="preset-sym" aria-hidden="true">{symbolFor(currency) || currency}</span>
+                            <input className="input" value={p} inputMode="decimal" aria-label={`Suggested amount ${i + 1}`} onChange={(e) => setPreset(i, e.target.value)} />
+                            <button className="preset-rm" onClick={() => removePreset(i)} aria-label="Remove amount" title="Remove">
+                              <X size={13} strokeWidth={3} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      {presets.length < MAX_PRESETS && (
+                        <button className="btn btn--ghost btn--sm" onClick={addPreset} style={{ marginBlockStart: '0.5rem' }}>
+                          <Plus size={14} /> Add amount
+                        </button>
+                      )}
+                    </div>
+
+                    <Toggle label="Allow donors to enter their own amount" hint="Shows a “Choose your own amount” number pad on the kiosk." checked={allowCustom} onChange={setAllowCustom} />
+                    {allowCustom && (
+                      <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
+                        <div className="field" style={{ flex: 1, minWidth: '8rem' }}>
+                          <label className="label" htmlFor="c-min">Minimum custom amount</label>
+                          <input id="c-min" className="input" value={customMin} inputMode="decimal" onChange={(e) => setCustomMin(e.target.value.replace(/[^\d.]/g, ''))} />
+                        </div>
+                        <div className="field" style={{ flex: 1, minWidth: '8rem' }}>
+                          <label className="label" htmlFor="c-max">Maximum custom amount</label>
+                          <input id="c-max" className="input" value={customMax} inputMode="decimal" onChange={(e) => setCustomMax(e.target.value.replace(/[^\d.]/g, ''))} />
+                        </div>
+                      </div>
+                    )}
+
+                    <Toggle
+                      label="Offer a monthly (recurring) option"
+                      hint="Monthly giving is taken on the card reader, so it isn't available on keyed-only or cross-account campaigns."
+                      checked={monthlyEnabled}
+                      onChange={setMonthlyEnabled}
+                    />
+                  </>
+                )}
+
+                {tab === 'type' && (
+                  <>
+                    <div className="field">
+                      <label className="label" htmlFor="c-type">Type</label>
+                      <select id="c-type" className="input" value={type} onChange={(e) => setType(e.target.value as CampaignType)}>
+                        <option value="donation">Donation</option>
+                        <option value="zakat">Zakat</option>
+                        <option value="tuition">Tuition</option>
+                      </select>
+                      <p className="hint">
+                        {type === 'zakat'
+                          ? 'Zakat always covers the card fee, so the full Zakat reaches the masjid.'
+                          : type === 'tuition'
+                            ? 'For tuition you can require the payer to cover the card fee.'
+                            : 'For a donation you can offer donors the option to cover the card fee.'}
+                      </p>
+                    </div>
+
+                    {/* Card-fee control, driven by the campaign type (the server re-derives + enforces it). */}
+                    {type === 'zakat' ? (
+                      <p className="hint">
+                        Card fees are covered by the donor (required for Zakat) — the masjid receives the full Zakat. The kiosk
+                        tells the donor the fee is added because it's Zakat.
+                      </p>
+                    ) : type === 'tuition' ? (
+                      <Toggle
+                        label="Require the payer to cover the card fee"
+                        hint="Adds the card fee (≈2.9% + a small fixed fee) to the payment so the masjid keeps the full amount. Leave off and the masjid absorbs the fee."
+                        checked={forceCoverFees}
+                        onChange={setForceCoverFees}
+                      />
+                    ) : (
+                      <Toggle
+                        label="Offer donors the option to cover card fees"
+                        hint="Shows a toggle on the tablet so the donor can add an estimated card fee (≈2.9% + a small fixed fee) — their choice."
+                        checked={coverFees}
+                        onChange={setCoverFees}
+                      />
+                    )}
+                  </>
+                )}
+
+                {tab === 'payments' && (
+                  <>
+                    {showAccountPicker ? (
+                      <div className="field">
+                        <label className="label" htmlFor="c-acct">Stripe account</label>
+                        <select id="c-acct" className="input" value={stripeAccountId} onChange={(e) => setStripeAccountId(e.target.value)}>
+                          <option value="">Primary account — the card reader's (recommended)</option>
+                          {accounts.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.label}
+                            </option>
+                          ))}
+                        </select>
+                        {crossAccount && (
+                          <p className="note-amber">
+                            This appeal uses a different Stripe account, so donations are taken by keyed card entry (typed card), not the reader. The reader only works
+                            for your primary account.
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="hint">
+                        No Stripe account is linked yet. Add one in <strong>OpenMasjidOS → Settings → Payments</strong>, then
+                        choose it here.
+                      </p>
+                    )}
+                    <p className="hint">
+                      Stripe accounts and secret keys are managed in <strong>OpenMasjidOS → Settings → Payments</strong> — they
+                      never live in this app. Here you just choose which linked account this campaign settles to.
+                    </p>
+                  </>
+                )}
+
+                {tab === 'kiosks' && (
+                  <>
+                    {isMain ? (
+                      <p className="hint">Your main campaign always shows on every kiosk.</p>
+                    ) : devices.length === 0 ? (
+                      <p className="hint">Pair a kiosk (Devices tab) to choose which kiosks show this campaign.</p>
+                    ) : (
+                      <div className="field">
+                        <span className="label">Show on which kiosks</span>
+                        <label className="toggle-row" style={{ marginBlockStart: '0.2rem' }}>
+                          <span className="toggle-text"><span className="toggle-label">All kiosks</span></span>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={deviceIds.length === 0}
+                            aria-label="Show on all kiosks"
+                            className={`switch${deviceIds.length === 0 ? ' switch--on' : ''}`}
+                            onClick={() => setDeviceIds(deviceIds.length === 0 ? devices.map((d) => d.id) : [])}
+                          >
+                            <span className="switch-knob" />
+                          </button>
+                        </label>
+                        {deviceIds.length > 0 && (
+                          <div className="device-pick">
+                            {devices.map((d) => {
+                              const on = deviceIds.includes(d.id);
+                              return (
+                                <button
+                                  key={d.id}
+                                  type="button"
+                                  className={`device-chip${on ? ' device-chip--on' : ''}`}
+                                  aria-pressed={on}
+                                  onClick={() => setDeviceIds(on ? deviceIds.filter((x) => x !== d.id) : [...deviceIds, d.id])}
+                                >
+                                  {d.name || 'Kiosk'}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                        <p className="hint">New campaigns show on <strong>all kiosks</strong> by default. Turn that off to pick only the kiosks that should show this appeal — the rest never see it.</p>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {tab === 'message' && (
+                  <>
+                    <div className="field">
+                      <label className="label" htmlFor="c-desc">Description <span className="faint">(optional)</span></label>
+                      <textarea id="c-desc" className="input" rows={3} maxLength={DESC_MAX} value={description} placeholder="A short line about this appeal." onChange={(e) => setDescription(e.target.value)} />
+                      <span className={description.length > DESC_MAX ? 'form-error' : 'hint'} style={{ textAlign: 'end' }}>{description.length}/{DESC_MAX} — keep it brief so it fits the kiosk screen without being cut off.</span>
+                    </div>
+
+                    <div className="field">
+                      <label className="label" htmlFor="c-thanks">Custom thank-you for this campaign <span className="faint">(optional)</span></label>
+                      <textarea id="c-thanks" className="input" rows={2} maxLength={500} value={thankYou} placeholder="Leave blank to use your default thank-you." onChange={(e) => setThankYou(e.target.value)} />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <Toggle
+                label="Live (visible to donors)"
+                hint={isMain ? 'Your main campaign is always shown, so this stays on.' : 'Hidden campaigns stay off the kiosk until you turn them on.'}
+                checked={isMain ? true : live}
+                onChange={setLive}
+                disabled={isMain}
+              />
+
+              {err && <p className="form-error">{err}</p>}
+
+              <div className="row-between" style={{ marginBlockStart: '0.6rem' }}>
+                {editing && !isMain ? (
+                  confirmingDel ? (
+                    <div className="row" style={{ gap: '0.4rem' }}>
+                      <button className="btn btn--sm device-danger" onClick={() => void remove()} disabled={del}>
+                        {del ? 'Deleting…' : 'Confirm delete'}
+                      </button>
+                      <button className="btn btn--ghost btn--sm" onClick={() => setConfirmingDel(false)} disabled={del}>
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button className="btn btn--ghost btn--sm device-remove-btn" onClick={() => setConfirmingDel(true)}>
+                      <Trash2 size={14} aria-hidden="true" /> Delete
+                    </button>
+                  )
+                ) : (
+                  <span />
+                )}
                 <div className="row" style={{ gap: '0.4rem' }}>
-                  <button className="btn btn--sm device-danger" onClick={() => void remove()} disabled={del}>
-                    {del ? 'Deleting…' : 'Confirm delete'}
-                  </button>
-                  <button className="btn btn--ghost btn--sm" onClick={() => setConfirmingDel(false)} disabled={del}>
+                  <button className="btn btn--ghost btn--sm" onClick={onClose} disabled={busy || del}>
                     Cancel
                   </button>
+                  <button className="btn btn--primary btn--sm" onClick={() => void save()} disabled={busy || del}>
+                    {busy ? 'Saving…' : editing ? 'Save campaign' : 'Create campaign'}
+                  </button>
                 </div>
-              ) : (
-                <button className="btn btn--ghost btn--sm device-remove-btn" onClick={() => setConfirmingDel(true)}>
-                  <Trash2 size={14} aria-hidden="true" /> Delete
-                </button>
-              )
-            ) : (
-              <span />
-            )}
-            <div className="row" style={{ gap: '0.4rem' }}>
-              <button className="btn btn--ghost btn--sm" onClick={onClose} disabled={busy || del}>
-                Cancel
-              </button>
-              <button className="btn btn--primary btn--sm" onClick={() => void save()} disabled={busy || del}>
-                {busy ? 'Saving…' : editing ? 'Save campaign' : 'Create campaign'}
-              </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1031,21 +1109,160 @@ function ImageField({ id, label, hint, value, onChange }: { id: string; label: s
   );
 }
 
-/** A small, dark mock of the tablet's giving screen — reflects the campaign's title, logo,
- *  background, accent colour and amounts, so the admin can judge it at a glance. */
-function KioskPreview({
+// ── Faithful giving-screen preview (mirrors the Android kiosk exactly) ─────────────
+// These are the kiosk's own colours (android/.../GivingHome.kt `sceneStyleFor` + AmountTile), kept in
+// sync so the admin sees the real thing: white glassy tiles with big BLACK numbers on a bright primary
+// wash, or a calm dark scene with elevated tiles when the campaign is Dark / has a background image.
+const INK_BLACK = '#0a0f14';
+const INK_LIGHT = '#0c4a6e'; // dark ink for text on a LIGHT accent
+const INK_MUTED_LIGHT = '#44515f';
+const INK_DARK = '#f4f7fb'; // near-white
+const INK_MUTED_DARK = '#aebacd';
+const SURFACE_OVERLAY_DARK = '#0f2040';
+const SCENE_DARK = 'linear-gradient(155deg, #0c3a4d, #082230 60%, #020a12)';
+
+type Scene = {
+  accent: string;
+  onAccent: string;
+  onScene: string;
+  onSceneMuted: string;
+  tile: string;
+  tileInk: string;
+  tileBorder: string;
+  tileShadow: string;
+  background: string;
+  bgCover: boolean;
+};
+
+/** Resolve the giving-screen colour set from the campaign, exactly as the tablet does (bright primary
+ *  wash with white tiles + black numbers, or the calm dark scene with elevated tiles). */
+function computeScene(primaryColor: string, accentColor: string, theme: CampaignTheme, bgUrl: string): Scene {
+  const accent = accentColor || DEFAULT_ACCENT;
+  const onAccent = relLuminance(accent) > 0.4 ? INK_LIGHT : '#ffffff';
+  const bright = !bgUrl && theme !== 'dark';
+  if (!bright) {
+    // Dark theme, or a background image → the calm dark scene, light text on solid elevated tiles.
+    return {
+      accent,
+      onAccent,
+      onScene: INK_DARK,
+      onSceneMuted: INK_MUTED_DARK,
+      tile: SURFACE_OVERLAY_DARK,
+      tileInk: INK_DARK,
+      tileBorder: 'rgba(255,255,255,0.08)',
+      tileShadow: 'none',
+      background: bgUrl ? `linear-gradient(rgba(4,14,20,0.5), rgba(4,14,20,0.68)), url("${bgUrl}")` : SCENE_DARK,
+      bgCover: !!bgUrl,
+    };
+  }
+  // Bright: a soft PRIMARY-colour wash. A light base → dark text; a dark base → a deepened wash + white
+  // text (so headings stay readable). Tiles are white with big black numbers either way.
+  const sceneBase = primaryColor || mixHex(accent, '#ffffff', 0.35);
+  const lightScene = relLuminance(sceneBase) > 0.35;
+  return {
+    accent,
+    onAccent,
+    onScene: lightScene ? INK_BLACK : '#ffffff',
+    onSceneMuted: lightScene ? INK_MUTED_LIGHT : 'rgba(255,255,255,0.85)',
+    tile: 'rgba(255,255,255,0.92)',
+    tileInk: INK_BLACK,
+    tileBorder: 'rgba(0,0,0,0.06)',
+    tileShadow: '0 6px 14px rgba(0,0,0,0.14)',
+    background: lightScene
+      ? `linear-gradient(180deg, ${mixHex(sceneBase, '#ffffff', 0.45)}, ${sceneBase}, ${mixHex(sceneBase, '#ffffff', 0.12)})`
+      : `linear-gradient(180deg, ${mixHex(sceneBase, '#000000', 0.06)}, ${sceneBase}, ${mixHex(sceneBase, '#000000', 0.28)})`,
+    bgCover: false,
+  };
+}
+
+/** One orientation of the kiosk giving screen, laid out and coloured like the tablet. Container queries
+ *  size everything to the frame, so the same markup reads right at any preview size — a true scale
+ *  model of the mounted tablet, including the portrait 1–2 / landscape 2–3 column split. */
+function GivingPreview({
+  orientation,
+  scene,
   title,
+  description,
   presetsMinor,
   allowCustom,
   monthlyEnabled,
-  thankYou,
   currency,
-  primaryColor,
-  accentColor,
-  backgroundImage,
   logo,
+  footerText,
 }: {
+  orientation: 'portrait' | 'landscape';
+  scene: Scene;
   title: string;
+  description: string;
+  presetsMinor: number[];
+  allowCustom: boolean;
+  monthlyEnabled: boolean;
+  currency: string;
+  logo: string;
+  footerText: string;
+}) {
+  const portrait = orientation === 'portrait';
+  const safeLogo = safeImageUrl(logo);
+  const n = presetsMinor.length;
+  const cols = portrait ? (n <= 2 ? 1 : 2) : n <= 4 ? 2 : 3;
+  const screenStyle: CSSProperties = {
+    background: scene.background,
+    color: scene.onScene,
+    ...(scene.bgCover ? { backgroundSize: 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' } : {}),
+  };
+  return (
+    <figure className={`gv-frame gv-frame--${orientation}`}>
+      <div className="gv-screen" style={screenStyle}>
+        {safeLogo && <img className="gv-logo" src={safeLogo} alt="" />}
+        <div className="gv-title" style={{ color: scene.onScene }}>
+          {title.trim() || 'Support your masjid'}
+        </div>
+        <div className="gv-desc" style={{ color: scene.onSceneMuted }}>
+          {description.trim() || 'Choose an amount to give'}
+        </div>
+        {monthlyEnabled && (
+          <div className="gv-seg" style={{ color: scene.onScene }}>
+            <span className="gv-seg__opt gv-seg__opt--on" style={{ background: scene.accent, color: scene.onAccent }}>
+              One-time
+            </span>
+            <span className="gv-seg__opt" style={{ color: scene.onScene }}>Monthly</span>
+          </div>
+        )}
+        <div className="gv-grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
+          {n === 0 ? (
+            <div className="gv-empty" style={{ color: scene.onSceneMuted }}>Add an amount to see it here</div>
+          ) : (
+            presetsMinor.map((m, i) => (
+              <div
+                className="gv-tile"
+                key={i}
+                style={{ background: scene.tile, boxShadow: `inset 0 0 0 1px ${scene.tileBorder}, ${scene.tileShadow}` }}
+              >
+                <span className="gv-tile-amt" style={{ color: scene.tileInk }}>{formatMoney(m, currency)}</span>
+                <span className="gv-tile-donate" style={{ background: scene.accent, color: scene.onAccent }}>Donate</span>
+              </div>
+            ))
+          )}
+        </div>
+        {allowCustom && (
+          <div className="gv-pill" style={{ color: scene.onScene, borderColor: scene.accent }}>
+            Choose your own amount
+          </div>
+        )}
+        {footerText.trim() && (
+          <div className="gv-footer" style={{ color: scene.onSceneMuted }}>{footerText.trim()}</div>
+        )}
+      </div>
+      <figcaption className="gv-cap">{portrait ? 'Portrait' : 'Landscape'}</figcaption>
+    </figure>
+  );
+}
+
+/** Both orientations side-by-side, coloured from the campaign — a true-to-device look at what each
+ *  mounted tablet will show (a kiosk shows one, chosen by its Rotate-screen setting in Devices). */
+function DualPreview(props: {
+  title: string;
+  description: string;
   presetsMinor: number[];
   allowCustom: boolean;
   monthlyEnabled: boolean;
@@ -1053,58 +1270,32 @@ function KioskPreview({
   currency: string;
   primaryColor: string;
   accentColor: string;
+  theme: CampaignTheme;
   backgroundImage: string;
   logo: string;
+  footerText: string;
 }) {
-  const bg = safeImageUrl(backgroundImage);
-  const safeLogo = safeImageUrl(logo);
-  // Match the kiosk (GivingHome): with no primary set, the background derives from a light tint of the
-  // accent. A clearly-light base → a light wash with dark text; a darker base → a deepened wash with
-  // light text (so headings stay readable, exactly as the device chooses).
-  const sceneBase = primaryColor || mixHex(accentColor || DEFAULT_ACCENT, '#ffffff', 0.35);
-  const lightScene = relLuminance(sceneBase) > 0.35;
-  const screenStyle: CSSProperties = bg
-    ? { backgroundImage: `linear-gradient(rgba(4,14,20,0.5), rgba(4,14,20,0.68)), url("${bg}")`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' }
-    : lightScene
-      ? { background: `linear-gradient(180deg, ${mixHex(sceneBase, '#ffffff', 0.45)}, ${sceneBase}, ${mixHex(sceneBase, '#ffffff', 0.12)})` }
-      : { background: `linear-gradient(180deg, ${mixHex(sceneBase, '#000000', 0.06)}, ${sceneBase}, ${mixHex(sceneBase, '#000000', 0.28)})` };
-  const accentBg: CSSProperties | undefined = accentColor ? { background: accentColor } : undefined;
-  const accentOn: CSSProperties | undefined = accentColor ? { background: accentColor, color: '#04121a' } : undefined;
-  // Bright (no bg image) = white tiles in both cases; text is dark on a light scene, white on a dark one.
-  const screenClass = bg ? 'kp-screen' : `kp-screen kp-screen--tiles${lightScene ? ' kp-screen--bright' : ' kp-screen--ondark'}`;
-
+  const scene = computeScene(props.primaryColor, props.accentColor, props.theme, safeImageUrl(props.backgroundImage));
+  const shared = {
+    scene,
+    title: props.title,
+    description: props.description,
+    presetsMinor: props.presetsMinor,
+    allowCustom: props.allowCustom,
+    monthlyEnabled: props.monthlyEnabled,
+    currency: props.currency,
+    logo: props.logo,
+    footerText: props.footerText,
+  };
   return (
-    <div className="kiosk-preview" aria-hidden="true">
-      <div className={screenClass} style={screenStyle}>
-        {safeLogo && <img className="kp-logo" src={safeLogo} alt="" />}
-        <div className="kp-title">{title.trim() || 'Support your masjid'}</div>
-        <div className="kp-sub">Choose an amount to give</div>
-        {monthlyEnabled && (
-          <div className="kp-freq">
-            <span className="kp-freq__seg kp-freq__seg--on" style={accentOn}>One-time</span>
-            <span className="kp-freq__seg">Monthly</span>
-          </div>
-        )}
-        <div className="kp-grid">
-          {presetsMinor.length === 0 ? (
-            <div className="kp-empty">Add a suggested amount to see it here.</div>
-          ) : (
-            presetsMinor.map((m, i) => (
-              <div className="kp-tile" key={i}>
-                <span className="kp-tile-amt">{formatMoney(m, currency)}</span>
-                <span className="kp-tile-donate" style={accentOn}>Donate</span>
-              </div>
-            ))
-          )}
-        </div>
-        {allowCustom && (
-          <div className="kp-other" style={accentBg}>
-            Other amount
-          </div>
-        )}
+    <div className="gv-previews" aria-hidden="true">
+      <div className="gv-row">
+        <GivingPreview orientation="landscape" {...shared} />
+        <GivingPreview orientation="portrait" {...shared} />
       </div>
-      <div className="kp-thanks">
-        <span className="kp-check">✓</span> {thankYou.trim() || 'JazākAllāhu khayran — thank you for your generous donation.'}
+      <div className="gv-thanks">
+        <span className="gv-check">✓</span>{' '}
+        {props.thankYou.trim() || 'JazākAllāhu khayran — thank you for your generous donation.'}
       </div>
     </div>
   );

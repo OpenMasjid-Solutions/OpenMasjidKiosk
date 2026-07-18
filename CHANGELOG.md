@@ -3,6 +3,16 @@
 
 # Changelog
 
+## 0.9.18
+- **Reimagined campaign designer.** The editor is now a roomy two-pane window: tabbed settings
+  (Design · Amounts · Type & fees · Payments · Kiosks · Message) beside a **live, true-to-device
+  preview of both the portrait and landscape giving screens**. The preview now mirrors the tablet
+  exactly — real two-tone tiles, colours, per-orientation columns, and bright/dark scenes.
+- **Per-kiosk campaign targeting, both ways.** Each campaign's new **Kiosks** tab sets exactly which
+  kiosks show it (new campaigns go to **all kiosks** by default; turn that off to pick specific ones);
+  the **Devices** page now lists which campaigns each kiosk is currently showing.
+- Admin-panel only — no tablet app update is needed for this release.
+
 ## 0.9.17
 - **Bigger, easier on-screen keyboard.** The kiosk keyboard now has taller, thumb-friendly keys and a
   **number row** across the top, so donors can type a name or email quickly. (Requires updating the

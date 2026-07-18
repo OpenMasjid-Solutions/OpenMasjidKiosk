@@ -362,6 +362,17 @@ h1, h2, h3, p, ul { margin: 0; }
   background: var(--glass-bg-inset); border: 1px solid var(--color-border);
 }
 
+/* Which campaigns a kiosk is showing (Devices list). Read-only pills with the campaign's accent dot. */
+.device-campaigns { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-block-start: 0.5rem; }
+.device-campaigns__label { font-size: 0.82rem; color: var(--color-ink-muted); }
+.camp-pill {
+  display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.22rem 0.6rem;
+  border-radius: 999px; background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
+  font-size: 0.82rem; color: var(--color-ink);
+}
+.camp-pill__dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15); }
+.camp-pill__main { color: var(--color-gold); font-weight: 600; }
+
 /* Theme presets (campaign editor): a row of two-swatch chips that fill the colour fields. */
 .theme-presets { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .theme-preset {
@@ -431,47 +442,47 @@ button.status-pill:hover { filter: brightness(1.08); }
 }
 .switch--on .switch-knob { inset-inline-start: calc(100% - 1.28rem); }
 
-/* The mini kiosk mock in the live preview */
-.kiosk-preview { display: flex; flex-direction: column; gap: 0.7rem; }
-.kp-screen {
-  border-radius: 16px; padding: 1.1rem 1rem 1.2rem; text-align: center;
-  background: linear-gradient(160deg, #0b1f1a, #071b24 60%, #05121a);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+/* ── Live giving-screen preview (a true-to-device scale model, both orientations) ────
+   The colours come from campaigns.tsx computeScene() (which mirrors the Android kiosk); the sizes here
+   use container-query units (cq*) so the exact same markup reads correctly at any frame size — the
+   preview is a faithful miniature of the mounted tablet, columns and all. */
+.gv-previews { display: flex; flex-direction: column; gap: 0.9rem; }
+.gv-row { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; justify-content: center; }
+.gv-frame { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
+.gv-frame--landscape { flex: 1 1 20rem; max-width: 26rem; }
+.gv-frame--portrait { flex: 0 1 12rem; max-width: 13rem; }
+.gv-cap { font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 600; color: var(--color-ink-muted); }
+.gv-screen {
+  container-type: size;
+  width: 100%; border-radius: 18px; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  padding: 5cqmin 5cqmin 6cqmin;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
-.kp-title { font-family: var(--font-display); font-size: 1.15rem; font-weight: 700; color: #eafff8; }
-.kp-sub { font-size: 0.78rem; color: #9fc7bd; margin-block: 0.15rem 0.7rem; }
-.kp-freq { display: inline-flex; gap: 0; border-radius: 999px; overflow: hidden; margin-block-end: 0.7rem; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14); }
-.kp-freq__seg { font-size: 0.72rem; padding: 0.28rem 0.8rem; color: #9fc7bd; }
-.kp-freq__seg--on { background: var(--color-primary); color: #04121a; font-weight: 700; }
-.kp-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.45rem; }
-.kp-tile {
-  border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;
-  background: #0c1a24; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+.gv-frame--landscape .gv-screen { aspect-ratio: 16 / 10; }
+.gv-frame--portrait .gv-screen { aspect-ratio: 10 / 16; }
+.gv-logo { max-height: 12cqmin; max-width: 55%; object-fit: contain; margin-block-end: 2cqmin; border-radius: 6px; }
+.gv-title { font-family: var(--font-display); font-weight: 800; font-size: 7cqmin; line-height: 1.05; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gv-desc {
+  font-size: 3.6cqmin; line-height: 1.3; margin-block-start: 1.4cqmin; max-width: 94%;
+  /* 3 lines, matching the tablet (GivingScreen.kt AmountStep description maxLines = 3). */
+  display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
-.kp-tile-amt { padding: 0.7rem 0.35rem 0.45rem; font-weight: 800; font-size: 1.7rem; line-height: 1; color: #eafff8; text-align: center; }
-.kp-tile-donate { padding: 0.32rem; font-weight: 700; font-size: 0.78rem; text-align: center; background: var(--color-primary); color: #04121a; }
-/* Bright preview (no background image), matching the kiosk: white tiles with big BLACK numbers in
-   both cases; a light PRIMARY wash uses dark headings, a deepened (dark primary) wash uses white. */
-.kp-screen--tiles .kp-tile { background: rgba(255, 255, 255, 0.94); box-shadow: 0 6px 14px rgba(0, 0, 0, 0.14); }
-.kp-screen--tiles .kp-tile-amt { color: #0a0f14; }
-.kp-screen--bright .kp-title,
-.kp-screen--bright .kp-sub,
-.kp-screen--bright .kp-freq__seg { color: #0b1220; }
-.kp-screen--ondark .kp-title,
-.kp-screen--ondark .kp-sub,
-.kp-screen--ondark .kp-freq__seg { color: #f4f7fb; }
-.kp-empty { grid-column: 1 / -1; font-size: 0.78rem; color: #9fc7bd; padding: 0.8rem; }
-.kp-other {
-  margin-block-start: 0.5rem; border-radius: 12px; padding: 0.6rem; font-weight: 700; font-size: 0.95rem;
-  color: #04121a; background: var(--color-primary);
-}
-.kp-thanks {
+.gv-seg { display: inline-flex; margin-block-start: 3cqmin; border-radius: 999px; overflow: hidden; box-shadow: inset 0 0 0 1px currentColor; }
+.gv-seg__opt { font-size: 3.3cqmin; font-weight: 600; padding: 1.5cqmin 4cqmin; white-space: nowrap; }
+.gv-seg__opt--on { font-weight: 800; }
+.gv-grid { flex: 1; width: 100%; min-height: 0; display: grid; gap: 3cqmin; grid-auto-rows: 1fr; margin-block-start: 4cqmin; }
+.gv-tile { container-type: size; border-radius: 4cqmin; overflow: hidden; display: flex; flex-direction: column; }
+.gv-tile-amt { flex: 1; display: flex; align-items: center; justify-content: center; font-weight: 900; line-height: 1; font-size: min(24cqw, 34cqh); white-space: nowrap; overflow: hidden; }
+.gv-tile-donate { font-weight: 700; font-size: min(12cqw, 22cqh); padding: 7cqh 2cqw; }
+.gv-pill { margin-block-start: 3cqmin; border: 0.5cqmin solid; border-radius: 999px; padding: 2.4cqmin 6cqmin; font-size: 3.6cqmin; font-weight: 700; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.gv-footer { margin-block-start: 2.5cqmin; font-size: 2.8cqmin; opacity: 0.7; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gv-empty { grid-column: 1 / -1; align-self: center; font-size: 3.6cqmin; opacity: 0.85; }
+.gv-thanks {
   font-size: 0.82rem; line-height: 1.5; color: var(--color-ink-muted); text-align: center;
   padding: 0.6rem 0.7rem; border-radius: 12px; background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
-.kp-check { color: var(--color-success); font-weight: 800; }
-/* A campaign logo above the giving title (campaign preview). */
-.kp-logo { display: block; max-height: 2.6rem; max-width: 60%; margin-inline: auto; margin-block-end: 0.5rem; border-radius: 8px; object-fit: contain; }
+.gv-check { color: var(--color-success); font-weight: 800; }
 /* A disabled toggle (e.g. the main campaign's always-on "Live"). */
 .switch:disabled { opacity: 0.55; cursor: not-allowed; }
 
@@ -489,15 +500,46 @@ button.status-pill:hover { filter: brightness(1.08); }
 .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .badge--main { display: inline-flex; align-items: center; gap: 0.2rem; background: var(--color-gold-subtle); color: var(--color-gold); box-shadow: inset 0 0 0 1px var(--color-gold); }
 
-/* Campaign editor: a big, roomy, scrollable form modal (reuses .modal / .modal-body chrome). */
+/* Campaign editor: a big, roomy window — the tabbed settings on the left, a live preview of both
+   kiosk orientations pinned on the right (reuses .modal / .modal-body chrome). */
 .modal--form {
-  width: min(56rem, 96vw);
-  max-height: min(92vh, 60rem);
+  width: min(72rem, 96vw);
+  max-height: min(92vh, 62rem);
   padding: 1.6rem 1.9rem;
 }
 .modal--form .modal-body { padding-inline-end: 0.4rem; } /* breathing room beside the scrollbar */
-.modal--form .field { margin-block-end: 1.15rem; }       /* more space between fields */
-.modal--form .kiosk-preview { max-width: 34rem; margin-inline: auto; } /* a larger, centred preview */
+.modal--form .field { margin-block-end: 1.1rem; }        /* more space between fields */
+
+/* Two-pane layout: form (flexible) + sticky preview. Collapses to one column on a narrow screen, with
+   the preview moved to the top so it's the first thing you see. */
+.ce-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(21rem, 27rem); gap: 1.6rem; align-items: start; }
+/* The preview is FIRST in the DOM (so it hoists to the top on a narrow screen) but belongs in the
+   right column on a wide screen — order:2 places it after the flexible form column. */
+.ce-preview { position: sticky; top: 0; align-self: start; order: 2; }
+.ce-form { min-width: 0; }
+.ce-panel { animation: enter var(--dur-micro) var(--ease-settle) both; }
+
+/* Settings tabs */
+.ce-tabs {
+  display: flex; flex-wrap: wrap; gap: 0.3rem;
+  margin-block: 0.5rem 1.1rem; padding-block-end: 0.5rem; border-block-end: 1px solid var(--color-border);
+}
+.ce-tab {
+  border: 0; background: none; cursor: pointer; font: inherit; font-size: 0.86rem; font-weight: 600;
+  color: var(--color-ink-muted); padding: 0.4rem 0.72rem; border-radius: var(--radius-button);
+  transition: background-color var(--dur-micro) ease, color var(--dur-micro) ease;
+}
+.ce-tab:hover { color: var(--color-ink); background: var(--color-surface-overlay); }
+.ce-tab--on { color: var(--color-on-primary); background: var(--color-primary); }
+.ce-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+@media (max-width: 56rem) {
+  .ce-grid { grid-template-columns: 1fr; }
+  .ce-preview { position: static; order: -1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ce-panel { animation: none; }
+}
 
 /* Image field (URL text input + upload button + thumbnail) — shared by cover/background/logo. */
 .img-field { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }

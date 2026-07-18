@@ -25,6 +25,7 @@ import {
 import {
   createPairCode,
   getAppInfo,
+  getCampaigns,
   getDeviceLogs,
   getDevices,
   identifyDevice,
@@ -33,6 +34,7 @@ import {
   setDeviceOrientation,
   type DeviceOrientation,
   setKioskPin,
+  type Campaign,
   type Device,
   type DeviceLog,
   type PairCode,
@@ -40,6 +42,14 @@ import {
 import { withBase } from './base';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
+
+/** Which campaigns a given kiosk is currently showing — mirrors the server's getKioskConfig filter: the
+ *  main campaign always shows; others show when live AND targeted at all kiosks ([]) or this device. */
+function campaignsForDevice(campaigns: Campaign[], deviceId: string): Campaign[] {
+  return campaigns.filter(
+    (c) => (c.live || c.isMain) && (c.isMain || c.deviceIds.length === 0 || c.deviceIds.includes(deviceId)),
+  );
+}
 
 /** Client-side hop to the public /new setup page (same pattern as App.tsx's navigate). */
 function goNew(e: MouseEvent<HTMLAnchorElement>) {
@@ -172,7 +182,7 @@ function PairCodeDisplay({ pair, onNew, busy }: { pair: PairCode; onNew: () => v
 }
 
 // ── Your kiosks (the fleet) ─────────────────────────────────────────────────────
-function DeviceList({ devices, serverVersion, onChange }: { devices: Device[]; serverVersion: string; onChange: () => void }) {
+function DeviceList({ devices, campaigns, serverVersion, onChange }: { devices: Device[]; campaigns: Campaign[]; serverVersion: string; onChange: () => void }) {
   if (!devices.length) {
     return (
       <div className="empty-state">
@@ -187,13 +197,13 @@ function DeviceList({ devices, serverVersion, onChange }: { devices: Device[]; s
   return (
     <div className="stack">
       {devices.map((d) => (
-        <DeviceRow key={d.id} device={d} serverVersion={serverVersion} onChange={onChange} />
+        <DeviceRow key={d.id} device={d} campaigns={campaigns} serverVersion={serverVersion} onChange={onChange} />
       ))}
     </div>
   );
 }
 
-function DeviceRow({ device, serverVersion, onChange }: { device: Device; serverVersion: string; onChange: () => void }) {
+function DeviceRow({ device, campaigns, serverVersion, onChange }: { device: Device; campaigns: Campaign[]; serverVersion: string; onChange: () => void }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(device.name);
   const [savingName, setSavingName] = useState(false);
@@ -205,6 +215,7 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
   const [err, setErr] = useState('');
 
   const outOfDate = !!serverVersion && !!device.appVersion && device.appVersion !== serverVersion;
+  const shown = campaignsForDevice(campaigns, device.id);
 
   const cancelEdit = () => {
     setEditing(false);
@@ -329,6 +340,24 @@ function DeviceRow({ device, serverVersion, onChange }: { device: Device; server
           >
             <span className="status-dot status-dot--warn" /> Update available (v{serverVersion})
           </button>
+        )}
+      </div>
+
+      {/* Which campaigns this kiosk is showing right now (set per-campaign in Campaigns → Kiosks). */}
+      <div className="device-campaigns">
+        <span className="device-campaigns__label">Showing:</span>
+        {campaigns.length === 0 ? (
+          <span className="faint">—</span>
+        ) : shown.length === 0 ? (
+          <span className="faint">No campaigns targeted at this kiosk yet</span>
+        ) : (
+          shown.map((c) => (
+            <span key={c.id} className="camp-pill" title={c.isMain ? 'Your main campaign — always shown' : undefined}>
+              <span className="camp-pill__dot" style={{ background: c.accentColor || 'var(--color-primary)' }} aria-hidden="true" />
+              {c.title || 'Untitled campaign'}
+              {c.isMain && <span className="camp-pill__main"> · main</span>}
+            </span>
+          ))
         )}
       </div>
 
@@ -570,6 +599,7 @@ function PinCard() {
 // ── The Devices screen ──────────────────────────────────────────────────────────
 export function DevicesSection() {
   const [devices, setDevices] = useState<Device[] | null>(null);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [serverVersion, setServerVersion] = useState('');
   const [err, setErr] = useState('');
 
@@ -584,6 +614,12 @@ export function DevicesSection() {
       const r = await getDevices();
       setDevices(r.devices);
       setErr('');
+      // Campaigns feed the "what each kiosk is showing" list — best-effort, never block the fleet view.
+      try {
+        setCampaigns((await getCampaigns()).campaigns);
+      } catch {
+        /* keep the last known campaigns */
+      }
     } catch (e) {
       setErr(errMsg(e));
     }
@@ -618,7 +654,7 @@ export function DevicesSection() {
         ) : (
           <>
             {err && <p className="hint">Couldn't refresh just now — showing the last known status.</p>}
-            <DeviceList devices={devices} serverVersion={serverVersion} onChange={() => void load()} />
+            <DeviceList devices={devices} campaigns={campaigns} serverVersion={serverVersion} onChange={() => void load()} />
           </>
         )}
       </section>

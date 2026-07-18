@@ -549,6 +549,8 @@ async function main(): Promise<void> {
     data: {
       campaigns: store.listCampaigns(),
       currency: store.getCurrency(),
+      // The kiosk-wide bottom tagline, so the campaign preview can mirror what the tablet shows.
+      footerText: store.getGiving().footerText,
       // The paired kiosks a campaign can be targeted at (for the "show on which kiosk" picker).
       devices: store.listDevices().map((d) => ({ id: d.id, name: d.name })),
       ...(await campaignAccounts()),

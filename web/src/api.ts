@@ -406,6 +406,8 @@ export interface CampaignsData {
   primaryAccountId: string;
   /** A Stripe account is configured on this device (the standalone fallback). */
   hasLocal: boolean;
+  /** Kiosk-wide bottom tagline (shown on the giving screen), so the campaign preview can mirror it. */
+  footerText: string;
 }
 
 export const getCampaigns = () => request<CampaignsData>('/api/admin/campaigns');
