@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -50,16 +49,16 @@ fun KioskKeyboard(
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (!symbols) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                "qwertyuiop".forEach { c -> LetterKey(c, shift, style, onKey) }
+                "qwertyuiop".forEach { c -> LetterKey(c, shift, style, onKey) { shift = false } }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Spacer(0.5f)
-                "asdfghjkl".forEach { c -> LetterKey(c, shift, style, onKey) }
+                "asdfghjkl".forEach { c -> LetterKey(c, shift, style, onKey) { shift = false } }
                 Spacer(0.5f)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Key(if (shift) "⇧" else "⇪", style, weight = 1.5f, active = shift, onClick = { shift = !shift })
-                "zxcvbnm".forEach { c -> LetterKey(c, shift, style, onKey) }
+                Key("⇧", style, weight = 1.5f, active = shift, onClick = { shift = !shift })
+                "zxcvbnm".forEach { c -> LetterKey(c, shift, style, onKey) { shift = false } }
                 Key("⌫", style, weight = 1.5f, onClick = onBackspace)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -90,11 +89,12 @@ fun KioskKeyboard(
     }
 }
 
-/** A letter key: shows upper/lower per [shift] and emits the matching case (shift is one-shot). */
+/** A letter key: shows upper/lower per [shift] and emits the matching case. Shift is ONE-SHOT — after a
+ *  capital is typed, [onShiftConsumed] turns it back off (so ⇧+j gives "J", then "ohn" stays lower). */
 @Composable
-private fun RowScope.LetterKey(c: Char, shift: Boolean, style: SceneStyle, onKey: (String) -> Unit) {
+private fun RowScope.LetterKey(c: Char, shift: Boolean, style: SceneStyle, onKey: (String) -> Unit, onShiftConsumed: () -> Unit) {
     val ch = if (shift) c.uppercaseChar() else c
-    Key(ch.toString(), style, onClick = { onKey(ch.toString()) })
+    Key(ch.toString(), style, onClick = { onKey(ch.toString()); if (shift) onShiftConsumed() })
 }
 
 /** A key that emits its own label verbatim (digits / symbols). */
