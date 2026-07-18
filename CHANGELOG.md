@@ -3,6 +3,12 @@
 
 # Changelog
 
+## 0.9.16
+- **On-screen keyboard fixed for rotated kiosks.** When you rotate the screen, the donor name/email
+  step now uses the kiosk's **own** on-screen keyboard, which rotates with the giving screen — the
+  system keyboard used to appear sideways because it's a separate part of the tablet that doesn't
+  rotate with the app. (Requires updating the tablet app.)
+
 ## 0.9.15
 - **Screen rotation that actually works on any tablet.** The kiosk now **rotates its own UI** by the
   angle you choose, instead of asking the tablet to rotate — many tablets ignore that request, which is

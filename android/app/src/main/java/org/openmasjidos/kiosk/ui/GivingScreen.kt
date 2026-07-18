@@ -6,6 +6,8 @@ package org.openmasjidos.kiosk.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -28,7 +30,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -50,7 +51,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -113,10 +113,13 @@ fun GivingScreen(
     when (giving.step) {
         GivingStep.Amount, GivingStep.Idle ->
             AmountStep(giving, campaign, currency, style, readerConnected, config?.footerText ?: "OpenMasjid Solutions", onSetMonthly, onChooseAmount, loadImage, modifier)
+        // Details has its own full-screen scrollable layout (it hosts the in-app keyboard), so it is
+        // NOT wrapped in CenteredScene.
+        GivingStep.Details ->
+            DetailsStep(giving, campaign, config, currency, style, onDonorName, onDonorEmail, onSetCoverFees, onSubmitDetails, onCancel, modifier)
         else -> CenteredScene(modifier) {
             when (giving.step) {
                 GivingStep.LargeAmount -> LargeAmountStep(giving, config, currency, style, loadImage, onProceedLarge, onCancel)
-                GivingStep.Details -> DetailsStep(giving, campaign, config, currency, style, onDonorName, onDonorEmail, onSetCoverFees, onSubmitDetails, onCancel)
                 GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard, giving.preparingManual, onEnterManually, onCancel)
                 GivingStep.Processing -> ProcessingStep(chargeMinor, currency, style)
                 GivingStep.Thanks -> ThanksStep(giving, campaign, currency, chargeMinor, style, onCancel)
@@ -425,9 +428,11 @@ private fun ColumnScope.LargeAmountStep(
     TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
 }
 
-// ── Step: optional donor details ─────────────────────────────────────────────
+// ── Step: optional donor details (uses the IN-APP keyboard, so it rotates with the UI) ────────────
+private enum class DetailsField { NAME, EMAIL }
+
 @Composable
-private fun ColumnScope.DetailsStep(
+private fun DetailsStep(
     giving: GivingState,
     campaign: Campaign,
     config: KioskConfig?,
@@ -438,80 +443,121 @@ private fun ColumnScope.DetailsStep(
     onSetCoverFees: (Boolean) -> Unit,
     onSubmit: () -> Unit,
     onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val nameOn = giving.monthly || (config?.namePolicy ?: "off") != "off"
     val emailOn = giving.monthly || (config?.emailPolicy ?: "off") != "off"
     val nameReq = giving.monthly || config?.namePolicy == "required"
     val emailReq = giving.monthly || config?.emailPolicy == "required"
-    Text("Your details", style = MaterialTheme.typography.headlineSmall, color = style.onScene)
-    Spacer(Modifier.height(6.dp))
-    Text(
-        if (giving.monthly) "For your monthly giving and receipts." else "For your receipt — optional unless marked required.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = style.onSceneMuted,
-    )
-    Spacer(Modifier.height(20.dp))
-    if (nameOn) {
-        OutlinedTextField(value = giving.donorName, onValueChange = onName, label = { Text(if (nameReq) "Name (required)" else "Name (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(12.dp))
-    }
-    if (emailOn) {
-        OutlinedTextField(
-            value = giving.donorEmail,
-            onValueChange = onEmail,
-            label = { Text(if (emailReq) "Email (required)" else "Email (optional)") },
-            singleLine = true,
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Email),
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-    // Cover-fees lives here, next to name/email, and shows the exact extra it adds. A forced-fee
-    // campaign (Zakat, or a Tuition set to require it) covers it with no toggle and a type-specific
-    // note; a Donation with the offer on shows a donor opt-in toggle.
+    // The field our in-app keyboard edits (default to the first shown field so it's ready immediately).
+    var active by remember { mutableStateOf(if (nameOn) DetailsField.NAME else if (emailOn) DetailsField.EMAIL else null) }
     val feeClarify = "This is the Visa / Mastercard / Amex card fee — not a platform fee. OpenMasjid Solutions is free, unlimited, forever."
-    if (campaign.forceCoverFees && !giving.monthly) {
-        Spacer(Modifier.height(16.dp))
-        val extra = feeExtra(giving.amountMinor, config)
-        val forcedNote = if (campaign.type == "zakat") {
-            "Because this is Zakat, the card fee (+${formatMoney(extra, currency)}) is added so the full Zakat reaches the masjid."
-        } else {
-            "The card fee (+${formatMoney(extra, currency)}) is added so the masjid receives the full amount."
-        }
-        Text(forcedNote, style = MaterialTheme.typography.bodyMedium, color = style.onScene, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(4.dp))
-        Text(feeClarify, style = MaterialTheme.typography.bodySmall, color = style.onSceneMuted)
-    } else if (campaign.coverFees && !giving.monthly) {
-        Spacer(Modifier.height(16.dp))
-        val extra = feeExtra(giving.amountMinor, config)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+
+    Column(
+        modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // Fields + fee + Continue scroll, so they never collide with the keyboard pinned below.
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            Text("Your details", style = MaterialTheme.typography.headlineSmall, color = style.onScene)
+            Spacer(Modifier.height(6.dp))
             Text(
-                "Add a little to cover card fees, so the masjid receives the full amount (+${formatMoney(extra, currency)})",
+                if (giving.monthly) "For your monthly giving and receipts." else "For your receipt — optional unless marked required.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = style.onScene,
-                modifier = Modifier.weight(1f).padding(end = 12.dp),
+                color = style.onSceneMuted,
             )
-            Switch(checked = giving.coverFees, onCheckedChange = onSetCoverFees, colors = SwitchDefaults.colors(checkedTrackColor = style.accent))
+            Spacer(Modifier.height(18.dp))
+            if (nameOn) {
+                KioskField(if (nameReq) "Name (required)" else "Name (optional)", giving.donorName, active == DetailsField.NAME, style) { active = DetailsField.NAME }
+                Spacer(Modifier.height(12.dp))
+            }
+            if (emailOn) {
+                KioskField(if (emailReq) "Email (required)" else "Email (optional)", giving.donorEmail, active == DetailsField.EMAIL, style) { active = DetailsField.EMAIL }
+            }
+            // Cover-fees: a forced-fee campaign (Zakat / required Tuition) shows a note with no toggle;
+            // a Donation with the offer on shows a donor opt-in toggle.
+            if (campaign.forceCoverFees && !giving.monthly) {
+                Spacer(Modifier.height(16.dp))
+                val extra = feeExtra(giving.amountMinor, config)
+                val forcedNote = if (campaign.type == "zakat") {
+                    "Because this is Zakat, the card fee (+${formatMoney(extra, currency)}) is added so the full Zakat reaches the masjid."
+                } else {
+                    "The card fee (+${formatMoney(extra, currency)}) is added so the masjid receives the full amount."
+                }
+                Text(forcedNote, style = MaterialTheme.typography.bodyMedium, color = style.onScene, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(feeClarify, style = MaterialTheme.typography.bodySmall, color = style.onSceneMuted)
+            } else if (campaign.coverFees && !giving.monthly) {
+                Spacer(Modifier.height(16.dp))
+                val extra = feeExtra(giving.amountMinor, config)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        "Add a little to cover card fees, so the masjid receives the full amount (+${formatMoney(extra, currency)})",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = style.onScene,
+                        modifier = Modifier.weight(1f).padding(end = 12.dp),
+                    )
+                    Switch(checked = giving.coverFees, onCheckedChange = onSetCoverFees, colors = SwitchDefaults.colors(checkedTrackColor = style.accent))
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(feeClarify, style = MaterialTheme.typography.bodySmall, color = style.onSceneMuted)
+            }
+            giving.error?.let {
+                Spacer(Modifier.height(12.dp))
+                Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.height(20.dp))
+            Button(
+                onClick = onSubmit,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
+                modifier = Modifier.fillMaxWidth().height(60.dp),
+            ) { Text("Continue", style = MaterialTheme.typography.titleLarge) }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
         }
+        // The in-app keyboard — ordinary Compose content, so it rotates with the giving screen (the
+        // system keyboard would appear sideways over the in-app-rotated UI).
+        val a = active
+        if (a != null) {
+            Spacer(Modifier.height(10.dp))
+            KioskKeyboard(
+                style = style,
+                onKey = { ch -> if (a == DetailsField.NAME) onName(giving.donorName + ch) else onEmail(giving.donorEmail + ch) },
+                onBackspace = { if (a == DetailsField.NAME) onName(giving.donorName.dropLast(1)) else onEmail(giving.donorEmail.dropLast(1)) },
+                onDone = { if (a == DetailsField.NAME && emailOn) active = DetailsField.EMAIL else onSubmit() },
+            )
+        }
+    }
+}
+
+/** A tap-to-edit field display (no system IME — the in-app [KioskKeyboard] drives it). Highlights when
+ *  it's the active field. */
+@Composable
+private fun KioskField(label: String, value: String, active: Boolean, style: SceneStyle, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(label, style = MaterialTheme.typography.labelLarge, color = style.onSceneMuted)
         Spacer(Modifier.height(4.dp))
-        Text(feeClarify, style = MaterialTheme.typography.bodySmall, color = style.onSceneMuted)
+        Surface(
+            onClick = onClick,
+            shape = RoundedCornerShape(12.dp),
+            color = style.tile,
+            contentColor = style.tileInk,
+            border = BorderStroke(if (active) 2.dp else 1.dp, if (active) style.accent else style.onSceneMuted.copy(alpha = 0.35f)),
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+        ) {
+            Box(Modifier.fillMaxSize().padding(horizontal = 14.dp), contentAlignment = Alignment.CenterStart) {
+                Text(value.ifEmpty { " " }, style = MaterialTheme.typography.titleMedium, color = style.tileInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
     }
-    giving.error?.let {
-        Spacer(Modifier.height(12.dp))
-        Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium)
-    }
-    Spacer(Modifier.height(24.dp))
-    Button(
-        onClick = onSubmit,
-        shape = RoundedCornerShape(16.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
-        modifier = Modifier.fillMaxWidth().height(60.dp),
-    ) { Text("Continue", style = MaterialTheme.typography.titleLarge) }
-    Spacer(Modifier.height(8.dp))
-    TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
 }
 
 // ── Step: collect the card ───────────────────────────────────────────────────
