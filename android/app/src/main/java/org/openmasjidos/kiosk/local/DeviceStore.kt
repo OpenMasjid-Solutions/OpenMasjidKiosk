@@ -110,7 +110,7 @@ class DeviceStore(private val context: Context) {
                 feeFixedMinor = p[Keys.CFG_FEE_FIXED] ?: 30L,
                 maxBrightness = p[Keys.CFG_MAX_BRIGHTNESS] ?: true,
                 footerText = p[Keys.CFG_FOOTER] ?: "OpenMasjid Solutions",
-                orientation = p[Keys.CFG_ORIENTATION] ?: "auto",
+                orientation = p[Keys.CFG_ORIENTATION] ?: "0",
                 largeAmountThresholdMinor = p[Keys.CFG_LARGE_THRESHOLD] ?: 0L,
                 largeAmountNote = p[Keys.CFG_LARGE_NOTE].orEmpty(),
                 largeAmountImage = p[Keys.CFG_LARGE_IMAGE].orEmpty(),

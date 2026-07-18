@@ -238,8 +238,9 @@ export interface Device {
   configVersion: number;
   identify: boolean;
   revoked: boolean;
-  /** Screen orientation the tablet is forced to (set from the web UI, NOT the device's auto-rotate):
-   *  'auto' (follow the device) | 'landscape' | 'portrait' | 'landscapeReverse' | 'portraitReverse'. */
+  /** Kiosk UI rotation in DEGREES, set from the web UI: '0' (as mounted) | '90' | '180' | '270'. The
+   *  tablet rotates its own content by this angle (works even where the device ignores orientation
+   *  requests). Legacy named values are normalised to degrees on read. */
   orientation: string;
 }
 

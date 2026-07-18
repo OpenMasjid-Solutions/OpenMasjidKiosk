@@ -25,17 +25,16 @@ import androidx.compose.ui.unit.Constraints
 @Composable
 fun RotatedRoot(degrees: Int, content: @Composable () -> Unit) {
     val d = ((degrees % 360) + 360) % 360
-    if (d == 0) {
-        content()
-        return
-    }
+    // Always route content through the SAME Layout call site (even at 0°, an identity transform), so
+    // changing the rotation at runtime doesn't dispose + recreate the whole kiosk UI subtree (which
+    // would reload the card WebView and reset numpad/local state).
     Layout(
         content = content,
         modifier = Modifier.fillMaxSize().graphicsLayer { rotationZ = d.toFloat() },
     ) { measurables, constraints ->
         val w = constraints.maxWidth
         val h = constraints.maxHeight
-        // 90/270 → the content is measured in the swapped frame so, once rotated, it fills w×h.
+        // 90/270 → measure in the swapped frame so, once rotated, it fills w×h. 0/180 → measure as-is.
         val childConstraints = if (d == 90 || d == 270) Constraints.fixed(h, w) else Constraints.fixed(w, h)
         val placeables = measurables.map { it.measure(childConstraints) }
         layout(w, h) {

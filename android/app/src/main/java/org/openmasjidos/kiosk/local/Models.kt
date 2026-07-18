@@ -82,9 +82,10 @@ data class KioskConfig(
     val feeFixedMinor: Long = 30,        //                    + a small fixed fee
     val maxBrightness: Boolean = true,   // force the tablet to full screen brightness
     val footerText: String = "OpenMasjid Solutions", // bottom tagline ('' hides it)
-    /** Forced screen orientation set from the web UI (NOT the tablet's auto-rotate):
-     *  'auto' | 'landscape' | 'portrait' | 'landscapeReverse' | 'portraitReverse'. */
-    val orientation: String = "auto",
+    /** UI rotation in DEGREES, set from the web UI: "0" (as mounted) | "90" | "180" | "270". The app
+     *  rotates its own content by this angle (RotatedRoot), so it works even on tablets that ignore
+     *  system orientation requests. Legacy named values are still accepted + mapped by orientationDegrees. */
+    val orientation: String = "0",
     /** Large-donation alternative: at/above this many MINOR units the kiosk suggests a cheaper way
      *  to give (bank transfer / Zelle QR) before the card. 0 disables it. */
     val largeAmountThresholdMinor: Long = 0,
