@@ -3,6 +3,13 @@
 
 # Changelog
 
+## 0.9.21
+- **Remote adoption — completed on the tablet.** A tablet at another site can now finish pairing over
+  your OpenMasjidOS Cloudflare tunnel: it validates the real (public) certificate with standard system
+  trust + hostname checking, so there's no certificate warning to accept and the cert can renew freely.
+  Kiosks on your own network keep the existing self-signed trust-on-first-use pinning. The tablet picks
+  the right mode automatically from the address you enter. **(Requires updating the tablet app.)**
+
 ## 0.9.20
 - **Remote kiosk adoption (server + admin half).** A tablet at another site can be paired over your
   masjid's OpenMasjidOS **Cloudflare tunnel** — no VPN or port-forwarding. In **Devices → Add a kiosk**

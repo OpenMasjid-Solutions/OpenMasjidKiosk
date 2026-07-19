@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import org.openmasjidos.kiosk.R
 import org.openmasjidos.kiosk.local.Diagnostics
+import org.openmasjidos.kiosk.net.PinnedHttp
 import org.openmasjidos.kiosk.readers.ReaderConn
 import org.openmasjidos.kiosk.readers.ReaderTransport
 import org.openmasjidos.kiosk.readers.ReaderUiState
@@ -556,6 +557,8 @@ private fun lastCheckInText(ms: Long?): String {
 @Composable
 private fun shortFingerprint(fp: String?): String {
     if (fp.isNullOrBlank()) return stringResource(R.string.diag_unknown)
+    // A remotely-adopted kiosk stores the SYSTEM_TRUST sentinel instead of a pinned fingerprint.
+    if (fp == PinnedHttp.SYSTEM_TRUST) return stringResource(R.string.diag_cert_system)
     // Show the first and last 8 hex chars so a human can compare it, without a wall of hex.
     return if (fp.length > 20) "${fp.take(8)}…${fp.takeLast(8)}" else fp
 }

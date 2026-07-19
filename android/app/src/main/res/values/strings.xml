@@ -100,6 +100,7 @@
     <string name="diag_last_checkin">Last check-in</string>
     <string name="diag_uptime">Uptime</string>
     <string name="diag_unknown">Unknown</string>
+    <string name="diag_cert_system">System-trusted (public certificate)</string>
     <string name="diag_never">Never</string>
     <string name="diag_just_now">Just now</string>
     <string name="diag_seconds_ago">%1$d seconds ago</string>

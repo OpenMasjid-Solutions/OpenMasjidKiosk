@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.openmasjidos.kiosk.local.DeviceStore
@@ -63,9 +64,39 @@ class KioskRepository(context: Context) {
 
     private fun pinnedClientFor(fingerprint: String): OkHttpClient {
         cachedClient.get()?.let { (fp, client) -> if (fp == fingerprint) return client }
-        val client = PinnedHttp.pinnedClient(fingerprint)
+        // A remotely-adopted kiosk (public Cloudflare cert) is stored with the SYSTEM_TRUST sentinel
+        // instead of a fingerprint → use system-CA trust + hostname verification, not a fixed pin.
+        val client =
+            if (fingerprint == PinnedHttp.SYSTEM_TRUST) PinnedHttp.systemClient()
+            else PinnedHttp.pinnedClient(fingerprint)
         cachedClient.set(fingerprint to client)
         return client
+    }
+
+    /** Is [host] a PRIVATE / self-signed LAN address — an RFC1918 / loopback / link-local / ULA IP,
+     *  `localhost`, or a `.local`/`.lan` name? Those are where the OS serves a self-signed cert, so we
+     *  pair with trust-on-first-use pinning. Anything else — a real public domain OR a public IP — is
+     *  treated as REMOTE and validated against the system CA store + hostname verification. Fail CLOSED:
+     *  an empty / unrecognised host returns false (→ system trust), NEVER the weaker accept-any TOFU
+     *  path. The host is taken from OkHttp's own parser (see pair()) so classification matches the
+     *  address actually dialled. */
+    private fun isPrivateHost(host: String): Boolean {
+        val h = host.lowercase().removePrefix("[").removeSuffix("]").substringBefore('%') // strip IPv6 zone id
+        if (h.isEmpty()) return false
+        if (h == "localhost" || h.endsWith(".local") || h.endsWith(".lan")) return true
+        val v4 = h.split('.')
+        if (v4.size == 4 && v4.all { (it.toIntOrNull() ?: -1) in 0..255 }) {
+            val a = v4[0].toInt()
+            val b = v4[1].toInt()
+            return a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && b in 16..31) || (a == 169 && b == 254)
+        }
+        if (h.contains(':')) return h == "::1" || h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")
+        return false // a real public domain (or public IP) → system trust
+    }
+
+    private fun rejectReason(status: Int): PairResult.Reason = when (status) {
+        400, 401, 403, 404, 409, 410, 422 -> PairResult.Reason.CODE_REJECTED
+        else -> PairResult.Reason.GENERIC
     }
 
     // ---- Pairing -----------------------------------------------------------------------
@@ -79,8 +110,38 @@ class KioskRepository(context: Context) {
             return@withContext PairResult.Failed(PairResult.Reason.INVALID_CODE)
         }
 
-        // Trust-on-first-use: capture the leaf cert fingerprint during this one request, then
-        // pin to it forever after.
+        // Extract the host with OkHttp's OWN parser — the same one that dials the connection below — so
+        // trust-mode classification can't diverge from the address actually contacted (a URL that this
+        // parser rejects can't be dialled either → we fail below, never mis-trust it).
+        val host = url.toHttpUrlOrNull()?.host ?: ""
+
+        // REMOTE adoption: a real public domain or public IP (the OS Cloudflare tunnel, e.g.
+        // https://omos.example.org/kiosk). Validate against the system CA store + hostname — no pin to
+        // manage, and the cert may rotate. We do NOT fall back to trust-on-first-use here: a public
+        // host that fails to present a valid, matching cert is a cert problem (→ re-pair), never a
+        // silent TOFU downgrade a MITM could exploit. Fail closed: an unrecognised host lands here too.
+        if (!isPrivateHost(host)) {
+            return@withContext try {
+                val resp = KioskApi(PinnedHttp.systemClient()).pair(url, code, name.ifBlank { "Kiosk" })
+                store.savePairing(url, resp.deviceToken, resp.deviceId, PinnedHttp.SYSTEM_TRUST)
+                log("info", "paired", "device ${resp.deviceId} (public cert)")
+                runCatching { fetchConfig() }
+                PairResult.Success
+            } catch (e: ApiException) {
+                log("warn", "pair_rejected", "status ${e.status}")
+                PairResult.Failed(rejectReason(e.status))
+            } catch (e: javax.net.ssl.SSLException) {
+                log("warn", "pair_cert", e.javaClass.simpleName)
+                PairResult.Failed(PairResult.Reason.CERT)
+            } catch (_: IOException) {
+                PairResult.Failed(PairResult.Reason.UNREACHABLE)
+            } catch (_: Exception) {
+                PairResult.Failed(PairResult.Reason.GENERIC)
+            }
+        }
+
+        // LAN adoption: the OS serves a self-signed cert addressed by IP. Trust-on-first-use — capture
+        // the leaf cert fingerprint during this one request, then pin to it forever after.
         val captured = AtomicReference<String?>(null)
         val api = KioskApi(PinnedHttp.tofuClient(captured))
         try {
@@ -95,11 +156,7 @@ class KioskRepository(context: Context) {
             PairResult.Success
         } catch (e: ApiException) {
             log("warn", "pair_rejected", "status ${e.status}")
-            val reason = when (e.status) {
-                400, 401, 403, 404, 409, 410, 422 -> PairResult.Reason.CODE_REJECTED
-                else -> PairResult.Reason.GENERIC
-            }
-            PairResult.Failed(reason)
+            PairResult.Failed(rejectReason(e.status))
         } catch (e: IOException) {
             if (PinnedHttp.isCertMismatch(e)) PairResult.Failed(PairResult.Reason.CERT)
             else PairResult.Failed(PairResult.Reason.UNREACHABLE)

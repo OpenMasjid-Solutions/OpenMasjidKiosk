@@ -88,6 +88,29 @@ object PinnedHttp {
         return build(trustManager)
     }
 
+    /** Sentinel stored in place of a pinned fingerprint when the server has a REAL, publicly-trusted
+     *  certificate — a remotely-adopted kiosk reached over the OpenMasjidOS Cloudflare tunnel. Traffic
+     *  then uses [systemClient] (system-CA validation + hostname verification), and the server's cert
+     *  may rotate freely (no re-pair on renewal). Non-blank, so it satisfies DeviceStore's "a paired
+     *  record must carry a cert" invariant. */
+    const val SYSTEM_TRUST = "system"
+
+    /**
+     * Client for a server with a real, publicly-trusted certificate (e.g. Cloudflare in front of the
+     * OS tunnel, for remote adoption). Ordinary system-CA trust + REAL hostname verification — NOT the
+     * accept-anything TOFU path and NOT a fixed pin. Correct for a public domain: the cert must chain
+     * to a system CA AND match the typed hostname, so a MITM can't substitute its own. Longer timeouts
+     * than the LAN clients since it crosses the internet.
+     */
+    fun systemClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
+            .callTimeout(30, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+
     private fun build(trustManager: X509TrustManager): OkHttpClient {
         val sslContext = SSLContext.getInstance("TLS").apply {
             init(null, arrayOf<TrustManager>(trustManager), SecureRandom())
