@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type Pointer
 import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
+  Copy,
   Loader2,
   Lock,
   MonitorSmartphone,
@@ -87,6 +88,55 @@ function readerLabel(s: string): string {
   return map[s.toLowerCase()] ?? s;
 }
 
+/** The address a volunteer types into the kiosk app's "Server address" field. It's simply this admin
+ *  page's own origin — the OpenMasjidOS address the browser is already on — shown with a copy button so
+ *  there's no guessing, plus a nudge if the admin happens to be on localhost (which a tablet can't reach). */
+function ServerAddress() {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const host = typeof window !== 'undefined' ? window.location.hostname : '';
+  const port = typeof window !== 'undefined' ? window.location.port : '';
+  const isLocal = /^(localhost|127\.0\.0\.1|::1|\[::1\])$/i.test(host);
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(origin);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — the address is still shown, so it can be typed by hand */
+    }
+  };
+  return (
+    <div className="field" style={{ marginBlockEnd: '0.9rem' }}>
+      <span className="label">Server address <span className="faint">(type this on the tablet)</span></span>
+      <div className="server-addr">
+        <code className="server-addr__url">{origin}</code>
+        <button type="button" className="btn btn--ghost btn--sm" onClick={() => void copy()} title="Copy the server address">
+          {copied ? (
+            <>
+              <CheckCircle2 size={14} /> Copied
+            </>
+          ) : (
+            <>
+              <Copy size={14} /> Copy
+            </>
+          )}
+        </button>
+      </div>
+      {isLocal ? (
+        <p className="note-amber">
+          You're viewing this on <strong>{host}</strong>, which a tablet can't reach. On the tablet, use your
+          server's network address instead — for example <code>https://192.168.1.50{port ? `:${port}` : ''}</code>.
+        </p>
+      ) : (
+        <p className="hint">
+          This is your OpenMasjidOS address — type it on the tablet exactly, including <code>https://</code>.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── Add a kiosk (pairing code) ─────────────────────────────────────────────────
 function AddKiosk() {
   const [pair, setPair] = useState<PairCode | null>(null);
@@ -120,8 +170,10 @@ function AddKiosk() {
         <a href={withBase('/new')} onClick={goNew}>
           setup page
         </a>
-        , then enter this code on the tablet.
+        . Then, on the tablet, enter your <strong>server address</strong> and a <strong>pairing code</strong>:
       </p>
+
+      <ServerAddress />
 
       {pair ? (
         <PairCodeDisplay pair={pair} onNew={() => void generate()} busy={busy} />
@@ -159,6 +211,7 @@ function PairCodeDisplay({ pair, onNew, busy }: { pair: PairCode; onNew: () => v
 
   return (
     <div className="pair-box">
+      <span className="label">Pairing code</span>
       <span className="pair-code" aria-label={`Pairing code ${pair.code.split('').join(' ')}`}>
         {pair.code}
       </span>
@@ -171,7 +224,7 @@ function PairCodeDisplay({ pair, onNew, busy }: { pair: PairCode; onNew: () => v
         </>
       ) : (
         <>
-          <p className="muted pair-instr">Type this code into the tablet app within 10 minutes.</p>
+          <p className="muted pair-instr">Enter this pairing code on the tablet (after the server address) within 10 minutes.</p>
           <p className="hint">
             Expires in <span className="pair-clock">{clock}</span>
           </p>

@@ -3,6 +3,12 @@
 
 # Changelog
 
+## 0.9.19
+- **Clearer "Add a kiosk" screen.** It now shows the exact **server address** to type on the tablet
+  (this admin page's own address) with a one-tap Copy button — and warns you if you're viewing it on
+  localhost (which a tablet can't reach). The pairing code is now clearly labelled too, so it's obvious
+  what goes in each field on the tablet. Admin-only; no tablet update needed.
+
 ## 0.9.18
 - **Reimagined campaign designer.** The editor is now a roomy two-pane window: tabbed settings
   (Design · Amounts · Type & fees · Payments · Kiosks · Message) beside a **live, true-to-device
