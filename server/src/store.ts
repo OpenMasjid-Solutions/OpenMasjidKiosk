@@ -563,6 +563,16 @@ export class Store {
     this.bumpConfigVersion();
   }
 
+  /** Whether the admin has opted in to REMOTE adoption (a tablet at another site pairing over the
+   *  OS Cloudflare tunnel). OFF by default — remote pairing is refused until this is turned on AND
+   *  the platform actually exposes us. Doesn't affect LAN pairing. */
+  getRemoteAdoption(): boolean {
+    return this.getRaw('remote_adoption') === '1';
+  }
+  setRemoteAdoption(on: boolean): void {
+    this.setRaw('remote_adoption', on ? '1' : '0');
+  }
+
   getAttractTitle(): string {
     return this.getRaw('attract_title') ?? '';
   }

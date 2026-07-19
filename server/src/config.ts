@@ -56,6 +56,12 @@ export const config = {
    *  we must present this on Fabric calls or the platform fails closed. It is a
    *  CREDENTIAL — never log or expose it. */
   omosAppSecret: env('OPENMASJID_APP_SECRET', ''),
+  /** Our public URL when the platform exposes us over its Cloudflare tunnel (manifest
+   *  `domain: true` + `tunnel: true`); empty otherwise. A convenience MIRROR of the intended
+   *  exposure the platform injects immediately, used to seed the base path before the async
+   *  /api/fabric/site fetch completes. NOT the live source of truth — that stays /api/fabric/site.
+   *  Not a secret; not persisted. */
+  omosPublicUrl: env('OPENMASJID_PUBLIC_URL', '').replace(/\/+$/, ''),
 };
 
 /** True when running embedded under OpenMasjidOS with the Fabric available. */

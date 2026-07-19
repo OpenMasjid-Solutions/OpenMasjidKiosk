@@ -22,7 +22,7 @@ import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
 import { Store, grossUpForFees, type Device } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache } from './fabric';
+import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite } from './fabric';
 import { LoginLimiter } from './rateLimit';
 import { toCsv } from './csv';
 import {
@@ -62,6 +62,25 @@ async function main(): Promise<void> {
     // a client-supplied X-Forwarded-For must NOT be trusted — the login limiter keys on the
     // real TCP peer instead.
     bodyLimit: 1_048_576, // 1 MiB JSON cap (uploads get their own limit later)
+    // Base-path awareness (manifest `domain: true`): when OpenMasjidOS exposes us for REMOTE
+    // adoption behind its Cloudflare tunnel, it forwards the FULL admin-chosen path prefix (e.g.
+    // /kiosk) WITHOUT stripping it, so requests arrive as /kiosk/api/x, /kiosk/assets/y, etc. We
+    // strip it here, before routing, so every route below stays written at the root and works
+    // identically on the LAN (no prefix) and behind the tunnel. The prefix is the Fabric
+    // `basePath` (cached, refreshed periodically); empty = LAN-only, nothing to strip. A request
+    // that ARRIVES with the prefix came via the tunnel — we flag it so /api/admin stays LAN-only.
+    rewriteUrl(req) {
+      const url = req.url ?? '/';
+      const base = cachedFabricSite().basePath;
+      if (!base) return url;
+      if (url === base || url.startsWith(base + '/') || url.startsWith(base + '?')) {
+        (req as unknown as { omosViaTunnel?: boolean }).omosViaTunnel = true;
+      }
+      if (url === base) return '/';
+      if (url.startsWith(base + '/')) return url.slice(base.length);
+      if (url.startsWith(base + '?')) return '/' + url.slice(base.length);
+      return url;
+    },
   });
 
   await app.register(fastifyCookie);
@@ -96,6 +115,22 @@ async function main(): Promise<void> {
     const url = req.raw.url ?? '/';
     if (url.startsWith('/api') || url.startsWith('/healthz') || url.startsWith('/download')) return;
     return reply.redirect(`https://${lastHttpsHost}${url}`, 308);
+  });
+
+  // ── Keep everything but the kiosk surface LAN-only, even when remote adoption exposes us ──
+  // A request that arrived over the OS Cloudflare tunnel carries the base-path prefix (flagged as
+  // omosViaTunnel in rewriteUrl). Over the tunnel we ALLOWLIST (fail-closed) only the public kiosk
+  // surface: the device API (/api/kiosk/*), the public bootstrap (/api/app), the live appearance
+  // relay (/api/public/*), plus non-/api paths (the SPA + static assets, the APK at /download, and
+  // uploaded images at /uploads — the setup page needs them). Every OTHER /api route — admin, login,
+  // session, setup, logout, and /api/fabric — stays LAN-only, so the admin panel and its auth are
+  // never reachable from the internet even when a remote kiosk is adopted.
+  app.addHook('onRequest', async (req, reply) => {
+    if ((req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel !== true) return;
+    const p = (req.raw.url ?? '/').split('?')[0];
+    if (p.startsWith('/api/') && !(p === '/api/app' || p.startsWith('/api/public/') || p.startsWith('/api/kiosk/'))) {
+      return reply.code(404).send({ error: 'Not found.' });
+    }
   });
 
   /** A request is authenticated if it carries a valid local session cookie — minted by
@@ -409,6 +444,28 @@ async function main(): Promise<void> {
   // Admin: mint a single-use 6-digit pairing code (TTL 10 min) to type into a tablet.
   app.post('/api/admin/devices/pair-code', { preHandler: requireAdmin }, async () => ({ data: store.createPairingCode(makePairingCode()) }));
 
+  // Admin: remote-adoption status + toggle (for pairing a tablet at ANOTHER site over the OS
+  // Cloudflare tunnel). `available` = the platform has Remote access on and is exposing us, so a
+  // remote tablet can reach `publicUrl`. `allowAdoption` is our own opt-in gate (off by default);
+  // remote pairing is refused unless BOTH are true. publicUrl is the address a remote tablet types.
+  app.get('/api/admin/remote', { preHandler: requireAdmin }, async () => {
+    const site = await fetchFabricSite();
+    return {
+      data: {
+        available: site.enabled && !!site.publicUrl,
+        publicUrl: site.publicUrl,
+        basePath: site.basePath,
+        allowAdoption: store.getRemoteAdoption(),
+      },
+    };
+  });
+  app.put('/api/admin/remote', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ allowAdoption: z.boolean() }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please try again.' });
+    store.setRemoteAdoption(parsed.data.allowAdoption);
+    return { data: { allowAdoption: store.getRemoteAdoption() } };
+  });
+
   app.put('/api/admin/devices/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const parsed = z
       .object({
@@ -688,6 +745,11 @@ async function main(): Promise<void> {
     const peer = req.socket.remoteAddress ?? 'unknown';
     const wait = pairLimiter.retryAfterMs(peer);
     if (wait > 0) return reply.code(429).send({ error: `Too many attempts. Try again in ${Math.ceil(wait / 1000)}s.` });
+    // Remote (over-the-tunnel) pairing is opt-in: refuse it unless the admin turned on "Allow
+    // remote adoption". LAN pairing (no tunnel prefix, so omosViaTunnel is unset) is always allowed.
+    if ((req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel === true && !store.getRemoteAdoption()) {
+      return reply.code(403).send({ error: 'Remote adoption is turned off for this kiosk. Ask the masjid admin to enable it in the kiosk’s admin panel.' });
+    }
     const parsed = PairBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Enter the 6-digit pairing code from Admin → Devices.' });
     const code = parsed.data.code.trim();
@@ -976,8 +1038,27 @@ async function main(): Promise<void> {
   }
 
   const rawIndex = havePublic ? fs.readFileSync(indexPath, 'utf8') : '';
-  const sendIndexHtml = (reply: import('fastify').FastifyReply) => reply.type('text/html').send(rawIndex);
-  if (havePublic) app.get('/', async (_req, reply) => sendIndexHtml(reply));
+  // The tunnel base-path injection below hangs off a literal `<head>` in the built HTML. Guard against
+  // a future build that renames/minifies it (the injection would silently no-op → the SPA drops the
+  // prefix and breaks over the tunnel). LAN is unaffected either way.
+  if (havePublic && !rawIndex.includes('<head>')) {
+    log.warn('index.html has no literal <head> — remote (tunnel) base-path injection will not apply');
+  }
+  // Serve index.html with the tunnel base path injected — but ONLY for a request that actually
+  // arrived over the tunnel (it carries the prefix, flagged in rewriteUrl as omosViaTunnel). A LAN
+  // or per-app-HTTPS-proxy request arrives at the root, so it gets the verbatim file and the SPA
+  // uses root paths — critical, so the LAN admin panel keeps working when remote access is on.
+  // When injected: a `<base href>` (relative-built Vite assets resolve under the prefix) plus
+  // `window.__OMOS_BASE__` (web/src/base.ts prefixes API/nav/asset URLs). basePath is already a
+  // safe URL-path charset (normBasePath), re-sanitised here defensively.
+  const sendIndexHtml = (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
+    const viaTunnel = (req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel === true;
+    const base = viaTunnel ? cachedFabricSite().basePath.replace(/[^\w/-]/g, '') : '';
+    if (!base) return reply.type('text/html').send(rawIndex);
+    const head = `<base href="${base}/">\n    <script>window.__OMOS_BASE__=${JSON.stringify(base)}</script>`;
+    return reply.type('text/html').send(rawIndex.replace('<head>', `<head>\n    ${head}`));
+  };
+  if (havePublic) app.get('/', async (req, reply) => sendIndexHtml(req, reply));
 
   // SPA fallback: client-side routes (/new, /admin) resolve to index.html; requests that
   // look like a file still 404; unknown API/health routes return JSON.
@@ -986,7 +1067,7 @@ async function main(): Promise<void> {
     const pathname = url.split('?')[0];
     const looksLikeFile = path.extname(pathname) !== '';
     if (req.method === 'GET' && havePublic && !looksLikeFile && !url.startsWith('/api') && !url.startsWith('/healthz')) {
-      return sendIndexHtml(reply);
+      return sendIndexHtml(req, reply);
     }
     return reply.code(404).send({ error: 'Not found.' });
   });
@@ -1000,6 +1081,12 @@ async function main(): Promise<void> {
       status === 413 ? 'That request was too large.' : status < 500 ? 'We couldn’t process that request.' : 'Something went wrong. Please try again.';
     reply.code(status).send({ error: e.expose && e.message ? e.message : friendly });
   });
+
+  // Keep our public base path warm (manifest `domain: true`) so the base-path rewrite + the
+  // remote-adoption page are accurate without a per-request network call. Best-effort; when the
+  // Fabric is absent or remote access is off, this stays "" and we behave exactly as a LAN app.
+  await fetchFabricSite().catch(() => {});
+  setInterval(() => { void fetchFabricSite(); }, 60_000).unref();
 
   await app.listen({ port: config.port, host: config.host });
   log.info(`OpenMasjid Kiosk listening on http://${config.host}:${config.port}`);

@@ -36,7 +36,7 @@ reference repos, **those win — and flag it.** Resolutions:
 | 2 | **Node version** | "Node 20+" | **`node:22-slim`** everywhere — matches every shipped app's Docker build + runtime. |
 | 3 | **Password/PIN hashing** | argon2 (§13/§14) | **scrypt** (chosen by maintainer, 2026-07-02) — `node:crypto` `scryptSync` on the server (mirrors Donations `auth.ts`), and `javax.crypto` `SCRYPT`/PBKDF2 offline on Android for the kiosk PIN. Zero extra native deps, Pi-friendly. Applied in slice 2. |
 | 4 | **Compose hardening** | example omits it | Added `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, `tmpfs: [/tmp]` — matches Donations; the catalog validator permits it; least-privilege is a hard rule. |
-| 5 | **`domain:`** | (Kiosk forbids it) | **Not set** — LAN-only, everything outbound. So we drop the Cloudflare-tunnel / base-path (`fabric/site`) machinery Donations carries. `web/base.ts` is kept but no-ops. |
+| 5 | **`domain:` / `tunnel:`** | (Kiosk forbade it) | **Set (v0.9.20+)** for opt-in REMOTE adoption. The server is base-path aware (mirrors Donations: `fetchFabricSite()` → `cachedFabricSite().basePath` drives Fastify `rewriteUrl` + `<base href>`/`window.__OMOS_BASE__` injection; `web/base.ts` is now LIVE, no longer a no-op). Kiosk-endpoints-only over the tunnel: an onRequest guard 404s `/api/admin` + `/api/fabric` on tunnel-origin requests (flagged in `rewriteUrl` when the URL arrives with the prefix). See `REMOTE_ADOPTION.md`. |
 | 6 | **Webhooks** | (Kiosk has none) | No raw-body JSON parser; default JSON parsing. Payment truth is confirmed by *retrieving* the PaymentIntent from Stripe, not by webhook. |
 | 7 | **Cookie Secure** | — | `COOKIE_SECURE=1` in the image (we're always behind the platform's TLS). |
 | 8 | **Stripe Terminal** | Mirror Donations | Donations uses **web Elements / `automatic_payment_methods`**, NOT Terminal — so connection tokens, Terminal Locations, `card_present`, and `generated_card`→Subscription are **net-new** here, built from the Stripe Terminal SDK docs (slices 3, 6, 7). Only the Fabric/SSO/DB/CSV patterns are mirrored. |
@@ -69,9 +69,10 @@ reference repos, **those win — and flag it.** Resolutions:
 Env `OPENMASJID_BASE_URL` / `OPENMASJID_APP_ID` / `OPENMASJID_APP_SECRET`; header
 `X-OpenMasjid-App-Secret`; cookie `omos_session`. Endpoints used: `/api/auth/session`
 (SSO), `/api/public/appearance` (theme + reachability), `/api/fabric/stripe/accounts` +
-`/api/fabric/stripe?account=<id>` (Stripe), `/api/fabric/notify`. **Not** `/api/fabric/site`
-(no `domain:`). Read the env every process start; never persist the vars, fetched keys, or
-a "linked" flag; all calls time out (~4 s) and fail soft to standalone.
+`/api/fabric/stripe?account=<id>` (Stripe), `/api/fabric/notify`, and **`/api/fabric/site`**
+(`domain:` — our public URL + base path for remote adoption; cached ~60s, fail-soft). Read the env
+every process start; never persist the vars, fetched keys, the site/publicUrl, or a "linked" flag;
+all calls time out (~4 s) and fail soft to standalone / LAN-only.
 
 ## Slice status
 

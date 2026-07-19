@@ -248,6 +248,20 @@ export const getDevices = () => request<{ devices: Device[] }>('/api/admin/devic
 
 export const createPairCode = () => request<PairCode>('/api/admin/devices/pair-code', { method: 'POST' });
 
+/** Remote-adoption status: whether the OpenMasjidOS is exposing us over its Cloudflare tunnel
+ *  (`available` + `publicUrl`), and our own opt-in gate (`allowAdoption`, off by default). */
+export interface RemoteInfo {
+  available: boolean;
+  publicUrl: string;
+  basePath: string;
+  allowAdoption: boolean;
+}
+
+export const getRemoteInfo = () => request<RemoteInfo>('/api/admin/remote');
+
+export const setRemoteAdoption = (allowAdoption: boolean) =>
+  request<{ allowAdoption: boolean }>('/api/admin/remote', { method: 'PUT', body: JSON.stringify({ allowAdoption }) });
+
 export const renameDevice = (id: string, name: string) =>
   request<Device>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ name }) });
 

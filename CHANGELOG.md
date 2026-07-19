@@ -3,6 +3,19 @@
 
 # Changelog
 
+## 0.9.20
+- **Remote kiosk adoption (server + admin half).** A tablet at another site can be paired over your
+  masjid's OpenMasjidOS **Cloudflare tunnel** — no VPN or port-forwarding. In **Devices → Add a kiosk**
+  there's a new **Remote (another site)** tab: turn on Remote access in OpenMasjidOS and expose the
+  kiosk, then flip **Allow remote adoption** (off by default) and it shows the tablet's public address +
+  a pairing code.
+- **Only the kiosk surface is exposed.** The server is now base-path aware; over the tunnel it serves
+  only the setup page, the app download, and the device connection — the **admin panel stays on your own
+  network** (admin/login/session routes are refused on internet requests). Turning remote access on does
+  not change anything on your LAN.
+- *The tablet app update in the next release completes remote pairing end-to-end (pairing over the real
+  Cloudflare certificate).* Admin-panel changes here need no tablet update.
+
 ## 0.9.19
 - **Clearer "Add a kiosk" screen.** It now shows the exact **server address** to type on the tablet
   (this admin page's own address) with a one-tap Copy button — and warns you if you're viewing it on

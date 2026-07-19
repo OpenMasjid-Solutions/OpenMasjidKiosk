@@ -12,6 +12,7 @@ import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
   Copy,
+  Globe,
   Loader2,
   Lock,
   MonitorSmartphone,
@@ -20,6 +21,7 @@ import {
   ScrollText,
   Smartphone,
   Trash2,
+  Wifi,
   X,
   Zap,
 } from 'lucide-react';
@@ -29,16 +31,19 @@ import {
   getCampaigns,
   getDeviceLogs,
   getDevices,
+  getRemoteInfo,
   identifyDevice,
   renameDevice,
   revokeDevice,
   setDeviceOrientation,
+  setRemoteAdoption,
   type DeviceOrientation,
   setKioskPin,
   type Campaign,
   type Device,
   type DeviceLog,
   type PairCode,
+  type RemoteInfo,
 } from './api';
 import { withBase } from './base';
 
@@ -88,18 +93,12 @@ function readerLabel(s: string): string {
   return map[s.toLowerCase()] ?? s;
 }
 
-/** The address a volunteer types into the kiosk app's "Server address" field. It's simply this admin
- *  page's own origin — the OpenMasjidOS address the browser is already on — shown with a copy button so
- *  there's no guessing, plus a nudge if the admin happens to be on localhost (which a tablet can't reach). */
-function ServerAddress() {
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const host = typeof window !== 'undefined' ? window.location.hostname : '';
-  const port = typeof window !== 'undefined' ? window.location.port : '';
-  const isLocal = /^(localhost|127\.0\.0\.1|::1|\[::1\])$/i.test(host);
+/** A monospace address box with a Copy button — the exact URL a volunteer types on the tablet. */
+function CopyableAddress({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(origin);
+      await navigator.clipboard.writeText(url);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -107,22 +106,35 @@ function ServerAddress() {
     }
   };
   return (
+    <div className="server-addr">
+      <code className="server-addr__url">{url}</code>
+      <button type="button" className="btn btn--ghost btn--sm" onClick={() => void copy()} title="Copy the server address">
+        {copied ? (
+          <>
+            <CheckCircle2 size={14} /> Copied
+          </>
+        ) : (
+          <>
+            <Copy size={14} /> Copy
+          </>
+        )}
+      </button>
+    </div>
+  );
+}
+
+/** The LAN server address a volunteer types into the kiosk app — simply this admin page's own origin
+ *  (the OpenMasjidOS address the browser is already on), with a nudge if it's localhost (which a tablet
+ *  can't reach). */
+function ServerAddress() {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const host = typeof window !== 'undefined' ? window.location.hostname : '';
+  const port = typeof window !== 'undefined' ? window.location.port : '';
+  const isLocal = /^(localhost|127\.0\.0\.1|::1|\[::1\])$/i.test(host);
+  return (
     <div className="field" style={{ marginBlockEnd: '0.9rem' }}>
       <span className="label">Server address <span className="faint">(type this on the tablet)</span></span>
-      <div className="server-addr">
-        <code className="server-addr__url">{origin}</code>
-        <button type="button" className="btn btn--ghost btn--sm" onClick={() => void copy()} title="Copy the server address">
-          {copied ? (
-            <>
-              <CheckCircle2 size={14} /> Copied
-            </>
-          ) : (
-            <>
-              <Copy size={14} /> Copy
-            </>
-          )}
-        </button>
-      </div>
+      <CopyableAddress url={origin} />
       {isLocal ? (
         <p className="note-amber">
           You're viewing this on <strong>{host}</strong>, which a tablet can't reach. On the tablet, use your
@@ -137,12 +149,48 @@ function ServerAddress() {
   );
 }
 
-// ── Add a kiosk (pairing code) ─────────────────────────────────────────────────
+// ── Add a kiosk ────────────────────────────────────────────────────────────────
 function AddKiosk() {
+  const [mode, setMode] = useState<'local' | 'remote'>('local');
+  return (
+    <section className="glass panel">
+      <div className="card-head">
+        <Smartphone size={18} className="panel-ico" aria-hidden="true" />
+        <div className="card-head__main">
+          <h2 className="section-title-inline">Add a kiosk</h2>
+          <p className="muted">Link a tablet on this network, or a tablet at another site over the internet.</p>
+        </div>
+      </div>
+
+      <div className="seg" role="tablist" aria-label="Where is the tablet?">
+        <button
+          role="tab"
+          aria-selected={mode === 'local'}
+          className={`seg__opt${mode === 'local' ? ' seg__opt--on' : ''}`}
+          onClick={() => setMode('local')}
+        >
+          <Wifi size={15} /> On this network
+        </button>
+        <button
+          role="tab"
+          aria-selected={mode === 'remote'}
+          className={`seg__opt${mode === 'remote' ? ' seg__opt--on' : ''}`}
+          onClick={() => setMode('remote')}
+        >
+          <Globe size={15} /> Remote (another site)
+        </button>
+      </div>
+
+      {mode === 'local' ? <LocalAdopt /> : <RemoteAdopt />}
+    </section>
+  );
+}
+
+/** Pair a tablet on the SAME network: type the LAN server address + a 6-digit code. */
+function LocalAdopt() {
   const [pair, setPair] = useState<PairCode | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-
   const generate = async () => {
     setErr('');
     setBusy(true);
@@ -154,17 +202,8 @@ function AddKiosk() {
       setBusy(false);
     }
   };
-
   return (
-    <section className="glass panel">
-      <div className="card-head">
-        <Smartphone size={18} className="panel-ico" aria-hidden="true" />
-        <div className="card-head__main">
-          <h2 className="section-title-inline">Add a kiosk</h2>
-          <p className="muted">Link a tablet by typing a short code into the kiosk app.</p>
-        </div>
-      </div>
-
+    <>
       <p className="muted" style={{ lineHeight: 1.55, marginBlockEnd: '0.9rem' }}>
         First install the app from the{' '}
         <a href={withBase('/new')} onClick={goNew}>
@@ -172,9 +211,7 @@ function AddKiosk() {
         </a>
         . Then, on the tablet, enter your <strong>server address</strong> and a <strong>pairing code</strong>:
       </p>
-
       <ServerAddress />
-
       {pair ? (
         <PairCodeDisplay pair={pair} onNew={() => void generate()} busy={busy} />
       ) : (
@@ -191,7 +228,139 @@ function AddKiosk() {
         </button>
       )}
       {err && <p className="form-error" style={{ marginBlockStart: '0.6rem' }}>{err}</p>}
-    </section>
+    </>
+  );
+}
+
+/** Pair a tablet at ANOTHER site over the OpenMasjidOS Cloudflare tunnel. Needs remote access on
+ *  (OpenMasjidOS → Settings) AND the admin's opt-in "Allow remote adoption" here. */
+function RemoteAdopt() {
+  const [info, setInfo] = useState<RemoteInfo | null>(null);
+  const [loadErr, setLoadErr] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [pair, setPair] = useState<PairCode | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      setInfo(await getRemoteInfo());
+      setLoadErr('');
+    } catch (e) {
+      setLoadErr(errMsg(e));
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const toggle = async (on: boolean) => {
+    setSaving(true);
+    setErr('');
+    try {
+      await setRemoteAdoption(on);
+      if (!on) setPair(null);
+      await load();
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const generate = async () => {
+    setErr('');
+    setBusy(true);
+    try {
+      setPair(await createPairCode());
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!info) {
+    return loadErr ? (
+      <p className="hint">We couldn't check remote access just now — trying again shortly.</p>
+    ) : (
+      <p className="muted">Loading…</p>
+    );
+  }
+
+  if (!info.available) {
+    return (
+      <div className="empty-state">
+        <div className="empty-emblem" aria-hidden="true">
+          <Globe size={26} />
+        </div>
+        <p className="empty-title">Remote access isn't on yet</p>
+        <p className="muted" style={{ maxWidth: '32rem', lineHeight: 1.55 }}>
+          To adopt a tablet at another site, first turn on <strong>Remote access</strong> in{' '}
+          <strong>OpenMasjidOS → Settings</strong> (a Cloudflare tunnel), and make sure{' '}
+          <strong>OpenMasjid Kiosk</strong> is exposed there. Then come back — the tablet's internet address
+          will appear here.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <label className="toggle-row">
+        <span className="toggle-text">
+          <span className="toggle-label">Allow remote adoption</span>
+          <span className="hint">
+            Off keeps the internet address inactive. Turn it on to let a tablet at another site pair over your
+            Cloudflare tunnel — only the setup page and the device connection are exposed; your admin panel
+            stays on your own network.
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={info.allowAdoption}
+          aria-label="Allow remote adoption"
+          disabled={saving}
+          className={`switch${info.allowAdoption ? ' switch--on' : ''}`}
+          onClick={() => void toggle(!info.allowAdoption)}
+        >
+          <span className="switch-knob" />
+        </button>
+      </label>
+
+      {info.allowAdoption && (
+        <>
+          <p className="muted" style={{ lineHeight: 1.55, marginBlock: '0.9rem' }}>
+            On the tablet, first install the app from <code>{info.publicUrl}/new</code>, then enter this{' '}
+            <strong>server address</strong> and a <strong>pairing code</strong>:
+          </p>
+          <div className="field" style={{ marginBlockEnd: '0.9rem' }}>
+            <span className="label">Server address <span className="faint">(type this on the tablet)</span></span>
+            <CopyableAddress url={info.publicUrl} />
+            <p className="hint">
+              Your kiosk's public address over your Cloudflare tunnel — it works from anywhere with internet,
+              with no certificate warning to accept (unlike a local address).
+            </p>
+          </div>
+          {pair ? (
+            <PairCodeDisplay pair={pair} onNew={() => void generate()} busy={busy} />
+          ) : (
+            <button className="btn btn--primary" onClick={() => void generate()} disabled={busy}>
+              {busy ? (
+                <>
+                  <Loader2 size={16} className="spin" /> Preparing…
+                </>
+              ) : (
+                <>
+                  <Plus size={16} /> Add remote kiosk
+                </>
+              )}
+            </button>
+          )}
+        </>
+      )}
+      {err && <p className="form-error" style={{ marginBlockStart: '0.6rem' }}>{err}</p>}
+    </>
   );
 }
 

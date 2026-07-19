@@ -74,7 +74,15 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
 
 ### ❌ Out of scope (v1.0)
 - Any handling of card numbers by our code (reader + Stripe only).
-- Public/internet exposure, `domain: true`, or webhooks — the kiosk is a LAN device; **everything is outbound**. (Tablet + server both need outbound internet to Stripe; nothing inbound.)
+- **Webhooks** and any app-run public server. (Tablet + server both need outbound internet to Stripe.)
+- ~~Public/internet exposure~~ — **now supported (v0.9.20+) as opt-in REMOTE ADOPTION** over the OS
+  Cloudflare tunnel (manifest `domain: true` + `tunnel: true`). A tablet at another site pairs to
+  `https://omos.<domain>/<basePath>` (default `/kiosk`) once the admin turns on Remote access in
+  OpenMasjidOS AND flips "Allow remote adoption" in our admin. **Kiosk-endpoints-only over the tunnel:**
+  the server is base-path aware and 404s `/api/admin` + `/api/fabric` on tunnel-origin requests, so only
+  `/new`, the APK, `/api/app`/appearance, and `/api/kiosk/*` are internet-reachable; the admin panel
+  stays LAN-only. Remote pairing uses the real Cloudflare cert (system trust) — the LAN path still uses
+  self-signed + trust-on-first-use pinning. See `docs/REMOTE_ADOPTION.md`.
 - Gift Aid, refunds in-app (point admins at the Stripe dashboard), donor accounts, printed receipts, iOS, non-Stripe processors, offline payments (Terminal offline mode is a later feature).
 - Play Store distribution (sideload via `/new` is the model; Play listing is a later decision).
 

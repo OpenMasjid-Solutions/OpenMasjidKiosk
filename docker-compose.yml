@@ -29,6 +29,10 @@ services:
       OPENMASJID_BASE_URL: ${OPENMASJID_BASE_URL:-}
       OPENMASJID_APP_ID: ${OPENMASJID_APP_ID:-}
       OPENMASJID_APP_SECRET: ${OPENMASJID_APP_SECRET:-}
+      # Our public URL for REMOTE kiosk adoption (manifest `domain: true` + `tunnel: true`). Empty
+      # unless the admin turns on Remote access and exposes us. The live source of truth is
+      # GET /api/fabric/site; this is the documented convenience mirror.
+      OPENMASJID_PUBLIC_URL: ${OPENMASJID_PUBLIC_URL:-}
     ports:
       # host:container. OpenMasjidOS offers "Open" on the lowest published port and picks
       # a different free host port automatically if 7878 is already taken.
