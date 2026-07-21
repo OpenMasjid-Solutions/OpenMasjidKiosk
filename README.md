@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!-- Copyright (C) 2026 OpenMasjid-Solutions -->
 <p align="center">
-  <img src="assets/Kiosk - rounded corners.png" alt="OpenMasjid Kiosk" width="280"/>
+  <img src="assets/Kiosk - rounded corners (1).png" alt="OpenMasjid Kiosk" width="280"/>
 </p>
 
 <h1 align="center"><b>OpenMasjid Kiosk</b></h1>
@@ -43,7 +43,67 @@ exited with a PIN you set.
 > **Status: v0.1.0 — in active development.** This repo is being built in vertical
 > slices (see [`CLAUDE.md`](CLAUDE.md) §17). Slice 1 is the scaffold: the container
 > boots, serves the themed admin shell, a health check, and the `/new` setup page.
+---
 
+## Acknowledgements
+
+Created by **Hasan Ismail**, with immense help from **Qari Ijaz** and **Osman Sayed**.
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center">
+        <a href="https://github.com/hasan-ismail">
+          <img src="https://github.com/hasan-ismail.png?size=100" width="100px;" alt="Hasan Ismail"/><br />
+          <sub><b>Hasan Ismail</b></sub>
+        </a>
+      </td>
+      <td align="center">
+        <a href="https://github.com/ijazshare">
+          <img src="https://github.com/ijazshare.png?size=100" width="100px;" alt="Qari Ijaz"/><br />
+          <sub><b>Qari Ijaz</b></sub>
+        </a>
+      </td>
+      <td align="center">
+        <a href="https://github.com/osayed0001">
+          <img src="https://github.com/osayed0001.png?size=100" width="100px;" alt="Osman Sayed"/><br />
+          <sub><b>Osman Sayed</b></sub>
+        </a>
+      </td>
+    </tr>
+  </table>
+</div>
+
+Resources for this project were generously sponsored by **[An-Noor Institute](https://www.annoorusa.org/)**, **[Rihlatul Ilm Foundation](https://rifusa.org/)**, and **[AsmaTec Inc.](https://asmatec.com/)**.
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center">
+        <a href="https://www.annoorusa.org/">
+          <img src="https://raw.githubusercontent.com/OpenMasjid-Solutions/OpenMasjidOS/master/assets/An-noor2.png" width="120px;" alt="An-Noor Institute"/><br />
+          <sub><b>An-Noor Institute</b></sub>
+        </a>
+      </td>
+      <td align="center">
+        <a href="https://rifusa.org/">
+          <img src="https://raw.githubusercontent.com/OpenMasjid-Solutions/OpenMasjidOS/master/assets/RIFbetter.png" width="120px;" alt="Rihlatul Ilm Foundation"/><br />
+          <sub><b>Rihlatul Ilm Foundation</b></sub>
+        </a>
+      </td>
+      <td align="center">
+        <a href="https://asmatec.com/">
+          <img src="https://raw.githubusercontent.com/OpenMasjid-Solutions/OpenMasjidOS/master/assets/Asmatec.png" width="120px;" alt="AsmaTec Inc."/><br />
+          <sub><b>AsmaTec Inc.</b></sub>
+        </a>
+      </td>
+    </tr>
+  </table>
+</div>
+
+May Allah reward everyone who made it possible.
+
+---
 ## How it works
 
 ```
