@@ -430,7 +430,20 @@ async function main(): Promise<void> {
 
   // ── Devices: pairing, fleet management, kiosk PIN ───────────────────────────
   const pairLimiter = new LoginLimiter(); // brute-force guard for 6-digit pairing codes
-  const tuitionLookupLimiter = new LoginLimiter(); // brute-force guard for tuition name+PIN lookups
+  // Tuition name+PIN lookups: a fixed rolling window per peer (20 / 60s), capped regardless of
+  // success or failure — a valid lookup must NOT refill the brute-force budget (a shared-IP attacker
+  // with one good pair could otherwise reset the backoff). Students itself locks a PIN after repeated
+  // failures (contract §14); this is defence-in-depth. Well above any real kiosk's lookup rate.
+  const tuitionLookupHits = new Map<string, { count: number; resetAt: number }>();
+  const tuitionLookupOk = (ip: string): boolean => {
+    const now = Date.now();
+    if (tuitionLookupHits.size > 5000) for (const [k, w] of tuitionLookupHits) if (w.resetAt <= now) tuitionLookupHits.delete(k);
+    const w = tuitionLookupHits.get(ip);
+    if (!w || w.resetAt <= now) { tuitionLookupHits.set(ip, { count: 1, resetAt: now + 60_000 }); return true; }
+    if (w.count >= 20) return false;
+    w.count += 1;
+    return true;
+  };
 
   // Kiosks heartbeat every ~10s; treat one as offline after ~3 missed beats (+ a little slack for
   // jitter) so a fallen/unplugged tablet shows offline in the admin panel within ~35s, not minutes.
@@ -880,6 +893,10 @@ async function main(): Promise<void> {
     const campaign = (parsed.data.campaignId ? store.getCampaign(parsed.data.campaignId) : null) ?? store.getMainCampaign();
     if (!campaign) return reply.code(400).send({ error: 'Giving isn’t set up yet.' });
     if (!campaign.live && !campaign.isMain) return reply.code(400).send({ error: 'That appeal isn’t available.' });
+    // A tuition appeal is NOT paid through the donation flow — it has its own name+PIN → balance →
+    // record-to-Students path (/api/kiosk/tuition/*). Reject it here so a crafted tablet can't mint a
+    // tuition charge as a plain donation (wrong metadata, polluted totals, no Students record).
+    if (campaign.type === 'tuition') return reply.code(400).send({ error: 'Tuition is paid on its own screen (name + PIN).' });
     // Amount is validated against THIS campaign's presets/custom bounds — never trust the tablet.
     if (!store.isAllowedAmountForCampaign(campaign, amountMinor)) return reply.code(400).send({ error: 'That amount isn’t available.' });
     // Resolve the campaign's Stripe account (its own, or the primary/reader account when unset).
@@ -964,6 +981,13 @@ async function main(): Promise<void> {
     try {
       const result = await completeCardPresentPaymentIntent(acct.keys.secretKey, id);
       const meta = result.metadata;
+      // A tuition PaymentIntent (purpose=students-billing) is settled + recorded via the tuition path
+      // (its own /complete drains to the Students app), and must NEVER land in the donations table or
+      // totals (contract §5/§11.3: tuition is a "payment", not a deductible donation). If this donation
+      // route is ever hit with one, we still return the verified outcome but skip recordDonation/notify.
+      if (meta.purpose === 'students-billing') {
+        return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency, monthly: { requested: false, created: false } } };
+      }
       const wantsMonthly = meta.kind === 'monthly';
       // For a successful monthly donation, set up the recurring Subscription from the reusable
       // card Stripe derived from this card-present charge. The first month is THIS payment; the
@@ -1083,8 +1107,7 @@ async function main(): Promise<void> {
     const d = authDevice(req, reply);
     if (!d) return;
     const peer = req.socket.remoteAddress ?? 'unknown';
-    const wait = tuitionLookupLimiter.retryAfterMs(peer);
-    if (wait > 0) return reply.code(429).send({ error: `Too many tries. Please wait ${Math.ceil(wait / 1000)}s.` });
+    if (!tuitionLookupOk(peer)) return reply.code(429).send({ error: 'Too many tries. Please wait a moment and try again.' });
     const parsed = TuitionLookupBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'Enter the student’s name and PIN.' });
     const campaign = store.getCampaign(parsed.data.campaignId);
@@ -1092,10 +1115,9 @@ async function main(): Promise<void> {
     const r = await studentsLookup(parsed.data.name, parsed.data.pin);
     if (r.status === 'unavailable') return reply.code(503).send({ error: 'Tuition is temporarily unavailable — please try again shortly.' });
     if (r.status === 'not-found') {
-      tuitionLookupLimiter.fail(peer); // count only real "not found" toward the limit
+      // Uniform "not found" (no enumeration oracle); the rolling window already counted this attempt.
       return { data: { found: false } };
     }
-    tuitionLookupLimiter.succeed(peer);
     // Stash the family + invoices server-side; the tablet only gets display fields + an opaque session id.
     const session = createTuitionSession({
       campaignId: campaign.id,

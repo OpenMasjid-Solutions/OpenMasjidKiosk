@@ -389,7 +389,14 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         idleResetJob?.cancel()
         val g = local.value.giving
         val step = g.step
-        if (step != GivingStep.LargeAmount && step != GivingStep.Details && step != GivingStep.Card && step != GivingStep.Error && step != GivingStep.TuitionInvoices) {
+        val armStep = step == GivingStep.LargeAmount || step == GivingStep.Details || step == GivingStep.Card || step == GivingStep.Error || step == GivingStep.TuitionInvoices
+        // A tuition campaign rests on GivingStep.Amount, but the lookup shell there holds a typed
+        // student name (plaintext) + family PIN. That is PII a walked-away parent must not leave for
+        // the next person — and on the MAIN/single tab the return-to-main timer never fires — so once
+        // anything is typed we arm the idle timer here and clear the fields on timeout.
+        val tuitionDirty = step == GivingStep.Amount && activeCampaign()?.type == "tuition" &&
+            (g.tuition?.name?.isNotBlank() == true || g.tuition?.pin?.isNotBlank() == true)
+        if (!armStep && !tuitionDirty) {
             if (local.value.idleReturnStartedMs != null) local.update { it.copy(idleReturnStartedMs = null) }
             return
         }
@@ -400,8 +407,17 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         local.update { it.copy(idleReturnStartedMs = System.currentTimeMillis()) }
         idleResetJob = viewModelScope.launch {
             delay(timeout)
-            val s = local.value.giving.step
-            if (s == GivingStep.LargeAmount || s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error || s == GivingStep.TuitionInvoices) cancelGiving()
+            val cur = local.value.giving
+            val s = cur.step
+            if (s == GivingStep.LargeAmount || s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error || s == GivingStep.TuitionInvoices) {
+                cancelGiving()
+            } else if (s == GivingStep.Amount && activeCampaign()?.type == "tuition" &&
+                (cur.tuition?.name?.isNotBlank() == true || cur.tuition?.pin?.isNotBlank() == true)) {
+                // Wipe the abandoned name/PIN (and any looked-up family) back to a fresh lookup shell,
+                // keeping the tile itself on screen — no restart, no lingering balance for a passer-by.
+                updateTuition { TuitionState(schoolName = it.schoolName, tagline = it.tagline, available = it.available) }
+                if (local.value.idleReturnStartedMs != null) local.update { it.copy(idleReturnStartedMs = null) }
+            }
         }
     }
 
@@ -717,19 +733,32 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         if (c.type != "tuition") return
         if (local.value.giving.tuition == null) updateGiving { it.copy(tuition = TuitionState()) }
         viewModelScope.launch {
-            val info = runCatching { repo.tuitionInfo() }.getOrNull()
+            // Fetch the school label + availability. onTuitionStart only re-runs when campaign.id
+            // changes — which never happens on a single-campaign tuition kiosk — so a transient blip
+            // must NOT hard-disable the tile with no recovery. Retry a few times, and on total failure
+            // keep the prior/default availability (fail-soft: the lookup shell stays and a real outage
+            // is surfaced kindly at lookup time) rather than latching available = false.
+            var info = runCatching { repo.tuitionInfo() }.getOrNull()
+            var tries = 0
+            while (info == null && tries < 2) {
+                delay(2_000L)
+                info = runCatching { repo.tuitionInfo() }.getOrNull()
+                tries++
+            }
             updateTuition {
                 it.copy(
                     schoolName = info?.schoolName ?: it.schoolName,
                     tagline = info?.tagline ?: it.tagline,
-                    available = info?.enabled ?: false,
+                    available = info?.enabled ?: it.available,
                 )
             }
         }
     }
 
-    fun setTuitionName(v: String) = updateTuition { it.copy(name = v.take(120), notFound = false, error = null) }
-    fun setTuitionPin(v: String) = updateTuition { it.copy(pin = v.take(20), notFound = false, error = null) }
+    // Typing re-arms the idle-abandon timer (and the return-to-main timer on a non-main tab) so an
+    // abandoned name/PIN is always cleared — see rescheduleIdleReset's tuition branch.
+    fun setTuitionName(v: String) { updateTuition { it.copy(name = v.take(120), notFound = false, error = null) }; onUserActivity() }
+    fun setTuitionPin(v: String) { updateTuition { it.copy(pin = v.take(20), notFound = false, error = null) }; onUserActivity() }
 
     /** Look up the family by name + PIN, then move to the invoices step. A wrong PIN / name mismatch is
      *  a uniform "not found"; a broker outage is "temporarily unavailable" (never "wrong PIN"). */
@@ -800,7 +829,11 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             updateTuition { it.copy(error = "Choose at least one item to pay, or pay the full balance.") }
             return
         }
-        updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null) }
+        // Show the amount immediately on the Card/Processing/Thanks screens (no "$0" flash before the
+        // PI round-trip). This is a DISPLAY estimate from the looked-up balances; the server recomputes
+        // the authoritative charge from the held session and serverChargeMinor overrides it below.
+        val displayMinor = if (payFull) t.balanceMinor else t.invoices.filter { ids.contains(it.id) }.sumOf { it.balanceMinor }
+        updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null, amountMinor = displayMinor) }
         givingJob?.cancel()
         givingJob = viewModelScope.launch {
             val idem = UUID.randomUUID().toString()
