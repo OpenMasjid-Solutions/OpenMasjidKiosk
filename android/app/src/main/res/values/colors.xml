@@ -10,6 +10,6 @@
     <color name="surface_dark">#FF030D1A</color>
     <color name="surface_light">#FFF0F9FF</color>
 
-    <!-- Launcher icon (adaptive). -->
-    <color name="ic_launcher_background">#FF030D1A</color>
+    <!-- Launcher icon (adaptive): white, to match the black-on-white brand mark. -->
+    <color name="ic_launcher_background">#FFFFFFFF</color>
 </resources>

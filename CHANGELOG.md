@@ -3,6 +3,12 @@
 
 # Changelog
 
+## 0.9.23
+- **New app icon.** The OpenMasjid Kiosk brand mark (crescent + minaret + a contactless-tap symbol) now
+  appears in the App Store, the OpenMasjidOS dashboard, and as the Android launcher icon (a white
+  adaptive icon). Requires a tablet update for the launcher icon; the store/dashboard icon updates on
+  its own.
+
 ## 0.9.22
 - **Fixed the campaign live preview.** It now sits full-width at the top of the editor and reliably
   shows both the portrait and landscape giving screens (it was rendering broken before).
