@@ -44,6 +44,30 @@ data class CompletedDonation(
     val monthlyCreated: Boolean = false,
 )
 
+/** Tuition (students/billing) shell data — the tile label + whether tuition is available at all. */
+data class TuitionInfo(val enabled: Boolean, val schoolName: String, val currency: String, val tagline: String)
+
+/** One open invoice a parent can choose to pay. [balanceMinor] is the smallest currency unit. */
+data class TuitionInvoice(val id: String, val label: String, val dueDate: String, val balanceMinor: Long)
+
+/** A looked-up family + its balance. [session] is the OPAQUE server-side session id used to pay — the
+ *  real family/student ids stay on the server. */
+data class TuitionFamily(
+    val session: String,
+    val label: String,
+    val students: List<String>,
+    val balanceMinor: Long,
+    val currency: String,
+    val invoices: List<TuitionInvoice>,
+)
+
+/** Result of a tuition lookup: found (+ family), or a uniform not-found. An UNAVAILABLE broker error is
+ *  surfaced as an ApiException (so the UI says "temporarily unavailable", never "wrong PIN"). */
+data class TuitionLookupResult(val found: Boolean, val family: TuitionFamily?)
+
+/** Server-verified outcome of a tuition payment (recorded to Students, never as a kiosk donation). */
+data class CompletedTuition(val status: String, val succeeded: Boolean, val amountMinor: Long, val currency: String)
+
 /** Parsed result of `POST /api/kiosk/heartbeat`. */
 data class HeartbeatResponse(
     val configVersion: Int,
@@ -213,6 +237,52 @@ class KioskApi(private val client: OkHttpClient) {
             monthlyRequested = monthly?.optBoolean("requested", false) ?: false,
             monthlyCreated = monthly?.optBoolean("created", false) ?: false,
         )
+    }
+
+    // ---- Tuition (students/billing) — the tuition tile shells out to OpenMasjid Students ----------
+    /** `GET /api/kiosk/tuition/info` — whether the tuition tile shows + its school label. */
+    fun tuitionInfo(baseUrl: String, token: String): TuitionInfo {
+        val json = get(baseUrl, "/api/kiosk/tuition/info", token)
+        return TuitionInfo(json.optBoolean("enabled", false), json.optString("schoolName"), json.optString("currency"), json.optString("tagline"))
+    }
+
+    /** `POST /api/kiosk/tuition/lookup` — student name + PIN → family + balance. The PIN is sent in the
+     *  body only. `found:false` is uniform; a broker outage throws ApiException(503). */
+    fun tuitionLookup(baseUrl: String, token: String, campaignId: String, name: String, pin: String): TuitionLookupResult {
+        val body = JSONObject().put("campaignId", campaignId).put("name", name).put("pin", pin)
+        val json = post(baseUrl, "/api/kiosk/tuition/lookup", body, token)
+        if (!json.optBoolean("found", false)) return TuitionLookupResult(false, null)
+        val f = json.getJSONObject("family")
+        val invArr = f.optJSONArray("openInvoices") ?: JSONArray()
+        val invoices = (0 until invArr.length()).map { i ->
+            val o = invArr.getJSONObject(i)
+            TuitionInvoice(o.optString("id"), o.optString("label"), o.optString("dueDate"), o.optLong("balanceCents", 0L))
+        }
+        val stuArr = f.optJSONArray("students") ?: JSONArray()
+        val students = (0 until stuArr.length()).map { i ->
+            val o = stuArr.getJSONObject(i)
+            listOf(o.optString("firstName"), o.optString("lastInitial")).filter { it.isNotBlank() }.joinToString(" ")
+        }
+        return TuitionLookupResult(
+            true,
+            TuitionFamily(json.optString("session"), f.optString("label"), students, f.optLong("balanceCents", 0L), f.optString("currency"), invoices),
+        )
+    }
+
+    /** `POST /api/kiosk/tuition/payment-intents` — the server recomputes the amount from the session
+     *  (full balance or the ticked invoices) and mints a card-present PaymentIntent. */
+    fun createTuitionPaymentIntent(baseUrl: String, token: String, session: String, payFull: Boolean, invoiceIds: List<String>, idempotencyKey: String): CreatedPaymentIntent {
+        val selection = JSONObject().put("kind", if (payFull) "full" else "invoices")
+        if (!payFull) selection.put("invoiceIds", JSONArray(invoiceIds))
+        val body = JSONObject().put("session", session).put("selection", selection).put("idempotencyKey", idempotencyKey)
+        val json = post(baseUrl, "/api/kiosk/tuition/payment-intents", body, token)
+        return CreatedPaymentIntent(json.getString("paymentIntentId"), json.getString("clientSecret"), null, json.optLong("chargeMinor", 0L), false)
+    }
+
+    /** `POST /api/kiosk/tuition/payment-intents/{id}/complete` — verify with Stripe + record to Students. */
+    fun completeTuitionPaymentIntent(baseUrl: String, token: String, id: String): CompletedTuition {
+        val json = post(baseUrl, "/api/kiosk/tuition/payment-intents/$id/complete", JSONObject(), token)
+        return CompletedTuition(json.optString("status"), json.optBoolean("succeeded", false), json.optLong("amountMinor", 0L), json.optString("currency"))
     }
 
     /** `POST /api/kiosk/logs` (device token). Returns true on `{ ok: true }`. */

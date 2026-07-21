@@ -3,6 +3,14 @@
 
 # Changelog
 
+## 0.9.24
+- **Tuition payments (new).** A campaign can now be a **Tuition** appeal powered by **OpenMasjid
+  Students**: on the kiosk a parent taps the tile, enters their child's **name + PIN**, sees the
+  family's balance and open invoices, pays the **full balance or picks specific months** on the card
+  reader, and gets a **"payment"** receipt (never counted as a donation). Set a campaign's type to
+  Tuition in the admin. Requires OpenMasjid Students installed with tuition enabled, the kiosk on the
+  same Stripe account the school uses, and a tablet app update.
+
 ## 0.9.23
 - **New app icon.** The OpenMasjid Kiosk brand mark (crescent + minaret + a contactless-tap symbol) now
   appears in the App Store, the OpenMasjidOS dashboard, and as the Android launcher icon (a white

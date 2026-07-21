@@ -23,6 +23,7 @@ import { makeLog } from './logger';
 import { Store, grossUpForFees, type Device } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite } from './fabric';
+import { studentsInfo, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, billingConfigured } from './students';
 import { LoginLimiter } from './rateLimit';
 import { toCsv } from './csv';
 import {
@@ -429,6 +430,7 @@ async function main(): Promise<void> {
 
   // ── Devices: pairing, fleet management, kiosk PIN ───────────────────────────
   const pairLimiter = new LoginLimiter(); // brute-force guard for 6-digit pairing codes
+  const tuitionLookupLimiter = new LoginLimiter(); // brute-force guard for tuition name+PIN lookups
 
   // Kiosks heartbeat every ~10s; treat one as offline after ~3 missed beats (+ a little slack for
   // jitter) so a fallen/unplugged tablet shows offline in the admin panel within ~35s, not minutes.
@@ -1014,6 +1016,213 @@ async function main(): Promise<void> {
     }
   });
 
+  // ── Tuition (students/billing) — a `tuition` campaign shells out to OpenMasjid Students ─────
+  // The parent taps the tuition tile, types their child's name + PIN, we verify + fetch the balance
+  // from Students over the Fabric broker, they pay the full balance or pick invoices, the M2 reader
+  // takes the card, and we record it into the Students ledger (never as a kiosk "donation"). The app
+  // secret stays on the server; the PIN is inert input (body only, never logged/stored/in metadata);
+  // amounts are computed server-side from a held session. Everything fails soft if Students is absent.
+
+  /** Push a succeeded tuition charge to the Students ledger (idempotent on the PI id); update the
+   *  outbox. `recorded` → done; `rejected` → give up (Students' daily reconciliation is the backstop);
+   *  `unavailable` → leave pending for the outbox retry. Re-checks pay_status so we never record a
+   *  charge that didn't succeed. */
+  const tryRecordTuition = async (piId: string): Promise<void> => {
+    const row = store.getTuitionOutbox(piId);
+    if (!row || row.recordStatus !== 'pending' || row.payStatus !== 'succeeded') return;
+    const res = await recordStudentPayment({
+      idempotencyKey: piId,
+      familyId: row.familyId,
+      studentId: row.studentId || undefined,
+      amountCents: row.amountMinor,
+      currency: row.currency,
+      occurredAt: row.occurredAt || new Date().toISOString(),
+      externalRef: {
+        stripePaymentIntentId: piId,
+        stripeChargeId: row.chargeId || undefined,
+        stripeAccountId: row.stripeAccountId || undefined,
+      },
+      allocations: row.allocations ?? undefined,
+    });
+    if (res.status === 'recorded') store.setTuitionRecordStatus(piId, 'recorded', res.paymentId);
+    else if (res.status === 'rejected') store.setTuitionRecordStatus(piId, 'skipped');
+    // 'unavailable' → leave pending; drainTuitionOutbox retries.
+  };
+
+  /** Drain the outbox: for each succeeded-but-unrecorded tuition charge, `check` first (avoids a
+   *  double-record) then push. Stops the pass if the platform is down. */
+  const drainTuitionOutbox = async (): Promise<void> => {
+    for (const row of store.listPendingTuitionRecords()) {
+      const chk = await checkStudentPayment(row.paymentIntentId);
+      if (chk.status === 'recorded') {
+        store.setTuitionRecordStatus(row.paymentIntentId, 'recorded', chk.paymentId);
+        continue;
+      }
+      if (chk.status === 'unavailable') break; // platform down — retry next tick
+      await tryRecordTuition(row.paymentIntentId); // not-recorded → push it
+    }
+  };
+
+  // Should the tuition tile show, and how is it labelled? (Cached ~5 min in students.ts.)
+  app.get('/api/kiosk/tuition/info', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const r = await studentsInfo();
+    if (!r.available || !r.info.enabled) return { data: { enabled: false } };
+    return { data: { enabled: true, schoolName: r.info.schoolName, currency: r.info.currency, tagline: r.info.tagline } };
+  });
+
+  // Resolve a student name + PIN to a family + balance. Rate-limited per peer; the PIN is NEVER logged.
+  // A wrong PIN and a name mismatch return the SAME `found:false` (no enumeration oracle).
+  const TuitionLookupBody = z.object({
+    campaignId: z.string().max(120),
+    name: z.string().trim().min(1).max(120),
+    pin: z.string().trim().min(1).max(40),
+  });
+  app.post('/api/kiosk/tuition/lookup', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const peer = req.socket.remoteAddress ?? 'unknown';
+    const wait = tuitionLookupLimiter.retryAfterMs(peer);
+    if (wait > 0) return reply.code(429).send({ error: `Too many tries. Please wait ${Math.ceil(wait / 1000)}s.` });
+    const parsed = TuitionLookupBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Enter the student’s name and PIN.' });
+    const campaign = store.getCampaign(parsed.data.campaignId);
+    if (!campaign || campaign.type !== 'tuition') return reply.code(400).send({ error: 'That isn’t a tuition appeal.' });
+    const r = await studentsLookup(parsed.data.name, parsed.data.pin);
+    if (r.status === 'unavailable') return reply.code(503).send({ error: 'Tuition is temporarily unavailable — please try again shortly.' });
+    if (r.status === 'not-found') {
+      tuitionLookupLimiter.fail(peer); // count only real "not found" toward the limit
+      return { data: { found: false } };
+    }
+    tuitionLookupLimiter.succeed(peer);
+    // Stash the family + invoices server-side; the tablet only gets display fields + an opaque session id.
+    const session = createTuitionSession({
+      campaignId: campaign.id,
+      deviceId: d.id,
+      familyId: r.family.id,
+      studentId: r.matchedStudentId,
+      familyLabel: r.family.label,
+      currency: r.family.currency,
+      balanceCents: r.family.balanceCents,
+      invoices: r.family.openInvoices.map((i) => ({ id: i.id, balanceCents: i.balanceCents })),
+    });
+    return {
+      data: {
+        found: true,
+        session: session.id, // opaque; the family/student ids stay on the server
+        family: {
+          label: r.family.label,
+          students: r.family.students, // firstName + lastInitial only (per contract)
+          balanceCents: r.family.balanceCents,
+          currency: r.family.currency,
+          openInvoices: r.family.openInvoices, // id (for selection) + label + dueDate + balanceCents
+        },
+      },
+    };
+  });
+
+  // Mint the card-present PaymentIntent for the full balance or the ticked invoices. Amount + family
+  // are recomputed SERVER-SIDE from the held session — the tablet only sends the session id + selection.
+  const TuitionIntentBody = z.object({
+    session: z.string().trim().min(1).max(64),
+    selection: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('full') }),
+      z.object({ kind: z.literal('invoices'), invoiceIds: z.array(z.string().max(128)).min(1).max(60) }),
+    ]),
+    idempotencyKey: z.string().trim().min(8).max(255).optional(),
+  });
+  app.post('/api/kiosk/tuition/payment-intents', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const parsed = TuitionIntentBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'That payment request wasn’t valid.' });
+    const session = getTuitionSession(parsed.data.session);
+    if (!session || session.deviceId !== d.id) {
+      return reply.code(400).send({ error: 'Your session expired — please look up the balance again.' });
+    }
+    const campaign = store.getCampaign(session.campaignId);
+    if (!campaign || campaign.type !== 'tuition') return reply.code(400).send({ error: 'That isn’t a tuition appeal.' });
+    const amt = computeTuitionAmount(session, parsed.data.selection);
+    if ('error' in amt) return reply.code(400).send({ error: 'Please choose what to pay.' });
+    // Tuition is card-present on the reader's (primary) account — which MUST be the school's account so
+    // Students' reconciliation finds it (contract §4). We charge the primary account here.
+    const acct = await resolveAccount();
+    if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
+    const currency = session.currency || store.getCurrency();
+    const metadata: Record<string, string> = {
+      purpose: 'students-billing', // §11.3 reconciliation discriminator (REQUIRED)
+      omos_app: 'kiosk',
+      app: 'kiosk',
+      kind: 'tuition',
+      students_family_id: session.familyId, // REQUIRED, from the held session — never the tablet
+      deviceId: d.id,
+      campaignId: campaign.id,
+      stripeAccountId: acct.id,
+    };
+    if (session.studentId) metadata.students_student_id = session.studentId;
+    const piInput = {
+      amountMinor: amt.amountCents,
+      currency,
+      description: `School balance — ${session.familyLabel}`.slice(0, 200), // never the PIN/typed name
+      metadata,
+    };
+    try {
+      const pi = await createCardPresentPaymentIntent(acct.keys.secretKey, piInput, parsed.data.idempotencyKey);
+      store.rememberPiAccount(pi.id, acct.id);
+      // Enqueue in the tuition outbox (pending) — recorded to Students AFTER the charge verifies.
+      store.enqueueTuitionPayment({
+        paymentIntentId: pi.id,
+        deviceId: d.id,
+        campaignId: campaign.id,
+        stripeAccountId: acct.id,
+        familyId: session.familyId,
+        studentId: session.studentId,
+        familyLabel: session.familyLabel,
+        amountMinor: amt.amountCents,
+        currency,
+        allocations: amt.allocations,
+      });
+      return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, chargeMinor: amt.amountCents, currency } };
+    } catch (err) {
+      const e = err as { code?: string; message?: string };
+      const why = `${e.code ?? ''} ${e.message ?? ''}`.trim().slice(0, 300);
+      log.warn(`tuition payment-intent create failed: ${why}`);
+      store.addLogs(d.id, [{ level: 'warn', event: 'tuition_pi_failed', detail: why.slice(0, 200) }]);
+      return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
+    }
+  });
+
+  // Finish a tuition payment: verify the PI with Stripe, then record it in Students (idempotent, with
+  // the outbox as backstop). NEVER recorded as a kiosk donation (contract §5).
+  app.post('/api/kiosk/tuition/payment-intents/:id/complete', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const id = (req.params as { id: string }).id;
+    if (!/^pi_[A-Za-z0-9_]+$/.test(id)) return reply.code(400).send({ error: 'That payment wasn’t valid.' });
+    const acct = await resolveAccountById(store.getPiAccount(id));
+    if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
+    try {
+      const result = await completeCardPresentPaymentIntent(acct.keys.secretKey, id);
+      store.markTuitionPaid(
+        id,
+        result.succeeded ? 'succeeded' : 'failed',
+        result.chargeId,
+        new Date(result.createdSec * 1000).toISOString(),
+      );
+      if (result.succeeded) {
+        await tryRecordTuition(id); // best-effort now; the outbox retries if Students is unreachable
+        void notify({
+          text: `${formatMoney(result.amountMinor, result.currency)} tuition payment at ${d.name || 'the kiosk'}.`,
+          level: 'success',
+        });
+      }
+      return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency } };
+    } catch {
+      return reply.code(502).send({ error: 'Couldn’t confirm the payment with Stripe.' });
+    }
+  });
+
   // ── Download the bundled kiosk APK (served by /new) ─────────────────────────
   app.get('/download/openmasjidkiosk.apk', async (_req, reply) => {
     if (!fs.existsSync(config.apkPath)) {
@@ -1087,6 +1296,15 @@ async function main(): Promise<void> {
   // Fabric is absent or remote access is off, this stays "" and we behave exactly as a LAN app.
   await fetchFabricSite().catch(() => {});
   setInterval(() => { void fetchFabricSite(); }, 60_000).unref();
+
+  // Tuition (students/billing): keep availability warm so the tile shows/hides correctly, and drain the
+  // record-payment outbox so a dropped push after a successful charge is retried (Students' daily
+  // reconciliation is the ultimate backstop). Only when the Fabric is configured.
+  if (billingConfigured()) {
+    void studentsInfo().catch(() => {});
+    setInterval(() => { void studentsInfo(true); }, 5 * 60_000).unref();
+    setInterval(() => { void drainTuitionOutbox(); }, 60_000).unref();
+  }
 
   await app.listen({ port: config.port, host: config.host });
   log.info(`OpenMasjid Kiosk listening on http://${config.host}:${config.port}`);

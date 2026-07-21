@@ -262,6 +262,33 @@ class KioskRepository(context: Context) {
         KioskApi(pinnedClientFor(p.certSha256)).completePaymentIntent(p.serverUrl, p.deviceToken, id)
     }
 
+    // ---- Tuition (students/billing) — server holds the family/amount; the tablet never does ─────────
+
+    /** Whether the tuition tile should show, and its school label (server-cached, fail-soft). */
+    suspend fun tuitionInfo(): TuitionInfo = withContext(Dispatchers.IO) {
+        val p = store.pairing.first() ?: throw IOException("Not paired")
+        KioskApi(pinnedClientFor(p.certSha256)).tuitionInfo(p.serverUrl, p.deviceToken)
+    }
+
+    /** Resolve a student name + PIN to a family + balance (server-side; the PIN is in the body only). */
+    suspend fun tuitionLookup(campaignId: String, name: String, pin: String): TuitionLookupResult = withContext(Dispatchers.IO) {
+        val p = store.pairing.first() ?: throw IOException("Not paired")
+        KioskApi(pinnedClientFor(p.certSha256)).tuitionLookup(p.serverUrl, p.deviceToken, campaignId, name, pin)
+    }
+
+    /** Mint the card-present tuition PaymentIntent for the full balance or the ticked invoices (the
+     *  server recomputes the amount from its held session — the tablet only sends the selection). */
+    suspend fun createTuitionPaymentIntent(session: String, payFull: Boolean, invoiceIds: List<String>, idempotencyKey: String): CreatedPaymentIntent = withContext(Dispatchers.IO) {
+        val p = store.pairing.first() ?: throw IOException("Not paired")
+        KioskApi(pinnedClientFor(p.certSha256)).createTuitionPaymentIntent(p.serverUrl, p.deviceToken, session, payFull, invoiceIds, idempotencyKey)
+    }
+
+    /** After the reader confirms, verify the tuition charge + record it into the Students ledger. */
+    suspend fun completeTuitionPaymentIntent(id: String): CompletedTuition = withContext(Dispatchers.IO) {
+        val p = store.pairing.first() ?: throw IOException("Not paired")
+        KioskApi(pinnedClientFor(p.certSha256)).completeTuitionPaymentIntent(p.serverUrl, p.deviceToken, id)
+    }
+
 
     // ---- Reader memory (auto-reconnect the same reader on boot) ────────────────────────
 

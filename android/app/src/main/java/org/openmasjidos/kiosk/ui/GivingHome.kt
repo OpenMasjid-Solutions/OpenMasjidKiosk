@@ -150,6 +150,13 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                             onRetry = vm::retryGiving,
                             onEnterManually = vm::enterManually,
                             onCancel = vm::cancelGiving,
+                            onTuitionStart = vm::onTuitionStart,
+                            onTuitionName = vm::setTuitionName,
+                            onTuitionPin = vm::setTuitionPin,
+                            onTuitionLookup = vm::tuitionLookup,
+                            onTuitionPayFull = vm::setTuitionPayFull,
+                            onTuitionToggleInvoice = vm::toggleTuitionInvoice,
+                            onTuitionPay = vm::payTuition,
                             loadImage = { url -> vm.image(url)?.asImageBitmap() },
                         )
                     }

@@ -46,7 +46,7 @@ enum class Overlay { None, Pin, Maintenance }
 /** The donor-facing giving flow (Paired phase). The kiosk now boots straight into [Amount] (no
  *  attract screen); [Idle] is retained only as a defensive default. Processing = the card was read
  *  and we're verifying with the server (so the tap is acknowledged immediately). */
-enum class GivingStep { Idle, Amount, LargeAmount, Details, Card, Processing, Thanks, Error }
+enum class GivingStep { Idle, Amount, LargeAmount, Details, Card, Processing, Thanks, Error, TuitionInvoices }
 
 /** How long a non-main campaign tab may sit idle before the kiosk returns to the main tab. */
 const val KIOSK_AUTO_RETURN_MS = 45_000L
@@ -67,8 +67,35 @@ data class ManualEntry(
 /** Outcome the UI reports back after presenting the manual card form. */
 enum class ManualResult { Completed, Canceled, Failed }
 
+/** An open invoice a parent can pay (display + the opaque id used for selection). */
+data class TuitionInvoiceUi(val id: String, val label: String, val dueDate: String, val balanceMinor: Long)
+
+/** State of the tuition (students/billing) shell — the name+PIN lookup, then the family's balance +
+ *  invoices to pay. Only set when the active campaign is a `tuition` campaign. Holds nothing beyond
+ *  what's on screen and is cleared whenever the flow resets, so no family's balance lingers for the
+ *  next person (contract §6). */
+data class TuitionState(
+    val schoolName: String = "",
+    val tagline: String = "",
+    val available: Boolean = true,      // Students info.enabled; false → the tile shows "unavailable"
+    val name: String = "",
+    val pin: String = "",
+    val looking: Boolean = false,       // a lookup is in flight
+    val notFound: Boolean = false,      // uniform "couldn't find that"
+    val error: String? = null,          // e.g. temporarily unavailable / choose an item
+    val session: String = "",           // opaque server session id (set after a successful lookup)
+    val familyLabel: String = "",
+    val balanceMinor: Long = 0L,
+    val currency: String = "",
+    val invoices: List<TuitionInvoiceUi> = emptyList(),
+    val payFull: Boolean = true,
+    val selected: Set<String> = emptySet(), // ticked invoice ids when !payFull
+)
+
 /** State of an in-progress donation. Amounts are integer MINOR units (validated server-side).
- *  The resting state is [GivingStep.Amount] — the kiosk idles on the giving screen (no attract). */
+ *  The resting state is [GivingStep.Amount] — the kiosk idles on the giving screen (no attract).
+ *  A `tuition` campaign rests on [GivingStep.Amount] too, but the UI renders the tuition lookup shell
+ *  there (see GivingScreen) and drives it through [tuition]. */
 data class GivingState(
     val step: GivingStep = GivingStep.Amount,
     val amountMinor: Long = 0L,
@@ -91,6 +118,8 @@ data class GivingState(
      *  card screen show a calm "opening card entry" state instead of the reader's tap prompt, so
      *  switching to keyed entry is seamless. */
     val preparingManual: Boolean = false,
+    /** Tuition (students/billing) shell state — non-null only for a `tuition` campaign. */
+    val tuition: TuitionState? = null,
 )
 
 /**
@@ -360,7 +389,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         idleResetJob?.cancel()
         val g = local.value.giving
         val step = g.step
-        if (step != GivingStep.LargeAmount && step != GivingStep.Details && step != GivingStep.Card && step != GivingStep.Error) {
+        if (step != GivingStep.LargeAmount && step != GivingStep.Details && step != GivingStep.Card && step != GivingStep.Error && step != GivingStep.TuitionInvoices) {
             if (local.value.idleReturnStartedMs != null) local.update { it.copy(idleReturnStartedMs = null) }
             return
         }
@@ -372,7 +401,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         idleResetJob = viewModelScope.launch {
             delay(timeout)
             val s = local.value.giving.step
-            if (s == GivingStep.LargeAmount || s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error) cancelGiving()
+            if (s == GivingStep.LargeAmount || s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error || s == GivingStep.TuitionInvoices) cancelGiving()
         }
     }
 
@@ -675,6 +704,153 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     private fun isEmail(s: String): Boolean {
         val t = s.trim()
         return t.length in 3..200 && t.contains('@') && t.substringAfter('@').contains('.')
+    }
+
+    // ── Tuition (students/billing) — a `tuition` campaign shells out to OpenMasjid Students ──────
+    private fun updateTuition(f: (TuitionState) -> TuitionState) =
+        updateGiving { it.copy(tuition = f(it.tuition ?: TuitionState())) }
+
+    /** Enter/refresh the tuition shell for the active campaign: ensure state exists + fetch the school
+     *  label + whether tuition is available. Called by the lookup screen on mount (per campaign). */
+    fun onTuitionStart() {
+        val c = activeCampaign() ?: return
+        if (c.type != "tuition") return
+        if (local.value.giving.tuition == null) updateGiving { it.copy(tuition = TuitionState()) }
+        viewModelScope.launch {
+            val info = runCatching { repo.tuitionInfo() }.getOrNull()
+            updateTuition {
+                it.copy(
+                    schoolName = info?.schoolName ?: it.schoolName,
+                    tagline = info?.tagline ?: it.tagline,
+                    available = info?.enabled ?: false,
+                )
+            }
+        }
+    }
+
+    fun setTuitionName(v: String) = updateTuition { it.copy(name = v.take(120), notFound = false, error = null) }
+    fun setTuitionPin(v: String) = updateTuition { it.copy(pin = v.take(20), notFound = false, error = null) }
+
+    /** Look up the family by name + PIN, then move to the invoices step. A wrong PIN / name mismatch is
+     *  a uniform "not found"; a broker outage is "temporarily unavailable" (never "wrong PIN"). */
+    fun tuitionLookup() {
+        onUserActivity()
+        val c = activeCampaign() ?: return
+        val t = local.value.giving.tuition ?: return
+        if (t.name.isBlank() || t.pin.isBlank()) {
+            updateTuition { it.copy(error = "Enter the student’s name and PIN.") }
+            return
+        }
+        updateTuition { it.copy(looking = true, notFound = false, error = null) }
+        givingJob?.cancel()
+        givingJob = viewModelScope.launch {
+            val res = runCatching { repo.tuitionLookup(c.id, t.name.trim(), t.pin.trim()) }.getOrNull()
+            when {
+                res == null -> updateTuition { it.copy(looking = false, error = "Tuition is temporarily unavailable — please try again.") }
+                !res.found -> updateTuition { it.copy(looking = false, notFound = true) }
+                else -> {
+                    val fam = res.family!!
+                    updateGiving {
+                        it.copy(
+                            step = GivingStep.TuitionInvoices,
+                            error = null,
+                            tuition = (it.tuition ?: TuitionState()).copy(
+                                looking = false,
+                                notFound = false,
+                                error = null,
+                                session = fam.session,
+                                familyLabel = fam.label,
+                                balanceMinor = fam.balanceMinor,
+                                currency = fam.currency,
+                                invoices = fam.invoices.map { i -> TuitionInvoiceUi(i.id, i.label, i.dueDate, i.balanceMinor) },
+                                payFull = true,
+                                selected = emptySet(),
+                            ),
+                        )
+                    }
+                    rescheduleIdleReset()
+                }
+            }
+        }
+    }
+
+    fun setTuitionPayFull(full: Boolean) {
+        onUserActivity()
+        updateTuition { it.copy(payFull = full, error = null) }
+    }
+
+    fun toggleTuitionInvoice(id: String) {
+        onUserActivity()
+        updateTuition { st -> st.copy(payFull = false, error = null, selected = if (st.selected.contains(id)) st.selected - id else st.selected + id) }
+    }
+
+    /** Pay the tuition balance (full or picked invoices) on the reader. Mirrors the donation reader
+     *  flow but the amount is recomputed server-side from the held session, and it records a "payment"
+     *  into the Students ledger — never a kiosk donation. */
+    fun payTuition() {
+        val t = local.value.giving.tuition ?: return
+        val readerConnected = ui.value.reader.conn == ReaderConn.Connected
+        if (!readerConnected) {
+            updateGiving { it.copy(step = GivingStep.Error, error = "The card reader isn’t connected. Please ask a volunteer.") }
+            return
+        }
+        val payFull = t.payFull
+        val ids = t.selected.toList()
+        if (!payFull && ids.isEmpty()) {
+            updateTuition { it.copy(error = "Choose at least one item to pay, or pay the full balance.") }
+            return
+        }
+        updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null) }
+        givingJob?.cancel()
+        givingJob = viewModelScope.launch {
+            val idem = UUID.randomUUID().toString()
+            repo.log("info", "tuition_started", "payFull=$payFull items=${ids.size}")
+            val pi = try {
+                repo.createTuitionPaymentIntent(t.session, payFull, ids, idem)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                null
+            }
+            if (pi == null) {
+                repo.log("warn", "tuition_create_failed", "")
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start the payment. Please try again.") }
+                repo.flushLogs()
+                return@launch
+            }
+            updateGiving { it.copy(serverChargeMinor = pi.chargeMinor) }
+            val piId = try {
+                PaymentController.collectAndConfirm(pi.clientSecret)
+            } catch (c: CancellationException) {
+                ReaderManager.clearPrompt()
+                throw c
+            } catch (e: Exception) {
+                null
+            }
+            ReaderManager.clearPrompt()
+            if (piId == null) {
+                repo.log("warn", "tuition_collect_failed", pi.id)
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t go through — no charge was made. Try again?") }
+                repo.flushLogs()
+                return@launch
+            }
+            withContext(NonCancellable) {
+                updateGiving { it.copy(step = GivingStep.Processing, busy = true) }
+                val result = runCatching { repo.completeTuitionPaymentIntent(piId) }.getOrNull()
+                if (result?.succeeded == true) {
+                    repo.log("info", "tuition_succeeded", "${result.amountMinor} ${result.currency}")
+                    updateGiving { it.copy(step = GivingStep.Thanks, busy = false, monthlyOutcome = MonthlyOutcome.None) }
+                    viewModelScope.launch {
+                        delay(THANKS_MS)
+                        if (local.value.giving.step == GivingStep.Thanks) resetGiving()
+                    }
+                } else {
+                    repo.log("warn", "tuition_not_succeeded", "status=${result?.status ?: "unknown"}")
+                    updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t complete. If your card was charged it will be refunded.") }
+                }
+                repo.flushLogs()
+            }
+        }
     }
 
     // ---- Pairing form actions ----------------------------------------------------------

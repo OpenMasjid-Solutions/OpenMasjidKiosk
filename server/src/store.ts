@@ -222,6 +222,27 @@ export interface DonationRecord {
   createdAt: string;
 }
 
+/** A tuition (students/billing) payment in the outbox — held only to push it into the Students ledger
+ *  and retry until recorded. Deliberately holds NO PIN / typed name. `allocations` null = pay-full. */
+export interface TuitionOutboxRow {
+  paymentIntentId: string;
+  deviceId: string;
+  campaignId: string;
+  stripeAccountId: string;
+  familyId: string;
+  studentId: string;
+  familyLabel: string;
+  amountMinor: number;
+  currency: string;
+  allocations: { invoiceId: string; amountCents: number }[] | null;
+  chargeId: string;
+  payStatus: string; // pending | succeeded | failed
+  recordStatus: string; // pending | recorded | skipped
+  studentsPaymentId: string;
+  createdAt: string;
+  occurredAt: string;
+}
+
 /** A paired kiosk (tablet). `token_hash` (not the token) is stored. */
 export interface Device {
   id: string;
@@ -374,6 +395,30 @@ export class Store {
         account TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+
+      -- Tuition (students/billing) payments outbox — a SEPARATE table from donations on purpose, so
+      -- tuition never pollutes donation totals / CSV / metrics (contract §5). One row per PaymentIntent;
+      -- after a card-present charge succeeds we push it to the Students ledger via the Fabric broker,
+      -- retrying from here until recorded (Students' daily reconciliation is the ultimate backstop).
+      CREATE TABLE IF NOT EXISTS tuition_outbox (
+        payment_intent_id TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL DEFAULT '',
+        campaign_id TEXT NOT NULL DEFAULT '',
+        stripe_account_id TEXT NOT NULL DEFAULT '',
+        family_id TEXT NOT NULL,
+        student_id TEXT NOT NULL DEFAULT '',
+        family_label TEXT NOT NULL DEFAULT '',
+        amount_minor INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        allocations TEXT NOT NULL DEFAULT '',          -- JSON [{invoiceId,amountCents}] or '' for pay-full
+        charge_id TEXT NOT NULL DEFAULT '',
+        pay_status TEXT NOT NULL DEFAULT 'pending',     -- pending | succeeded | failed
+        record_status TEXT NOT NULL DEFAULT 'pending',  -- pending | recorded | skipped
+        students_payment_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        occurred_at TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_tuition_outbox ON tuition_outbox(pay_status, record_status);
     `);
     // Migrate older donation rows (pre-campaigns) to carry the new columns. This MUST run before any
     // index on those columns — an existing `donations` table isn't recreated by CREATE TABLE IF NOT
@@ -946,6 +991,104 @@ export class Store {
         chargeId: d.chargeId || '',
         createdAt: new Date().toISOString(),
       });
+  }
+
+  // ── Tuition (students/billing) outbox — separate from donations (contract §5) ──────
+  /** Enqueue a tuition payment the moment its PaymentIntent is minted (pay+record both pending). Keyed
+   *  by PI id, so a re-mint/replay is idempotent. Holds only what record-payment needs — never the PIN
+   *  or the typed name. */
+  enqueueTuitionPayment(d: {
+    paymentIntentId: string;
+    deviceId: string;
+    campaignId: string;
+    stripeAccountId: string;
+    familyId: string;
+    studentId?: string;
+    familyLabel?: string;
+    amountMinor: number;
+    currency: string;
+    allocations?: { invoiceId: string; amountCents: number }[] | null;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO tuition_outbox (payment_intent_id, device_id, campaign_id, stripe_account_id, family_id,
+           student_id, family_label, amount_minor, currency, allocations, created_at)
+         VALUES (@pi, @deviceId, @campaignId, @stripeAccountId, @familyId, @studentId, @familyLabel,
+           @amountMinor, @currency, @allocations, @createdAt)
+         ON CONFLICT(payment_intent_id) DO NOTHING`,
+      )
+      .run({
+        pi: d.paymentIntentId,
+        deviceId: d.deviceId,
+        campaignId: d.campaignId,
+        stripeAccountId: d.stripeAccountId,
+        familyId: d.familyId,
+        studentId: d.studentId || '',
+        familyLabel: d.familyLabel || '',
+        amountMinor: d.amountMinor,
+        currency: d.currency,
+        allocations: d.allocations && d.allocations.length ? JSON.stringify(d.allocations) : '',
+        createdAt: new Date().toISOString(),
+      });
+  }
+
+  /** Mark the card-present outcome for a tuition PI (after server-side Stripe verification). */
+  markTuitionPaid(pi: string, payStatus: 'succeeded' | 'failed', chargeId = '', occurredAt = ''): void {
+    this.db
+      .prepare('UPDATE tuition_outbox SET pay_status = ?, charge_id = ?, occurred_at = ? WHERE payment_intent_id = ?')
+      .run(payStatus, chargeId, occurredAt || new Date().toISOString(), pi);
+  }
+
+  /** Record the result of pushing to the Students ledger. `recorded` = booked; `skipped` = a permanent
+   *  app rejection (reconciliation is the backstop). Leave `pending` to let the outbox retry. */
+  setTuitionRecordStatus(pi: string, recordStatus: 'recorded' | 'skipped', studentsPaymentId = ''): void {
+    this.db
+      .prepare('UPDATE tuition_outbox SET record_status = ?, students_payment_id = ? WHERE payment_intent_id = ?')
+      .run(recordStatus, studentsPaymentId, pi);
+  }
+
+  getTuitionOutbox(pi: string): TuitionOutboxRow | null {
+    const r = this.db.prepare('SELECT * FROM tuition_outbox WHERE payment_intent_id = ?').get(pi) as Record<string, unknown> | undefined;
+    return r ? this.rowToTuitionOutbox(r) : null;
+  }
+
+  /** The retry queue: charges that succeeded but aren't recorded in Students yet. */
+  listPendingTuitionRecords(limit = 50): TuitionOutboxRow[] {
+    const rows = this.db
+      .prepare("SELECT * FROM tuition_outbox WHERE pay_status = 'succeeded' AND record_status = 'pending' ORDER BY created_at LIMIT ?")
+      .all(limit) as Record<string, unknown>[];
+    return rows.map((r) => this.rowToTuitionOutbox(r));
+  }
+
+  private rowToTuitionOutbox(r: Record<string, unknown>): TuitionOutboxRow {
+    let allocations: { invoiceId: string; amountCents: number }[] | null = null;
+    const raw = String(r.allocations ?? '');
+    if (raw) {
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) allocations = arr;
+      } catch {
+        /* leave null → Students auto-allocates */
+      }
+    }
+    return {
+      paymentIntentId: String(r.payment_intent_id),
+      deviceId: String(r.device_id ?? ''),
+      campaignId: String(r.campaign_id ?? ''),
+      stripeAccountId: String(r.stripe_account_id ?? ''),
+      familyId: String(r.family_id),
+      studentId: String(r.student_id ?? ''),
+      familyLabel: String(r.family_label ?? ''),
+      amountMinor: Number(r.amount_minor),
+      currency: String(r.currency),
+      allocations,
+      chargeId: String(r.charge_id ?? ''),
+      payStatus: String(r.pay_status),
+      recordStatus: String(r.record_status),
+      studentsPaymentId: String(r.students_payment_id ?? ''),
+      createdAt: String(r.created_at),
+      occurredAt: String(r.occurred_at ?? ''),
+    };
   }
 
   private rowToDonation(r: Record<string, unknown>): DonationRecord {

@@ -606,14 +606,16 @@ function CampaignEditor({
       return;
     }
     const presetsMinor = presets.map((p) => toMinor(p, currency)).filter((n) => n > 0);
-    if (presetsMinor.length === 0) {
+    // Tuition campaigns have no preset amounts — the balance comes from OpenMasjid Students — so the
+    // suggested-amount / custom-bound checks don't apply.
+    if (type !== 'tuition' && presetsMinor.length === 0) {
       setTab('amounts'); // surface the offending field even if the admin was on another tab
       setErr('Add at least one suggested amount.');
       return;
     }
     const min = toMinor(customMin, currency) || 100;
     const max = toMinor(customMax, currency) || 1_000_000;
-    if (allowCustom && max < min) {
+    if (type !== 'tuition' && allowCustom && max < min) {
       setTab('amounts');
       setErr('The maximum custom amount must be at least the minimum.');
       return;
@@ -687,23 +689,34 @@ function CampaignEditor({
           <div className="ce-grid">
             <aside className="ce-preview">
               <p className="hint" style={{ marginBlockEnd: '0.6rem', textAlign: 'center' }}>Live preview — what your kiosks show</p>
-              <DualPreview
-                title={title}
-                description={description}
-                presetsMinor={previewPresets}
-                allowCustom={allowCustom}
-                // The reader (and so Monthly) can't take a cross-account campaign — mirror the kiosk,
-                // which only offers Monthly when the campaign is reader-capable.
-                monthlyEnabled={monthlyEnabled && !crossAccount}
-                thankYou={thankYou}
-                currency={currency}
-                primaryColor={primaryColor}
-                accentColor={accentColor}
-                theme={theme}
-                backgroundImage={backgroundImage}
-                logo={logo}
-                footerText={footerText}
-              />
+              {type === 'tuition' ? (
+                <div className="tuition-preview-note">
+                  <p className="tuition-preview-title">Tuition appeal</p>
+                  <p>
+                    On the kiosk this tab shows a <strong>name + PIN</strong> lookup, then the family's balance and
+                    invoices to pay — the school details, balances and receipts are managed by <strong>OpenMasjid
+                    Students</strong>, not here. There are no preset amounts to design.
+                  </p>
+                </div>
+              ) : (
+                <DualPreview
+                  title={title}
+                  description={description}
+                  presetsMinor={previewPresets}
+                  allowCustom={allowCustom}
+                  // The reader (and so Monthly) can't take a cross-account campaign — mirror the kiosk,
+                  // which only offers Monthly when the campaign is reader-capable.
+                  monthlyEnabled={monthlyEnabled && !crossAccount}
+                  thankYou={thankYou}
+                  currency={currency}
+                  primaryColor={primaryColor}
+                  accentColor={accentColor}
+                  theme={theme}
+                  backgroundImage={backgroundImage}
+                  logo={logo}
+                  footerText={footerText}
+                />
+              )}
             </aside>
 
             <div className="ce-form">
@@ -798,7 +811,16 @@ function CampaignEditor({
                   </>
                 )}
 
-                {tab === 'amounts' && (
+                {tab === 'amounts' && (type === 'tuition' ? (
+                  <div className="field">
+                    <span className="label">Amounts</span>
+                    <p className="hint" style={{ lineHeight: 1.55 }}>
+                      Tuition amounts come from <strong>OpenMasjid Students</strong> — a parent looks up their child
+                      by name + PIN and pays the balance (or picks specific months). There are no preset amounts to
+                      set here.
+                    </p>
+                  </div>
+                ) : (
                   <>
                     <div className="field">
                       <span className="label">Suggested amounts <span className="faint">({currency})</span></span>
@@ -841,7 +863,7 @@ function CampaignEditor({
                       onChange={setMonthlyEnabled}
                     />
                   </>
-                )}
+                ))}
 
                 {tab === 'type' && (
                   <>
@@ -860,6 +882,16 @@ function CampaignEditor({
                             : 'For a donation you can offer donors the option to cover the card fee.'}
                       </p>
                     </div>
+
+                    {type === 'tuition' && (
+                      <p className="note-amber">
+                        A tuition appeal is powered by <strong>OpenMasjid Students</strong>: the parent types their
+                        child's name + PIN and pays the balance on the card reader. Turn it on in OpenMasjidOS and in
+                        the Students app (if it's off, the tile stays hidden), and charge it on the{' '}
+                        <strong>same Stripe account the school uses in OpenMasjid Students</strong> — that's the
+                        reader's account, so tuition lands in the school's account and reconciles there.
+                      </p>
+                    )}
 
                     {/* Card-fee control, driven by the campaign type (the server re-derives + enforces it). */}
                     {type === 'zakat' ? (

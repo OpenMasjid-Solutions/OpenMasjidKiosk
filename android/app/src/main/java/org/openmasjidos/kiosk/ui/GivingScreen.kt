@@ -39,6 +39,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -58,6 +59,8 @@ import androidx.compose.ui.unit.sp
 import org.openmasjidos.kiosk.GivingState
 import org.openmasjidos.kiosk.GivingStep
 import org.openmasjidos.kiosk.MonthlyOutcome
+import org.openmasjidos.kiosk.TuitionInvoiceUi
+import org.openmasjidos.kiosk.TuitionState
 import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.ui.theme.DangerDark
@@ -104,23 +107,38 @@ fun GivingScreen(
     onRetry: () -> Unit,
     onEnterManually: () -> Unit,
     onCancel: () -> Unit,
+    onTuitionStart: () -> Unit = {},
+    onTuitionName: (String) -> Unit = {},
+    onTuitionPin: (String) -> Unit = {},
+    onTuitionLookup: () -> Unit = {},
+    onTuitionPayFull: (Boolean) -> Unit = {},
+    onTuitionToggleInvoice: (String) -> Unit = {},
+    onTuitionPay: () -> Unit = {},
     loadImage: suspend (String) -> ImageBitmap? = { null },
     modifier: Modifier = Modifier,
 ) {
     val currency = config?.currency?.ifBlank { "USD" } ?: "USD"
     val manualOnCard = true // keyed entry is always offered (see KioskViewModel)
     val chargeMinor = displayCharge(giving, campaign, config)
-    when (giving.step) {
-        GivingStep.Amount, GivingStep.Idle ->
+    val isTuition = campaign.type == "tuition"
+    when {
+        // A `tuition` campaign replaces the amount grid with the Students shell: the resting screen is
+        // the name+PIN lookup (full-screen — it hosts the in-app keyboard), then the invoices/pay step.
+        // The card/processing/thanks/error steps below are shared with donations.
+        isTuition && (giving.step == GivingStep.Amount || giving.step == GivingStep.Idle) ->
+            TuitionLookupStep(giving.tuition, campaign, style, onTuitionStart, onTuitionName, onTuitionPin, onTuitionLookup, onCancel, modifier)
+        isTuition && giving.step == GivingStep.TuitionInvoices ->
+            TuitionInvoicesStep(giving.tuition, style, onTuitionPayFull, onTuitionToggleInvoice, onTuitionPay, onCancel, modifier)
+        giving.step == GivingStep.Amount || giving.step == GivingStep.Idle ->
             AmountStep(giving, campaign, currency, style, readerConnected, config?.footerText ?: "OpenMasjid Solutions", onSetMonthly, onChooseAmount, loadImage, modifier)
         // Details has its own full-screen scrollable layout (it hosts the in-app keyboard), so it is
         // NOT wrapped in CenteredScene.
-        GivingStep.Details ->
+        giving.step == GivingStep.Details ->
             DetailsStep(giving, campaign, config, currency, style, onDonorName, onDonorEmail, onSetCoverFees, onSubmitDetails, onCancel, modifier)
         else -> CenteredScene(modifier) {
             when (giving.step) {
                 GivingStep.LargeAmount -> LargeAmountStep(giving, config, currency, style, loadImage, onProceedLarge, onCancel)
-                GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard, giving.preparingManual, onEnterManually, onCancel)
+                GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard && !isTuition, giving.preparingManual, onEnterManually, onCancel)
                 GivingStep.Processing -> ProcessingStep(chargeMinor, currency, style)
                 GivingStep.Thanks -> ThanksStep(giving, campaign, currency, chargeMinor, style, onCancel)
                 GivingStep.Error -> ErrorStep(giving.error, style, onRetry, onCancel)
@@ -561,6 +579,184 @@ private fun KioskField(label: String, value: String, active: Boolean, style: Sce
     }
 }
 
+// ── Tuition (students/billing) — the tuition tile shell (name+PIN → balance/invoices → reader) ───
+private enum class TuitionField { NAME, PIN }
+
+/** Name + PIN lookup — the resting screen for a `tuition` campaign. Full-screen so it can host the
+ *  in-app keyboard (which rotates with the UI). Fetches the school label/availability on mount. The
+ *  PIN is masked on screen and only sent to the server; it's never stored or logged here. */
+@Composable
+private fun TuitionLookupStep(
+    tuition: TuitionState?,
+    campaign: Campaign,
+    style: SceneStyle,
+    onStart: () -> Unit,
+    onName: (String) -> Unit,
+    onPin: (String) -> Unit,
+    onLookup: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LaunchedEffect(campaign.id) { onStart() }
+    val t = tuition ?: TuitionState()
+    var active by remember { mutableStateOf(TuitionField.NAME) }
+    Column(
+        modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                t.schoolName.ifBlank { campaign.title.ifBlank { "Tuition" } },
+                style = MaterialTheme.typography.displaySmall,
+                color = style.onScene,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                t.tagline.ifBlank { "Enter your child's name and PIN" },
+                fontSize = 18.sp,
+                lineHeight = 24.sp,
+                color = style.onSceneMuted,
+                textAlign = TextAlign.Center,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(22.dp))
+            if (!t.available) {
+                Text(
+                    "Tuition payments aren't available right now. Please ask the office.",
+                    color = style.onSceneMuted,
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            } else {
+                KioskField("Student's name", t.name, active == TuitionField.NAME, style) { active = TuitionField.NAME }
+                Spacer(Modifier.height(12.dp))
+                KioskField("PIN", "•".repeat(t.pin.length), active == TuitionField.PIN, style) { active = TuitionField.PIN }
+                if (t.notFound) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "We couldn't find that — please check the name and PIN, or ask the office.",
+                        color = DangerDark,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                t.error?.let {
+                    Spacer(Modifier.height(12.dp))
+                    Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+                }
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = onLookup,
+                    enabled = !t.looking,
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
+                    modifier = Modifier.fillMaxWidth().height(60.dp),
+                ) { Text(if (t.looking) "Checking…" else "Find my balance", style = MaterialTheme.typography.titleLarge) }
+            }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
+        }
+        if (t.available) {
+            Spacer(Modifier.height(10.dp))
+            KioskKeyboard(
+                style = style,
+                onKey = { ch -> if (active == TuitionField.NAME) onName(t.name + ch) else onPin(t.pin + ch) },
+                onBackspace = { if (active == TuitionField.NAME) onName(t.name.dropLast(1)) else onPin(t.pin.dropLast(1)) },
+                onDone = { if (active == TuitionField.NAME) active = TuitionField.PIN else onLookup() },
+            )
+        }
+    }
+}
+
+/** The family's balance + open invoices: pay the full balance or pick specific ones, then the reader. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TuitionInvoicesStep(
+    tuition: TuitionState?,
+    style: SceneStyle,
+    onPayFull: (Boolean) -> Unit,
+    onToggleInvoice: (String) -> Unit,
+    onPay: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val t = tuition ?: TuitionState()
+    val currency = t.currency.ifBlank { "USD" }
+    val payAmount = if (t.payFull) t.balanceMinor else t.invoices.filter { t.selected.contains(it.id) }.sumOf { it.balanceMinor }
+    Column(
+        modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(t.familyLabel.ifBlank { "Your balance" }, style = MaterialTheme.typography.headlineSmall, color = style.onScene, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(4.dp))
+            Text("Balance due ${formatMoney(t.balanceMinor, currency)}", style = MaterialTheme.typography.headlineMedium, color = style.accent, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
+                SegmentedButton(selected = t.payFull, onClick = { onPayFull(true) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Full balance") }
+                SegmentedButton(selected = !t.payFull, onClick = { onPayFull(false) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Choose what to pay") }
+            }
+            Spacer(Modifier.height(14.dp))
+            if (t.invoices.isEmpty()) {
+                Text("Nothing is currently due — thank you.", color = style.onSceneMuted, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
+            } else {
+                t.invoices.forEach { inv ->
+                    val ticked = !t.payFull && t.selected.contains(inv.id)
+                    Surface(
+                        onClick = { onToggleInvoice(inv.id) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = style.tile,
+                        contentColor = style.tileInk,
+                        border = BorderStroke(if (ticked) 2.dp else 1.dp, if (ticked) style.accent else style.onSceneMuted.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                    ) {
+                        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(inv.label.ifBlank { "Tuition" }, style = MaterialTheme.typography.titleMedium, color = style.tileInk)
+                                if (inv.dueDate.isNotBlank()) {
+                                    Spacer(Modifier.height(2.dp))
+                                    Text("Due ${inv.dueDate}", style = MaterialTheme.typography.bodySmall, color = style.tileInk.copy(alpha = 0.6f))
+                                }
+                            }
+                            Spacer(Modifier.size(10.dp))
+                            Text(formatMoney(inv.balanceMinor, currency), style = MaterialTheme.typography.titleMedium, color = style.tileInk, fontWeight = FontWeight.Bold)
+                            if (!t.payFull) {
+                                Spacer(Modifier.size(10.dp))
+                                Text(if (ticked) "✓" else "○", style = MaterialTheme.typography.titleLarge, color = if (ticked) style.accent else style.onSceneMuted)
+                            }
+                        }
+                    }
+                }
+            }
+            t.error?.let {
+                Spacer(Modifier.height(12.dp))
+                Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = onPay,
+            enabled = payAmount > 0,
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
+            modifier = Modifier.fillMaxWidth().height(64.dp),
+        ) { Text(if (payAmount > 0) "Pay ${formatMoney(payAmount, currency)}" else "Choose what to pay", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+        Spacer(Modifier.height(6.dp))
+        TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
+    }
+}
+
 // ── Step: collect the card ───────────────────────────────────────────────────
 @Composable
 private fun ColumnScope.CardStep(
@@ -617,13 +813,19 @@ private fun ColumnScope.ThanksStep(
     style: SceneStyle,
     onCancel: () -> Unit,
 ) {
+    // Tuition is a "payment", never a "donation" (contract §5) — different default wording + label.
+    val isTuition = campaign.type == "tuition"
     val msg = campaign.thankYouMessage.takeIf { it.isNotBlank() }
-        ?: "JazākAllāhu khayran — thank you for your generous donation."
+        ?: if (isTuition) "JazākAllāhu khayran — your payment was received." else "JazākAllāhu khayran — thank you for your generous donation."
     Text("✓", style = MaterialTheme.typography.displayLarge, color = SuccessDark)
     Spacer(Modifier.height(12.dp))
-    if (giving.amountMinor > 0) {
+    if (chargeMinor > 0) {
         Text(
-            text = if (giving.monthly) "${formatMoney(chargeMinor, currency)} / month" else "You gave ${formatMoney(chargeMinor, currency)}",
+            text = when {
+                isTuition -> "You paid ${formatMoney(chargeMinor, currency)}"
+                giving.monthly -> "${formatMoney(chargeMinor, currency)} / month"
+                else -> "You gave ${formatMoney(chargeMinor, currency)}"
+            },
             style = MaterialTheme.typography.headlineMedium,
             color = style.accent,
             fontWeight = FontWeight.Bold,

@@ -507,6 +507,13 @@ button.status-pill:hover { filter: brightness(1.08); }
   padding: 0.6rem 0.7rem; border-radius: 12px; background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
 .gv-check { color: var(--color-success); font-weight: 800; }
+
+/* Tuition-campaign preview note (a tuition tile shows a name+PIN lookup, not amount tiles). */
+.tuition-preview-note {
+  padding: 1.2rem 1.1rem; border-radius: 14px; text-align: center; line-height: 1.55;
+  color: var(--color-ink-muted); background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
+}
+.tuition-preview-title { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-ink); margin-block-end: 0.5rem; }
 /* A disabled toggle (e.g. the main campaign's always-on "Live"). */
 .switch:disabled { opacity: 0.55; cursor: not-allowed; }
 

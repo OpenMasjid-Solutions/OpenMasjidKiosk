@@ -5,7 +5,7 @@ id: kiosk
 name: OpenMasjid Kiosk
 tagline: Tap-to-donate kiosk for a wall-mounted tablet with a Stripe card reader
 category: donations
-version: 0.9.23
+version: 0.9.24
 author: OpenMasjid-Solutions
 license: AGPL-3.0-only
 icon: icon.svg
@@ -60,6 +60,13 @@ domain: true
 # adoption" in our own admin. Only the setup page + device API are reachable over the
 # tunnel; /api/admin is refused on tunnel-origin requests (kept LAN-only).
 tunnel: true
+# App-to-app broker: a `tuition` campaign shells out to the OpenMasjid Students app for the
+# name+PIN lookup, balances and recording (contract `students/billing`). Without this grant every
+# broker call returns 403 not_granted. Our server calls it with our own OPENMASJID_APP_SECRET; the
+# tablet never holds the secret. See docs/STUDENTS_INTEGRATION.md.
+fabric:
+  consumes:
+    - students/billing
 
 # NO `settings:` — install is truly one-click; the Stripe account is chosen in-app and
 # everything else (giving screen, devices, PIN) is configured in the admin panel.
