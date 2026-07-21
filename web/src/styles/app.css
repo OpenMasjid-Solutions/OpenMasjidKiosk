@@ -469,42 +469,39 @@ button.status-pill:hover { filter: brightness(1.08); }
 }
 .switch--on .switch-knob { inset-inline-start: calc(100% - 1.28rem); }
 
-/* ── Live giving-screen preview (a true-to-device scale model, both orientations) ────
-   The colours come from campaigns.tsx computeScene() (which mirrors the Android kiosk); the sizes here
-   use container-query units (cq*) so the exact same markup reads correctly at any frame size — the
-   preview is a faithful miniature of the mounted tablet, columns and all. */
+/* ── Live giving-screen preview (both orientations) ──────────────────────────────────
+   Colours come from campaigns.tsx computeScene() (mirrors the Android kiosk). Deliberately simple +
+   bulletproof: each screen sizes to its CONTENT (no aspect-ratio fill, no container queries — those
+   clipped before), with fixed rem type. Landscape reads wide (3-col, shorter); portrait reads narrow
+   (2-col, taller) — so both orientations are clear at a glance. */
 .gv-previews { display: flex; flex-direction: column; gap: 0.9rem; }
-.gv-row { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; justify-content: center; }
-.gv-frame { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
-.gv-frame--landscape { flex: 1 1 20rem; max-width: 26rem; }
-.gv-frame--portrait { flex: 0 1 12rem; max-width: 13rem; }
+.gv-row { display: flex; flex-wrap: wrap; gap: 1.2rem; align-items: flex-start; justify-content: center; }
+.gv-frame { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; }
+.gv-frame--landscape { flex: 1 1 26rem; max-width: 34rem; }
+.gv-frame--portrait { flex: 1 1 15rem; max-width: 17rem; }
 .gv-cap { font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 600; color: var(--color-ink-muted); }
 .gv-screen {
-  container-type: size;
-  width: 100%; border-radius: 18px; overflow: hidden;
+  width: 100%; border-radius: 16px; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; text-align: center;
-  padding: 5cqmin 5cqmin 6cqmin;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  padding: 1.1rem 1rem 1.2rem; gap: 0.35rem;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
-.gv-frame--landscape .gv-screen { aspect-ratio: 16 / 10; }
-.gv-frame--portrait .gv-screen { aspect-ratio: 10 / 16; }
-.gv-logo { max-height: 12cqmin; max-width: 55%; object-fit: contain; margin-block-end: 2cqmin; border-radius: 6px; }
-.gv-title { font-family: var(--font-display); font-weight: 800; font-size: 7cqmin; line-height: 1.05; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gv-logo { max-height: 2.2rem; max-width: 50%; object-fit: contain; margin-block-end: 0.2rem; border-radius: 6px; }
+.gv-title { font-family: var(--font-display); font-weight: 800; font-size: 1.35rem; line-height: 1.1; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gv-desc {
-  font-size: 3.6cqmin; line-height: 1.3; margin-block-start: 1.4cqmin; max-width: 94%;
-  /* 3 lines, matching the tablet (GivingScreen.kt AmountStep description maxLines = 3). */
-  display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 0.86rem; line-height: 1.3; max-width: 96%;
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.gv-seg { display: inline-flex; margin-block-start: 3cqmin; border-radius: 999px; overflow: hidden; box-shadow: inset 0 0 0 1px currentColor; }
-.gv-seg__opt { font-size: 3.3cqmin; font-weight: 600; padding: 1.5cqmin 4cqmin; white-space: nowrap; }
+.gv-seg { display: inline-flex; margin-block-start: 0.3rem; border-radius: 999px; overflow: hidden; box-shadow: inset 0 0 0 1px currentColor; }
+.gv-seg__opt { font-size: 0.72rem; font-weight: 600; padding: 0.26rem 0.85rem; white-space: nowrap; }
 .gv-seg__opt--on { font-weight: 800; }
-.gv-grid { flex: 1; width: 100%; min-height: 0; display: grid; gap: 3cqmin; grid-auto-rows: 1fr; margin-block-start: 4cqmin; }
-.gv-tile { container-type: size; border-radius: 4cqmin; overflow: hidden; display: flex; flex-direction: column; }
-.gv-tile-amt { flex: 1; display: flex; align-items: center; justify-content: center; font-weight: 900; line-height: 1; font-size: min(24cqw, 34cqh); white-space: nowrap; overflow: hidden; }
-.gv-tile-donate { font-weight: 700; font-size: min(12cqw, 22cqh); padding: 7cqh 2cqw; }
-.gv-pill { margin-block-start: 3cqmin; border: 0.5cqmin solid; border-radius: 999px; padding: 2.4cqmin 6cqmin; font-size: 3.6cqmin; font-weight: 700; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.gv-footer { margin-block-start: 2.5cqmin; font-size: 2.8cqmin; opacity: 0.7; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gv-empty { grid-column: 1 / -1; align-self: center; font-size: 3.6cqmin; opacity: 0.85; }
+.gv-grid { width: 100%; display: grid; gap: 0.5rem; margin-block-start: 0.55rem; }
+.gv-tile { border-radius: 11px; overflow: hidden; display: flex; flex-direction: column; }
+.gv-tile-amt { display: flex; align-items: center; justify-content: center; font-weight: 900; line-height: 1; font-size: 1.5rem; white-space: nowrap; overflow: hidden; padding: 0.85rem 0.3rem; }
+.gv-tile-donate { font-weight: 700; font-size: 0.82rem; padding: 0.42rem 0.3rem; }
+.gv-pill { margin-block-start: 0.7rem; border: 2px solid; border-radius: 999px; padding: 0.66rem 1.6rem; font-size: 1.05rem; font-weight: 700; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gv-footer { margin-block-start: 0.5rem; font-size: 0.72rem; opacity: 0.78; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gv-empty { grid-column: 1 / -1; align-self: center; font-size: 0.86rem; opacity: 0.85; padding: 1.5rem 0; }
 .gv-thanks {
   font-size: 0.82rem; line-height: 1.5; color: var(--color-ink-muted); text-align: center;
   padding: 0.6rem 0.7rem; border-radius: 12px; background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
@@ -539,10 +536,10 @@ button.status-pill:hover { filter: brightness(1.08); }
 
 /* Two-pane layout: form (flexible) + sticky preview. Collapses to one column on a narrow screen, with
    the preview moved to the top so it's the first thing you see. */
-.ce-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(21rem, 27rem); gap: 1.6rem; align-items: start; }
-/* The preview is FIRST in the DOM (so it hoists to the top on a narrow screen) but belongs in the
-   right column on a wide screen — order:2 places it after the flexible form column. */
-.ce-preview { position: sticky; top: 0; align-self: start; order: 2; }
+/* Preview across the FULL width at the top (both kiosk orientations, big), settings below. A landscape
+   16:10 frame needs real width to show tall tiles, so it gets the whole modal — not a narrow column. */
+.ce-grid { display: flex; flex-direction: column; gap: 1.4rem; }
+.ce-preview { min-width: 0; }
 .ce-form { min-width: 0; }
 .ce-panel { animation: enter var(--dur-micro) var(--ease-settle) both; }
 
@@ -560,10 +557,6 @@ button.status-pill:hover { filter: brightness(1.08); }
 .ce-tab--on { color: var(--color-on-primary); background: var(--color-primary); }
 .ce-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
-@media (max-width: 56rem) {
-  .ce-grid { grid-template-columns: 1fr; }
-  .ce-preview { position: static; order: -1; }
-}
 @media (prefers-reduced-motion: reduce) {
   .ce-panel { animation: none; }
 }

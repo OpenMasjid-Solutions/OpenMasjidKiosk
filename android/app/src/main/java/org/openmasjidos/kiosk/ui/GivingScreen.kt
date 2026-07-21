@@ -198,8 +198,8 @@ private fun AmountStep(
             text = campaign.description.ifBlank { "Choose an amount to give" },
             // A supporting paragraph — kept modest so a fuller description fits without being cut off,
             // and capped at 3 lines so it never squeezes the amount grid on a short screen.
-            fontSize = 18.sp,
-            lineHeight = 24.sp,
+            fontSize = 20.sp,
+            lineHeight = 26.sp,
             color = style.onSceneMuted,
             textAlign = TextAlign.Center,
             maxLines = 3,
@@ -235,21 +235,22 @@ private fun AmountStep(
             }
         }
 
-        // A small "Choose your own amount" pill (GiveALittle-style), not a full-width button.
+        // A prominent "Choose your own amount" pill (GiveALittle-style) — a faint accent fill + a bold
+        // accent outline so it reads as a real, tappable button, not a hairline link.
         if (campaign.allowCustom) {
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(18.dp))
             Surface(
                 onClick = { showPad = true },
                 shape = RoundedCornerShape(50),
-                color = Color.Transparent,
-                border = BorderStroke(1.5.dp, style.accent),
+                color = style.accent.copy(alpha = 0.14f),
+                border = BorderStroke(2.dp, style.accent),
             ) {
                 Text(
                     "Choose your own amount",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
                     color = style.onScene,
-                    modifier = Modifier.padding(horizontal = 26.dp, vertical = 12.dp),
+                    modifier = Modifier.padding(horizontal = 44.dp, vertical = 18.dp),
                 )
             }
         }

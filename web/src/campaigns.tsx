@@ -1115,7 +1115,7 @@ function ImageField({ id, label, hint, value, onChange }: { id: string; label: s
 // wash, or a calm dark scene with elevated tiles when the campaign is Dark / has a background image.
 const INK_BLACK = '#0a0f14';
 const INK_LIGHT = '#0c4a6e'; // dark ink for text on a LIGHT accent
-const INK_MUTED_LIGHT = '#44515f';
+const INK_MUTED_LIGHT = '#2f3742'; // darker slate — secondary text stays clearly readable on a bright wash
 const INK_DARK = '#f4f7fb'; // near-white
 const INK_MUTED_DARK = '#aebacd';
 const SURFACE_OVERLAY_DARK = '#0f2040';

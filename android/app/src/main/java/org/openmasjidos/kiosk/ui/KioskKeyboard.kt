@@ -43,26 +43,43 @@ fun KioskKeyboard(
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var shift by remember { mutableStateOf(false) }
+    var shift by remember { mutableStateOf(false) } // one-shot: capitalises the NEXT letter only
+    var caps by remember { mutableStateOf(false) } // caps-lock: every letter, until shift is tapped again
+    var lastShiftTap by remember { mutableStateOf(0L) }
     var symbols by remember { mutableStateOf(false) }
+
+    // Tapping shift: single tap = one-shot capital; a quick DOUBLE tap = CAPS LOCK; tapping it while
+    // caps-locked turns caps back off — standard phone-keyboard behaviour.
+    val onShift: () -> Unit = {
+        val now = System.currentTimeMillis()
+        when {
+            caps -> { caps = false; shift = false }
+            now - lastShiftTap < 350L -> { caps = true; shift = false }
+            else -> shift = !shift
+        }
+        lastShiftTap = now
+    }
+    val upper = shift || caps
+    val consumeShift: () -> Unit = { if (shift) shift = false } // caps-lock stays on across letters
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!symbols) {
-            // A persistent number row, so digits are always one tap away (no need to switch layers).
+            // A persistent number row — COMPACT (about half height) so it reads as a number strip, not
+            // another row of letter keys. Digits are always one tap away (no layer switch).
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                "1234567890".forEach { c -> PlainKey(c.toString(), style, onKey) }
+                "1234567890".forEach { c -> PlainKey(c.toString(), style, onKey, compact = true) }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                "qwertyuiop".forEach { c -> LetterKey(c, shift, style, onKey) { shift = false } }
+                "qwertyuiop".forEach { c -> LetterKey(c, upper, style, onKey, consumeShift) }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Spacer(0.5f)
-                "asdfghjkl".forEach { c -> LetterKey(c, shift, style, onKey) { shift = false } }
+                "asdfghjkl".forEach { c -> LetterKey(c, upper, style, onKey, consumeShift) }
                 Spacer(0.5f)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Key("⇧", style, weight = 1.5f, active = shift, onClick = { shift = !shift })
-                "zxcvbnm".forEach { c -> LetterKey(c, shift, style, onKey) { shift = false } }
+                Key(if (caps) "⇪" else "⇧", style, weight = 1.5f, active = upper, onClick = onShift)
+                "zxcvbnm".forEach { c -> LetterKey(c, upper, style, onKey, consumeShift) }
                 Key("⌫", style, weight = 1.5f, onClick = onBackspace)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -74,7 +91,7 @@ fun KioskKeyboard(
             }
         } else {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                "1234567890".forEach { c -> PlainKey(c.toString(), style, onKey) }
+                "1234567890".forEach { c -> PlainKey(c.toString(), style, onKey, compact = true) }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 "@.-_+/#%&".forEach { c -> PlainKey(c.toString(), style, onKey) }
@@ -93,34 +110,43 @@ fun KioskKeyboard(
     }
 }
 
-/** A letter key: shows upper/lower per [shift] and emits the matching case. Shift is ONE-SHOT — after a
- *  capital is typed, [onShiftConsumed] turns it back off (so ⇧+j gives "J", then "ohn" stays lower). */
+/** A letter key: shows upper/lower per [upper] and emits the matching case. [onTyped] runs after a
+ *  letter is emitted so a ONE-SHOT shift can clear itself (caps-lock stays on across letters). */
 @Composable
-private fun RowScope.LetterKey(c: Char, shift: Boolean, style: SceneStyle, onKey: (String) -> Unit, onShiftConsumed: () -> Unit) {
-    val ch = if (shift) c.uppercaseChar() else c
-    Key(ch.toString(), style, onClick = { onKey(ch.toString()); if (shift) onShiftConsumed() })
+private fun RowScope.LetterKey(c: Char, upper: Boolean, style: SceneStyle, onKey: (String) -> Unit, onTyped: () -> Unit) {
+    val ch = if (upper) c.uppercaseChar() else c
+    Key(ch.toString(), style, onClick = { onKey(ch.toString()); onTyped() })
 }
 
-/** A key that emits its own label verbatim (digits / symbols). */
+/** A key that emits its own label verbatim (digits / symbols). [compact] = the shorter number-row key. */
 @Composable
-private fun RowScope.PlainKey(label: String, style: SceneStyle, onKey: (String) -> Unit) {
-    Key(label, style, onClick = { onKey(label) })
+private fun RowScope.PlainKey(label: String, style: SceneStyle, onKey: (String) -> Unit, compact: Boolean = false) {
+    Key(label, style, compact = compact, onClick = { onKey(label) })
 }
 
 @Composable
-private fun RowScope.Key(label: String, style: SceneStyle, weight: Float = 1f, accent: Boolean = false, active: Boolean = false, onClick: () -> Unit) {
+private fun RowScope.Key(
+    label: String,
+    style: SceneStyle,
+    weight: Float = 1f,
+    accent: Boolean = false,
+    active: Boolean = false,
+    compact: Boolean = false,
+    onClick: () -> Unit,
+) {
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(8.dp),
         color = if (accent) style.accent else style.tile,
         contentColor = if (accent) style.onAccent else style.tileInk,
-        // Tall, thumb-friendly keys so a donor can type quickly and accurately.
-        modifier = Modifier.weight(weight).height(72.dp),
+        // Letters/actions are tall + thumb-friendly; the number strip is compact (~half height) so it
+        // looks like a standard phone number row rather than a second bank of letter keys.
+        modifier = Modifier.weight(weight).height(if (compact) 46.dp else 72.dp),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(
                 label,
-                style = MaterialTheme.typography.titleLarge,
+                style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
                 fontWeight = if (accent || active) FontWeight.Bold else FontWeight.Medium,
             )
         }

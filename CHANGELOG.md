@@ -3,6 +3,16 @@
 
 # Changelog
 
+## 0.9.22
+- **Fixed the campaign live preview.** It now sits full-width at the top of the editor and reliably
+  shows both the portrait and landscape giving screens (it was rendering broken before).
+- **More readable giving screen** — larger text, and a darker, higher-contrast secondary text colour on
+  the bright background (kiosk + preview).
+- **Bigger "Choose your own amount" button** — a bold, filled pill instead of a thin outline.
+- **Better on-screen keyboard** — the number row is now a compact strip (not a second bank of letter
+  keys), and double-tapping ⇧ toggles CAPS LOCK (tap ⇧ again to turn it off).
+- Kiosk-side changes (giving screen, keyboard) need a tablet app update; the preview fix is admin-only.
+
 ## 0.9.21
 - **Remote adoption — completed on the tablet.** A tablet at another site can now finish pairing over
   your OpenMasjidOS Cloudflare tunnel: it validates the real (public) certificate with standard system

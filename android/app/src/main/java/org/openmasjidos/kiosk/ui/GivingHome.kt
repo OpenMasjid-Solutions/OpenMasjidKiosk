@@ -311,7 +311,9 @@ private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean): 
         // mid-bright accent like the default cyan gets readable dark text, not low-contrast white.
         onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
         onScene = if (lightScene) InkBlack else Color.White,
-        onSceneMuted = if (lightScene) InkMutedLight else Color.White.copy(alpha = 0.85f),
+        // Secondary text (subtitle/footer): a DARK slate on a light wash so it stays clearly readable,
+        // and near-opaque white on a dark wash — not a washed-out grey.
+        onSceneMuted = if (lightScene) Color(0xFF2F3742) else Color.White.copy(alpha = 0.9f),
         tile = Color.White.copy(alpha = 0.92f), // slight liquid-glass — the background tints through a touch
         tileInk = InkBlack,                      // big BOLD BLACK numbers, like the reference
         card = Color.White,
