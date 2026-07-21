@@ -126,7 +126,7 @@ May Allah reward everyone who made it possible.
 
 Install it from the **App Store inside your OpenMasjidOS dashboard** — one click, nothing
 to configure. When it's running, press **Open**, then follow **Devices → Add kiosk** and
-the on-screen setup at `http://<your-server>:7878/new` to set up a tablet.
+the on-screen setup at `http://<your-server>:8445/new` to set up a tablet.
 
 (Runs on a Raspberry Pi or mini-PC, amd64 or arm64.)
 
