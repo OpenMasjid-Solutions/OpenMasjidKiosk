@@ -10,6 +10,9 @@
   reader, and gets a **"payment"** receipt (never counted as a donation). Set a campaign's type to
   Tuition in the admin. Requires OpenMasjid Students installed with tuition enabled, the kiosk on the
   same Stripe account the school uses, and a tablet app update.
+- **Tuition, made robust.** A parent's typed name + PIN are cleared automatically if they walk away
+  (nothing lingers for the next person), the amount shows immediately on the card screen, and the
+  tuition tile recovers on its own after a brief hiccup reaching the school — never stuck "unavailable".
 
 ## 0.9.23
 - **New app icon.** The OpenMasjid Kiosk brand mark (crescent + minaret + a contactless-tap symbol) now
