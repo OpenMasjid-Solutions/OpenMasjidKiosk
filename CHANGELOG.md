@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.9.27
+- **Much stronger soft kiosk — no computer needed.** Without the (optional) device-owner setup, the
+  kiosk now uses **Android screen pinning**: it pins itself so the **notification shade and the
+  Home/Recents buttons are blocked**, and — once you turn on a screen lock with "ask before
+  unpinning" — getting out by hand needs your device PIN. Your **exit PIN** still opens maintenance
+  and leaves normally. The maintenance screen walks you through the one-time tablet setup (Set as
+  Home app → turn on Screen pinning + a screen lock in Settings → Security). No ADB, no cable, no PC.
+  **(Requires updating the tablet app.)**
+
 ## 0.9.26
 - **Tighter kiosk lockdown.** The hidden maintenance gesture now needs **10 rapid taps** (was 7) to
   reach the exit-PIN, so it's even harder to trigger by accident. On a **device-owner** tablet the

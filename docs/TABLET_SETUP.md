@@ -21,22 +21,39 @@ mount that keeps it **plugged in** is strongly recommended.
    (trust-on-first-use) and won't talk to anything else afterward.
 3. The kiosk appears in **Devices** with live status (battery, charging, reader, version).
 
-## 3. Lock it down (kiosk mode)
-The app runs as the tablet's **home screen**. For a *fully* locked-down kiosk (no status
-bar, no way out but the PIN), provision it as **device owner** — a one-time step on a
-**factory-reset** tablet with **no Google or other accounts added**:
+## 3. Lock it down (kiosk mode) — no computer needed
+
+**First, set the exit PIN.** In the admin panel go to **Devices** and set the kiosk **exit
+PIN**. Staff reach the maintenance screen by tapping **the top corner 10 times** → the PIN
+pad. The PIN is verified on the tablet even if the network is down, so guard it.
+
+**Then harden the tablet itself — all on the tablet, no computer:**
+
+1. **Make the app the Home screen.** Open the maintenance screen (10 taps → PIN) and tap
+   **Set as Home app**, choosing OpenMasjid Kiosk. Now pressing Home returns to the kiosk.
+2. **Turn on Screen pinning + a screen lock.** From the maintenance screen tap **Open tablet
+   Settings (for Screen pinning)**, then:
+   - **Security → Screen pinning** (some tablets: **App pinning**) → turn **ON**, and turn on
+     **"Ask for PIN/pattern before unpinning."**
+   - Set a **screen lock** (PIN or pattern) if the tablet doesn't have one.
+3. Return to the kiosk. It now **pins itself**: the **notification shade is blocked**, the
+   **Home/Recents buttons are blocked**, and getting out by hand needs the device PIN. The
+   app still opens the maintenance screen and exits normally behind **your** exit PIN.
+
+That's a strong, self-contained kiosk with nothing but the tablet. The maintenance screen
+shows a reminder with these exact steps until they're done.
+
+### Even stronger (optional — needs a computer once)
+For an *absolutely* un-leavable kiosk (the notification shade can't even be swiped in),
+provision the tablet as **device owner** — a one-time step on a **factory-reset** tablet
+with **no Google or other accounts added**:
 
 ```
 adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver
 ```
 
-The app then enters true **Lock Task Mode** automatically. Without device-owner it falls
-back to **screen pinning** (a one-time system confirmation) + full-screen immersive mode —
-the maintenance screen shows a banner when the tablet isn't fully locked down.
-
-Set the **exit PIN** in **Devices** (Admin) — staff type it (10 taps in the top corner →
-PIN pad) to reach the maintenance screen. The PIN is verified on the tablet even if the
-network is down.
+The app then enters true **Lock Task Mode** automatically (no screen-pinning setup needed).
+This is optional — the soft-kiosk steps above are enough for most masjids.
 
 ## 4. Keep it running
 - Keep the tablet **plugged in**; the Devices page flags "not charging".

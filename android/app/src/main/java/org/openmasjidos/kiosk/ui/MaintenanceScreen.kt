@@ -117,6 +117,14 @@ fun MaintenanceScreen(
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(stringResource(R.string.kiosk_set_home_app)) }
+                Spacer(Modifier.height(8.dp))
+                // Jump straight to tablet Settings so the volunteer can enable Screen pinning + a
+                // screen lock without a computer (the hint above lists the exact toggles).
+                OutlinedButton(
+                    onClick = onOpenSettings,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(stringResource(R.string.kiosk_open_settings_pinning), color = InkDark) }
             }
 
             Spacer(Modifier.height(24.dp))

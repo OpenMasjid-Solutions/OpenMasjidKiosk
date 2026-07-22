@@ -31,12 +31,17 @@ import org.openmasjidos.kiosk.MainActivity
  *     all blocked), and we register as the persistent HOME so Home always lands back on the kiosk.
  *     In this mode the ONLY way out is this app calling [exitKiosk] — which happens solely behind the
  *     verified exit PIN. There is no OS gesture to escape it.
- *  2. NOT DEVICE OWNER: we do NOT use screen pinning (it shows a confirmation, is escapable by a
- *     swipe+hold, and doesn't block the notification shade). Instead we act like a real single-app
- *     kiosk — the HOME launcher + a re-launch-on-leave watchdog ([MainActivity.onUserLeaveHint])
- *     bounce the user back in whenever they press Home/Recents, and we boot straight into the app +
- *     keep-awake + immersive bars. Android still can't fully block the shade/settings without device
- *     owner, so a truly un-leavable kiosk REQUIRES it. The maintenance screen says so.
+ *  2. NOT DEVICE OWNER — the SOFT kiosk (no ADB, no computer). We use Android SCREEN PINNING:
+ *     a plain app may call [Activity.startLockTask] to pin ITSELF, which blocks the notification
+ *     shade / quick-settings AND Home/Recents. When the tablet has a screen lock with "ask before
+ *     unpinning" turned on, the manual unpin gesture then requires that device PIN — so a donor can't
+ *     get out. We STILL unpin PROGRAMMATICALLY ([exitKiosk] → stopLockTask) behind our OWN verified
+ *     exit PIN, so maintenance/exit is unaffected. Belt-and-braces: we're also the HOME launcher with
+ *     a re-launch-on-leave watchdog ([MainActivity.onUserLeaveHint]) + boot-into-app + keep-awake +
+ *     immersive bars, so even where pinning is unavailable/declined the kiosk still returns itself to
+ *     the giving screen. Pinning must be enabled once in Settings → Security (the maintenance screen
+ *     explains how, no computer needed). Device owner (tier 1) is still the ONLY way to make the shade
+ *     completely unreachable, but the soft kiosk is now much harder to escape.
  *
  * We never crash if a call is not permitted — every OS call is guarded.
  */
@@ -113,15 +118,26 @@ object KioskController {
             if (am != null && am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_NONE) {
                 runCatching { activity.startLockTask() }
             }
+        } else {
+            // SOFT KIOSK — no device owner, no ADB, no computer. Use Android SCREEN PINNING: a plain
+            // app may call startLockTask() to pin ITSELF, which blocks the notification shade /
+            // quick-settings AND Home/Recents. When the tablet has a screen lock with "ask before
+            // unpinning" on, the manual unpin gesture then needs that device PIN — so a donor can't get
+            // out. We still unpin PROGRAMMATICALLY (stopLockTask) behind our OWN verified exit PIN, so
+            // maintenance/exit is unaffected. The volunteer turns Screen pinning on once in Settings →
+            // Security (the maintenance screen explains how); if it's unavailable/declined we fall back
+            // to the HOME launcher + the re-launch-on-leave watchdog. First pin shows a one-time OS
+            // confirmation. (Under pinning a RARE keyed-card 3DS that needs an external browser tab
+            // can't open; the reader is the primary path and does 3DS in-process, so this only touches
+            // the off-by-default manual-entry fallback.)
+            val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (am != null && am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_NONE) {
+                runCatching { activity.startLockTask() }
+            }
         }
-        // NOT device owner: we deliberately do NOT screen-pin. Pinning shows a confirmation, is
-        // escapable by a swipe+hold, and is exactly the "app pinning" that doesn't hold. Instead the
-        // HOME launcher + the re-launch-on-leave watchdog (MainActivity.onUserLeaveHint) bounce the
-        // user back into the kiosk whenever they try to leave. A fully un-leavable kiosk that also
-        // blocks the notification shade still requires device-owner provisioning (docs/TABLET_SETUP.md).
 
-        // Re-assert immersive LAST: entering Lock Task (or a just-granted HOME role) can momentarily
-        // re-show the status/navigation bars, so hide them again after all the above has run.
+        // Re-assert immersive LAST: entering Lock Task / screen pinning (or a just-granted HOME role)
+        // can momentarily re-show the status/navigation bars, so hide them again after all the above.
         applyWindow(activity)
     }
 
