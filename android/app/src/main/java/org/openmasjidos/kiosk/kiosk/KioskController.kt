@@ -84,7 +84,7 @@ object KioskController {
      * Task Mode with the status bar disabled and HOME-only features; otherwise it degrades to screen
      * pinning (escapable — see the class note).
      */
-    fun enterKiosk(activity: Activity) {
+    fun enterKiosk(activity: Activity, paired: Boolean) {
         applyWindow(activity)
 
         val owner = dpmIfOwner(activity)
@@ -127,12 +127,23 @@ object KioskController {
             // maintenance/exit is unaffected. The volunteer turns Screen pinning on once in Settings →
             // Security (the maintenance screen explains how); if it's unavailable/declined we fall back
             // to the HOME launcher + the re-launch-on-leave watchdog. First pin shows a one-time OS
-            // confirmation. (Under pinning a RARE keyed-card 3DS that needs an external browser tab
-            // can't open; the reader is the primary path and does 3DS in-process, so this only touches
-            // the off-by-default manual-entry fallback.)
+            // confirmation. Keyed-card 3DS renders in our in-app WebView (never an external browser),
+            // so pinning doesn't affect the payment flow.
+            //
+            // Pin ONLY while PAIRED. The sole in-app unpin path (10-tap → maintenance → Exit/Settings)
+            // lives on the paired giving screen; the pairing / re-pair screens have no such gesture. So
+            // pinning an UNPAIRED kiosk (e.g. after a server REVOKE drops us to the pairing screen)
+            // would trap the tablet with no in-app way out — and because we're the HOME launcher, a
+            // manual unpin just loops back into a re-pin. Releasing the pin when not paired keeps a
+            // revoked/unpaired tablet freely re-pairable (there's no donor flow or money on those
+            // screens, so pinning them buys nothing).
             val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-            if (am != null && am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_NONE) {
-                runCatching { activity.startLockTask() }
+            if (am != null) {
+                if (paired && am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_NONE) {
+                    runCatching { activity.startLockTask() }
+                } else if (!paired && am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_PINNED) {
+                    runCatching { activity.stopLockTask() }
+                }
             }
         }
 

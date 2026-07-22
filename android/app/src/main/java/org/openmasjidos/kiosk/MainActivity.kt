@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.openmasjidos.kiosk.kiosk.KioskController
@@ -80,6 +81,15 @@ class MainActivity : ComponentActivity() {
                 // ourselves rather than asking the system (setRequestedOrientation), because many
                 // tablets ignore orientation requests — drawing it rotated always works.
                 val uiState by vm.ui.collectAsStateWithLifecycle()
+                // Re-assert lockdown whenever paired-ness flips WHILE the kiosk is on screen (e.g. an
+                // admin REVOKE arriving on a heartbeat): screen-pin when it becomes Paired, and RELEASE
+                // the pin the moment it drops to the pairing screen so a revoked soft-kiosk tablet is
+                // never trapped. onResume covers the return-from-Settings case; this covers a phase
+                // change that happens with no resume.
+                val paired = uiState.phase == Phase.Paired
+                LaunchedEffect(paired) {
+                    if (!exiting) KioskController.enterKiosk(this@MainActivity, paired)
+                }
                 RotatedRoot(orientationDegrees(uiState.config?.orientation)) {
                 KioskRoot(
                     vm = vm,
@@ -133,9 +143,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Idempotent: enters lock task (device owner) / re-applies immersive. Skipped once we've
-        // ended kiosk mode for an update (exiting) so the browser/installer isn't yanked away.
-        if (!exiting) KioskController.enterKiosk(this)
+        // Idempotent: enters lock task (device owner) / screen-pins when PAIRED (soft kiosk) / re-
+        // applies immersive. Skipped once we've ended kiosk mode for an update (exiting) so the
+        // browser/installer isn't yanked away. `paired` gates soft-kiosk pinning so the pairing screen
+        // is never pinned (it has no in-app unpin) — see KioskController.enterKiosk.
+        if (!exiting) KioskController.enterKiosk(this, vm.ui.value.phase == Phase.Paired)
     }
 
     /**
