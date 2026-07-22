@@ -107,6 +107,105 @@ export async function notify(payload: NotifyPayload): Promise<{ delivered: boole
   }
 }
 
+// ── Fabric email (manifest `email: true`) — send a donor a receipt via the OS ──────
+// The admin sets up ONE provider (SMTP/Resend) in OpenMasjidOS → Settings → Email; we send
+// through the platform with our per-app secret and NEVER see the mail credentials or the From
+// address. Server→server, LAN-only, not CORS-enabled. Fails soft: `not_configured` = the admin
+// hasn't set up email yet → we just don't send (the donation is still recorded + Stripe's own
+// receipt stays in place). NEVER throws; NEVER logs the recipient or the body.
+export interface FabricEmailMessage {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+}
+
+/** Last outcome of a Fabric email attempt, so the admin UI (and the receipt strategy) can tell
+ *  whether email is set up in OpenMasjidOS WITHOUT sending a probe on every settings load. We only
+ *  go "branded" (suppress Stripe's own receipt in favour of ours) once this is 'ok' — a proven send
+ *  — so a donor is never left with zero receipts because email wasn't actually configured. In-memory
+ *  only (never persisted); resets to 'unknown' each process start per the restore-resilience rules. */
+export type EmailStatus = 'unknown' | 'ok' | 'not_configured' | 'rate_limited' | 'error' | 'no-fabric';
+let lastEmailStatus: EmailStatus = 'unknown';
+export function emailStatus(): EmailStatus {
+  return lastEmailStatus;
+}
+
+/** Send one email through the Fabric. Returns {sent} / {sent:false, reason}. NEVER throws;
+ *  NEVER logs the recipient or the body (only a status code / reason on failure). */
+export async function fabricEmail(msg: FabricEmailMessage): Promise<{ sent: boolean; reason?: string }> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) {
+    lastEmailStatus = 'no-fabric';
+    return { sent: false, reason: 'no-fabric' };
+  }
+  if (!msg.to.trim() || !msg.subject.trim() || !msg.text.trim()) return { sent: false, reason: 'empty' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-openmasjid-app-secret': config.omosAppSecret },
+      body: JSON.stringify({ to: msg.to, subject: msg.subject, text: msg.text, ...(msg.html ? { html: msg.html } : {}) }),
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) {
+      lastEmailStatus = 'error';
+      return { sent: false, reason: `http_${res.status}` };
+    }
+    const j = (await res.json().catch(() => ({}))) as { sent?: boolean; reason?: string };
+    if (j.sent === true) {
+      lastEmailStatus = 'ok';
+      return { sent: true };
+    }
+    const reason = j.reason ?? 'unknown';
+    lastEmailStatus = reason === 'not_configured' ? 'not_configured' : reason === 'rate_limited' ? 'rate_limited' : 'error';
+    return { sent: false, reason };
+  } catch (err) {
+    // Reached-but-failed / unreachable — NOT proof it's unconfigured, so don't claim so.
+    log.debug(`Fabric email failed: ${err instanceof Error ? err.message : String(err)}`);
+    lastEmailStatus = 'error';
+    return { sent: false, reason: 'unreachable' };
+  }
+}
+
+// ── Fabric alerts (manifest `alerts:`) — tell the ADMIN something's wrong ──────────
+// The admin chooses the channel (email/webhook/both/off) per alert in OpenMasjidOS →
+// Settings → Alerts; we never pick it. `alert` MUST be an id we declared in the manifest
+// (or the platform 400s). Fails soft: `disabled_by_admin` (muted, or both channels off) is
+// normal — never crash. This is the ONLY way we can reach the ADMIN (the platform never
+// exposes the admin's email to us); donor receipts go via fabricEmail with the donor's address.
+export async function fabricAlert(
+  alert: string,
+  title: string,
+  text: string,
+  level: 'info' | 'success' | 'warning' | 'error' = 'warning',
+): Promise<{ delivered: boolean; reason?: string; email?: boolean; webhook?: boolean }> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { delivered: false, reason: 'no-fabric' };
+  if (!alert || !text.trim()) return { delivered: false, reason: 'empty' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/alert`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-openmasjid-app-secret': config.omosAppSecret },
+      body: JSON.stringify({ alert, title, text, level }),
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) return { delivered: false, reason: `http_${res.status}` };
+    const j = (await res.json().catch(() => ({}))) as { delivered?: boolean; reason?: string; email?: boolean; webhook?: boolean };
+    return { delivered: j.delivered === true, reason: j.reason, email: j.email, webhook: j.webhook };
+  } catch (err) {
+    log.debug(`Fabric alert failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { delivered: false, reason: 'unreachable' };
+  }
+}
+
 /** Pull the platform's session token out of the raw Cookie header. */
 function omosCookie(cookieHeader: string | undefined): string | null {
   if (!cookieHeader) return null;

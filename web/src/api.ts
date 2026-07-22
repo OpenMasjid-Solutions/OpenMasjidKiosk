@@ -82,10 +82,15 @@ export interface MasjidAddress {
   country: string;
 }
 
-/** The masjid details the platform injects no profile for — this app collects them itself. */
+/** The masjid details the platform injects no profile for — this app collects them itself. `logo`
+ *  + the contact fields are optional and only used on the emailed donation receipt. */
 export interface Masjid {
   name: string;
   address: MasjidAddress;
+  logo: string;
+  email: string;
+  phone: string;
+  website: string;
 }
 
 /** Non-secret facts about a set of Stripe keys. `publishableKey` is safe to expose; the
@@ -182,8 +187,35 @@ export const setLocalKeys = (body: { publishableKey?: string; secretKey?: string
 export const setCurrency = (currency: string) =>
   request<PaymentsStatus>('/api/admin/payments/currency', { method: 'PUT', body: JSON.stringify({ currency }) });
 
-export const saveMasjid = (body: { name?: string; address?: Partial<MasjidAddress> }) =>
+export const getMasjid = () => request<Masjid>('/api/admin/masjid');
+
+export const saveMasjid = (body: { name?: string; address?: Partial<MasjidAddress>; logo?: string; email?: string; phone?: string; website?: string }) =>
   request<Masjid>('/api/admin/masjid', { method: 'PUT', body: JSON.stringify(body) });
+
+// ── Emailed donation receipt + admin alerts (via the OpenMasjidOS Fabric) ────────
+/** Whether the OS provider has proven it can send email this process — 'ok' after a successful
+ *  send, 'not_configured' when the admin hasn't set up email in OpenMasjidOS, etc. */
+export type EmailStatus = 'unknown' | 'ok' | 'not_configured' | 'rate_limited' | 'error' | 'no-fabric';
+
+/** The admin-editable receipt template + read-only status (whether we're embedded + email proven). */
+export interface EmailReceipt {
+  enabled: boolean;
+  subject: string;
+  heading: string;
+  body: string;
+  accent: string;
+  embedded: boolean;
+  emailStatus: EmailStatus;
+}
+
+export const getEmailReceipt = () => request<EmailReceipt>('/api/admin/email-receipt');
+
+export const saveEmailReceipt = (patch: Partial<Pick<EmailReceipt, 'enabled' | 'subject' | 'heading' | 'body' | 'accent'>>) =>
+  request<EmailReceipt>('/api/admin/email-receipt', { method: 'PUT', body: JSON.stringify(patch) });
+
+/** Fire the declared `test` alert — the platform delivers it to the ADMIN's own email/webhook. */
+export const sendTestAlert = () =>
+  request<{ delivered: boolean; reason?: string; email?: boolean; webhook?: boolean }>('/api/admin/test-alert', { method: 'POST' });
 
 export const listLocations = () => request<{ locations: TerminalLocation[] }>('/api/admin/payments/locations');
 

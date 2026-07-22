@@ -3,6 +3,17 @@
 
 # Changelog
 
+## 0.9.25
+- **Email receipts + admin alerts (new).** Donors who give their email can now get a **branded,
+  Stripe-style receipt** — your logo, a thank-you you write, and the amount/date/card/fund — sent
+  through your **OpenMasjidOS email provider** (set up once in OpenMasjidOS → Settings → Email).
+  Turn it on in **Settings → Email receipts**, design it with a live preview, and send yourself a
+  test. Until email is set up, Stripe's own receipt is used, so a donor is never left without one.
+- **Admin alerts.** OpenMasjidOS can now warn you when the **card reader goes offline** or a
+  **payment can't be started** (bad/expired Stripe keys, or Stripe down), delivered to your email
+  or webhook per your OpenMasjidOS → Settings → Alerts choices. Admin-panel + server only — no
+  tablet update needed.
+
 ## 0.9.24
 - **Tuition payments (new).** A campaign can now be a **Tuition** appeal powered by **OpenMasjid
   Students**: on the kiosk a parent taps the tile, enters their child's **name + PIN**, sees the

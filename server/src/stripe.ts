@@ -240,6 +240,9 @@ export interface CompletedPaymentIntent {
   chargeId?: string;
   /** The reusable PaymentMethod Stripe derives from a card-present charge (monthly, slice 7). */
   generatedCard?: string;
+  /** Card brand + last 4 from the charge (for the emailed receipt's "payment method" line). */
+  cardBrand?: string;
+  cardLast4?: string;
   receiptUrl?: string;
   /** When Stripe created the PaymentIntent (epoch seconds). Deterministic per PI, so it anchors the
    *  monthly subscription's first-charge date identically on any retry (keeps idempotency stable). */
@@ -258,7 +261,10 @@ export async function completeCardPresentPaymentIntent(secretKey: string, id: st
     pi = await c.paymentIntents.capture(id, { expand: ['latest_charge'] });
   }
   const charge = pi.latest_charge && typeof pi.latest_charge !== 'string' ? (pi.latest_charge as Stripe.Charge) : undefined;
-  const cardPresent = charge?.payment_method_details?.card_present as { generated_card?: string | null } | undefined;
+  const pmd = charge?.payment_method_details;
+  const cardPresent = pmd?.card_present as { generated_card?: string | null; brand?: string | null; last4?: string | null } | undefined;
+  // The brand/last4 live under card_present (reader) or card (keyed entry) depending on the flow.
+  const card = pmd?.card as { brand?: string | null; last4?: string | null } | undefined;
   return {
     status: pi.status,
     succeeded: pi.status === 'succeeded',
@@ -266,6 +272,8 @@ export async function completeCardPresentPaymentIntent(secretKey: string, id: st
     currency: pi.currency.toUpperCase(),
     chargeId: charge?.id,
     generatedCard: cardPresent?.generated_card ?? undefined,
+    cardBrand: cardPresent?.brand ?? card?.brand ?? undefined,
+    cardLast4: cardPresent?.last4 ?? card?.last4 ?? undefined,
     receiptUrl: charge?.receipt_url ?? undefined,
     createdSec: pi.created,
     metadata: (pi.metadata ?? {}) as Record<string, string>,

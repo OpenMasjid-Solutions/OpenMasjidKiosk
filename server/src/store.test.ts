@@ -243,6 +243,38 @@ test('a donation records its campaign id + title and surfaces them in the log', 
   assert.equal(log[0].campaignTitle, 'Zakat');
 });
 
+test('branded receipt lifecycle: first-record sends once, a retried /complete never regresses or double-sends', () => {
+  const s = freshStore();
+  const base = { paymentIntentId: 'pi_r1', deviceId: 'dev_x', amountMinor: 2000, currency: 'USD', kind: 'one_time', status: 'succeeded' };
+  // First recording of a branded (pending) donation.
+  const first = s.recordDonation({ ...base, receipt: 'pending', cardBrand: 'visa', cardLast4: '4242' });
+  assert.equal(first.firstRecord, true);
+  assert.equal(first.receipt, 'pending');
+  // The inline send succeeded → mark it sent.
+  s.setDonationReceipt('pi_r1', 'sent');
+  // A retried /complete records again with receipt='pending' — must NOT regress the 'sent' row and
+  // must report firstRecord=false so the caller doesn't re-send.
+  const retry = s.recordDonation({ ...base, receipt: 'pending', cardBrand: 'visa', cardLast4: '4242' });
+  assert.equal(retry.firstRecord, false);
+  assert.equal(retry.receipt, 'sent');
+  const row = s.getDonationByPaymentIntent('pi_r1')!;
+  assert.equal(row.receipt, 'sent');
+  assert.equal(row.cardBrand, 'visa');
+  assert.equal(row.cardLast4, '4242');
+});
+
+test('the retry outbox skips a just-recorded pending row (min-age floor) so it cannot race the inline send', () => {
+  const s = freshStore();
+  s.recordDonation({ paymentIntentId: 'pi_r2', deviceId: 'dev_x', amountMinor: 2000, currency: 'USD', kind: 'one_time', status: 'succeeded', donorEmail: 'a@b.co', receipt: 'pending' });
+  // With no floor the fresh pending row is retryable…
+  assert.equal(s.listPendingReceipts(3 * 24 * 3600_000, 0).length, 1);
+  // …but with a 2-minute floor it is skipped (the inline /complete send still owns it → no double-send).
+  assert.equal(s.listPendingReceipts(3 * 24 * 3600_000, 120_000).length, 0);
+  // A 'sent' row is never picked up regardless.
+  s.setDonationReceipt('pi_r2', 'sent');
+  assert.equal(s.listPendingReceipts(3 * 24 * 3600_000, 0).length, 0);
+});
+
 test('rememberPiAccount round-trips and falls back to empty for unknown PIs', () => {
   const s = freshStore();
   s.rememberPiAccount('pi_abc', 'acct_123');

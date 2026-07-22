@@ -20,9 +20,10 @@ import fastifyMultipart from '@fastify/multipart';
 import { z } from 'zod';
 import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
-import { Store, grossUpForFees, type Device } from './store';
+import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite } from './fabric';
+import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus } from './fabric';
+import { renderReceipt, type ReceiptContext } from './email';
 import { studentsInfo, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, billingConfigured } from './students';
 import { LoginLimiter } from './rateLimit';
 import { toCsv } from './csv';
@@ -362,10 +363,56 @@ async function main(): Promise<void> {
     postalCode: z.string().max(40).optional(),
     country: z.string().max(2).optional(),
   });
+  app.get('/api/admin/masjid', { preHandler: requireAdmin }, async () => ({ data: store.getMasjid() }));
   app.put('/api/admin/masjid', { preHandler: requireAdmin }, async (req, reply) => {
-    const parsed = z.object({ name: z.string().max(160).optional(), address: AddressBody.optional() }).safeParse(req.body);
+    const parsed = z
+      .object({
+        name: z.string().max(160).optional(),
+        address: AddressBody.optional(),
+        // Optional branding/contact for the emailed receipt (logo + a contact line). A logo is an
+        // uploaded '/uploads/…' path or an external https URL; contact fields are shown as-is.
+        logo: z.string().max(500).optional(),
+        email: z.string().max(200).optional(),
+        phone: z.string().max(60).optional(),
+        website: z.string().max(200).optional(),
+      })
+      .safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Please check the details.' });
     return { data: store.setMasjid(parsed.data) };
+  });
+
+  // ── Emailed donation receipt (via the OpenMasjidOS Fabric email provider) ────
+  // Design (subject/heading/body/accent) is admin-editable; the amount/date/method/fund details,
+  // masjid logo + contact are filled in automatically (email.ts renderReceipt). Off by default;
+  // nothing is emailed until the admin enables it AND the OS has an email provider set up.
+  const EmailReceiptBody = z.object({
+    enabled: z.boolean().optional(),
+    subject: z.string().max(200).optional(),
+    heading: z.string().max(200).optional(),
+    body: z.string().max(4000).optional(),
+    accent: z.string().max(40).optional(),
+  });
+  // `embedded` + `emailStatus` let the UI show whether OS email is set up WITHOUT a probe on load
+  // (emailStatus is the last real send outcome; 'ok' once a send succeeded).
+  const emailReceiptView = (cfg: EmailReceipt) => ({ ...cfg, embedded: ssoConfigured(), emailStatus: emailStatus() });
+  app.get('/api/admin/email-receipt', { preHandler: requireAdmin }, async () => ({ data: emailReceiptView(store.getEmailReceipt()) }));
+  app.put('/api/admin/email-receipt', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = EmailReceiptBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check the details and try again.' });
+    return { data: emailReceiptView(store.setEmailReceipt(parsed.data)) };
+  });
+  // In-app "send me a test": fire the declared `test` alert. The platform delivers it to the ADMIN's
+  // own email + webhook (per their Settings → Alerts matrix) — the app never learns the admin's
+  // address. (Donor receipts still go via /api/fabric/email with the donor's address; the admin's
+  // email is never exposed to apps, so this alert is the only way the app can reach the admin.)
+  app.post('/api/admin/test-alert', { preHandler: requireAdmin }, async () => {
+    const res = await fabricAlert(
+      'test',
+      'Test from OpenMasjid Kiosk',
+      'If you received this, OpenMasjidOS is reaching you by email/webhook. Your donation receipts go to donors through the same email provider.',
+      'info',
+    );
+    return { data: res };
   });
 
   // ── Terminal Locations (a reader must connect with a locationId) ─────────────
@@ -793,13 +840,53 @@ async function main(): Promise<void> {
     // backstop must not, or an admin's Update could be silently eaten by a background check-in.
     foreground: z.boolean().optional(),
   });
+  // ── Reader-offline alert (derived from the heartbeat's readerStatus) ─────────
+  // The tablet already reports its reader status every heartbeat, so we detect a real outage here —
+  // no extra tablet endpoint (and no tablet update) needed. We DEBOUNCE (a brief BT/USB blip or an
+  // auto-reconnect must not alert) and LATCH (one alert per outage), and only for a kiosk that has
+  // actually had a reader (a remembered serial, or a 'connected' seen this process) — a brand-new
+  // kiosk with no reader stays quiet. On recovery we send a friendly "back online" note. State is
+  // in-memory (a restart just re-arms the debounce). readerStatus values come from the Android app:
+  // 'connected' | 'updating' (healthy), 'not_connected' | 'error' (offline), 'connecting' |
+  // 'discovering' (transient auto-reconnect — hold).
+  const READER_OFFLINE_DEBOUNCE_MS = 120_000; // ~2 min sustained before alerting
+  const readerAlert = new Map<string, { offlineSince: number | null; alerted: boolean; everConnected: boolean }>();
+  const noteReaderStatus = (deviceId: string, deviceName: string, status: string, readerSerial: string): void => {
+    const now = Date.now();
+    const st = readerAlert.get(deviceId) ?? { offlineSince: null, alerted: false, everConnected: false };
+    const everConnected = st.everConnected || status === 'connected' || status === 'updating' || !!readerSerial.trim();
+    if (status === 'connected' || status === 'updating') {
+      if (st.alerted) {
+        void fabricAlert('reader-offline', 'Card reader back online', `The card reader on ${deviceName || 'a kiosk'} is connected again — donations can be taken.`, 'info').catch(() => {});
+      }
+      readerAlert.set(deviceId, { offlineSince: null, alerted: false, everConnected: true });
+      return;
+    }
+    if ((status === 'not_connected' || status === 'error') && everConnected) {
+      const offlineSince = st.offlineSince ?? now;
+      if (!st.alerted && now - offlineSince >= READER_OFFLINE_DEBOUNCE_MS) {
+        void fabricAlert('reader-offline', 'Card reader offline', `The card reader on ${deviceName || 'a kiosk'} stopped responding — donations can't be taken until it's back. Check the reader is powered on and paired.`, 'warning').catch(() => {});
+        readerAlert.set(deviceId, { offlineSince, alerted: true, everConnected: true });
+      } else {
+        readerAlert.set(deviceId, { offlineSince, alerted: st.alerted, everConnected });
+      }
+      return;
+    }
+    // 'connecting' / 'discovering' (or anything else) — transient; keep the current debounce state.
+    readerAlert.set(deviceId, { ...st, everConnected });
+  };
+
   app.post('/api/kiosk/heartbeat', async (req, reply) => {
     const d = resolveDevice(req);
     if (!d) return reply.code(401).send({ error: 'This kiosk isn’t paired.' });
     // A revoked device gets a clean signal (not a 401) so the tablet wipes + re-pairs.
     if (d.revoked) return { data: { configVersion: store.getConfigVersion(), identify: false, latestAppVersion: config.version, revoked: true } };
     const parsed = HeartbeatBody.safeParse(req.body ?? {});
-    if (parsed.success) store.updateHeartbeat(d.id, parsed.data);
+    if (parsed.success) {
+      store.updateHeartbeat(d.id, parsed.data);
+      // Watch the reported reader status for a sustained outage (fail-soft; never blocks the beat).
+      if (parsed.data.readerStatus) noteReaderStatus(d.id, d.name, parsed.data.readerStatus, d.readerSerial);
+    }
     return {
       data: {
         configVersion: store.getConfigVersion(),
@@ -856,6 +943,69 @@ async function main(): Promise<void> {
       return new Intl.NumberFormat('en', { style: 'currency', currency }).format(toMajor(minor, currency));
     } catch {
       return `${toMajor(minor, currency)} ${currency}`;
+    }
+  };
+
+  // ── Emailed donation receipt: build the context + send via the Fabric ────────
+  // Resolve the masjid logo to an ABSOLUTE url an email client can load: an http(s) URL is used
+  // as-is; an uploaded /uploads/… file only works when the app is publicly reachable, so we prefix
+  // the Fabric public URL and drop it otherwise (the email just has no image).
+  const resolveEmailImage = (image: string): string => {
+    const v = (image ?? '').trim();
+    if (/^https?:\/\//i.test(v)) return v;
+    if (/^\/uploads\//.test(v)) {
+      const pub = cachedFabricSite().publicUrl;
+      return pub ? `${pub}${v}` : '';
+    }
+    return '';
+  };
+  /** Format the receipt "date paid" using the server locale + timezone (best-effort). */
+  const fmtReceiptDate = (iso: string): string => {
+    const d = new Date(iso);
+    try {
+      return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZoneName: 'short' }).format(d);
+    } catch {
+      return d.toISOString();
+    }
+  };
+  /** "Visa •••• 4242" (or "Card") from the captured card brand + last 4. */
+  const paymentMethodLabel = (brand: string, last4: string): string => {
+    const b = brand ? brand.charAt(0).toUpperCase() + brand.slice(1) : '';
+    if (b && last4) return `${b} •••• ${last4}`;
+    if (last4) return `Card •••• ${last4}`;
+    return 'Card';
+  };
+  /** Build the Stripe-style receipt context for a recorded donation (from the row + masjid). */
+  const receiptContext = (don: DonationRecord): ReceiptContext => {
+    const m = store.getMasjid();
+    return {
+      name: don.donorName || '',
+      amountText: formatMoney(don.amountMinor, don.currency),
+      campaignTitle: don.campaignTitle || '',
+      masjidName: m.name || '',
+      masjidLogo: resolveEmailImage(m.logo),
+      datePaid: fmtReceiptDate(don.createdAt),
+      paymentMethod: paymentMethodLabel(don.cardBrand, don.cardLast4),
+      reference: don.paymentIntentId.replace(/^pi_/, '').slice(0, 10).toUpperCase(),
+      contactEmail: m.email || '',
+      contactPhone: m.phone || '',
+      contactWebsite: m.website || '',
+    };
+  };
+  /** Render + send a donor's branded receipt. Returns whether it {sent} and whether a failure is
+   *  worth a {retry} (transient/system) vs permanent (no/invalid email, or the provider rejected
+   *  the recipient). NEVER throws. Does NOT re-check the enabled toggle — the CALLER gates on the
+   *  donation's recorded decision (receipt==='pending'). */
+  const sendDonationReceipt = async (don: DonationRecord): Promise<{ sent: boolean; retry: boolean }> => {
+    const addr = (don.donorEmail || '').trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) return { sent: false, retry: false }; // no/invalid email → never sendable
+    try {
+      const rendered = renderReceipt(store.getEmailReceipt(), receiptContext(don));
+      const res = await fabricEmail({ to: addr, subject: rendered.subject, text: rendered.text, html: rendered.html });
+      if (res.sent) return { sent: true, retry: false };
+      return { sent: false, retry: res.reason !== 'bad_recipient' }; // bad recipient is permanent; else retry
+    } catch {
+      return { sent: false, retry: true };
     }
   };
 
@@ -924,6 +1074,17 @@ async function main(): Promise<void> {
     const coverFees = campaign.forceCoverFees || (parsed.data.coverFees === true && campaign.coverFees);
     const chargeMinor = coverFees ? grossUpForFees(amountMinor) : amountMinor;
     const preset = campaign.presetsMinor.includes(amountMinor) ? 'preset' : 'custom';
+    // Receipt strategy — DECIDED ONCE here and carried in PI metadata (`brandedReceipt`), so the
+    // /complete recording + retry outbox stay consistent with whether we suppressed Stripe's receipt:
+    //   • branded → suppress Stripe's built-in receipt + WE send our branded one (receipt:'pending').
+    //   • else    → let Stripe send its receipt; we send nothing (receipt:'stripe') → never a double.
+    // We only go branded when the OS email is CONFIRMED working (emailStatus 'ok') AND the donor gave
+    // an email, so a donor is never left with zero receipts because email wasn't set up; a transient
+    // failure after that is covered by the retry outbox. NOT re-evaluated at confirm (that's the bug).
+    // Require a VALID-looking email (not just non-empty): if we suppressed Stripe's receipt but our
+    // own send then rejected a malformed address, the donor would get ZERO receipts. Gating on the
+    // same check sendDonationReceipt uses guarantees a branded PI is actually sendable.
+    const branded = looksLikeEmail(donorEmail) && store.getEmailReceipt().enabled && ssoConfigured() && emailStatus() === 'ok';
     const metadata = {
       app: 'kiosk',
       deviceId: d.id,
@@ -937,12 +1098,15 @@ async function main(): Promise<void> {
       stripeAccountId: acct.id, // so /complete uses the SAME account this PI was created on
       donorName: donorName ?? '',
       donorEmail,
+      brandedReceipt: branded ? '1' : '0',
     };
     const piInput = {
       amountMinor: chargeMinor,
       currency,
       description: `${monthly ? 'Monthly donation' : 'Donation'} — ${campaign.title || store.getMasjid().name || 'OpenMasjid Kiosk'}`,
-      receiptEmail: donorEmail || undefined, // Stripe emails a receipt on success (if enabled)
+      // Stripe emails its built-in receipt on success (if enabled) — UNLESS we're sending our own
+      // branded one, in which case we suppress Stripe's so the donor doesn't get two.
+      receiptEmail: branded ? undefined : donorEmail || undefined,
       metadata,
     };
     try {
@@ -963,6 +1127,9 @@ async function main(): Promise<void> {
       const why = `${e.code ?? e.type ?? ''} ${e.message ?? ''}`.trim().slice(0, 300);
       log.warn(`payment-intent create failed (${manual ? 'manual' : 'reader'}): ${why}`);
       store.addLogs(d.id, [{ level: 'warn', event: 'payment_create_failed', detail: `${manual ? 'manual' : 'reader'} · ${why}` }]);
+      // Alert the admin donations are broken (bad/expired keys, Stripe down). Fire-and-forget; the
+      // .catch() is REQUIRED — an unhandled async rejection would crash the process.
+      void fabricAlert('payment-failed', 'A donation payment failed to start', 'Stripe rejected a payment setup — donors can’t give until it’s fixed. Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.', 'error').catch(() => {});
       return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
     }
   });
@@ -1014,7 +1181,12 @@ async function main(): Promise<void> {
           log.warn('monthly subscription failed: ' + (e instanceof Error ? e.message : String(e)));
         }
       }
-      store.recordDonation({
+      // Branded receipt owed ONLY when the PI was minted branded (Stripe's receipt suppressed at
+      // intent) AND it succeeded AND the donor gave an email. recordDonation persists that decision
+      // and reports whether THIS call first-recorded it, so we send exactly once (a retried /complete
+      // never re-sends, and never regresses a row already 'sent'/'skipped').
+      const oweBranded = result.succeeded && meta.brandedReceipt === '1' && !!(meta.donorEmail || '').trim();
+      const rec = store.recordDonation({
         paymentIntentId: id,
         deviceId: d.id,
         campaignId: meta.campaignId || '',
@@ -1025,6 +1197,9 @@ async function main(): Promise<void> {
         status: result.succeeded ? 'succeeded' : result.status,
         donorName: meta.donorName,
         donorEmail: meta.donorEmail,
+        cardBrand: result.cardBrand,
+        cardLast4: result.cardLast4,
+        receipt: oweBranded ? 'pending' : 'stripe',
         chargeId: result.chargeId,
       });
       if (result.succeeded) {
@@ -1033,6 +1208,20 @@ async function main(): Promise<void> {
           text: `${formatMoney(result.amountMinor, result.currency)} ${label} at ${d.name || 'the kiosk'}.`,
           level: 'success',
         });
+        // Send our branded receipt, but ONLY on the first recording of a 'pending' row (never a
+        // double on a retried /complete). Non-blocking; a transient failure stays 'pending' for the
+        // retry outbox, a permanent one (bad/no email) is marked 'skipped'. The .catch() is REQUIRED.
+        if (rec.firstRecord && rec.receipt === 'pending') {
+          const don = store.getDonationByPaymentIntent(id);
+          if (don) {
+            void sendDonationReceipt(don)
+              .then((r) => {
+                if (r.sent) store.setDonationReceipt(id, 'sent');
+                else if (!r.retry) store.setDonationReceipt(id, 'skipped');
+              })
+              .catch(() => {});
+          }
+        }
       }
       return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency, monthly } };
     } catch {
@@ -1211,6 +1400,8 @@ async function main(): Promise<void> {
       const why = `${e.code ?? ''} ${e.message ?? ''}`.trim().slice(0, 300);
       log.warn(`tuition payment-intent create failed: ${why}`);
       store.addLogs(d.id, [{ level: 'warn', event: 'tuition_pi_failed', detail: why.slice(0, 200) }]);
+      // Same admin alert as a failed donation — parents can't pay tuition until it's fixed. Fail-soft.
+      void fabricAlert('payment-failed', 'A tuition payment failed to start', 'Stripe rejected a payment setup — parents can’t pay tuition until it’s fixed. Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.', 'error').catch(() => {});
       return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
     }
   });
@@ -1326,6 +1517,29 @@ async function main(): Promise<void> {
     void studentsInfo().catch(() => {});
     setInterval(() => { void studentsInfo(true); }, 5 * 60_000).unref();
     setInterval(() => { void drainTuitionOutbox(); }, 60_000).unref();
+  }
+
+  // Branded-receipt retry outbox: any succeeded donation still owing a branded receipt (a transient
+  // email failure at /complete) is retried until it lands. Bounded to recent donations so we don't
+  // chase ancient ones; stops the pass on a system failure (email provider down) and resumes next
+  // tick. Only when the Fabric is configured (email goes through it). Never lets the app crash.
+  if (ssoConfigured()) {
+    const RECEIPT_MAX_AGE_MS = 3 * 24 * 3600_000; // 3 days — don't chase ancient ones
+    // Don't retry a row younger than this: the inline send fired at /complete owns it for the few
+    // seconds its fabricEmail POST is in flight (8s timeout). A floor comfortably past that closes
+    // the double-send race where an outbox tick re-sends a receipt the inline send is mid-delivering.
+    const RECEIPT_MIN_AGE_MS = 120_000; // 2 min
+    const receiptOutbox = async () => {
+      try {
+        for (const don of store.listPendingReceipts(RECEIPT_MAX_AGE_MS, RECEIPT_MIN_AGE_MS)) {
+          const r = await sendDonationReceipt(don);
+          if (r.sent) store.setDonationReceipt(don.paymentIntentId, 'sent');
+          else if (!r.retry) store.setDonationReceipt(don.paymentIntentId, 'skipped');
+          else break; // email provider down / rate-limited — try again next tick
+        }
+      } catch { /* fail soft — never let the receipt outbox crash the app */ }
+    };
+    setInterval(() => { void receiptOutbox(); }, 60_000).unref();
   }
 
   await app.listen({ port: config.port, host: config.host });

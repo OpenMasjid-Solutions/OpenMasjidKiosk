@@ -672,3 +672,25 @@ button.status-pill:hover { filter: brightness(1.08); }
 .page-title, .brand b, .topclock-time { color: var(--ink-scene); }
 .page-sub, .topclock-date { color: var(--ink-scene-muted); }
 .page-title, .page-sub, .brand, .topclock { text-shadow: var(--text-shadow-scene); }
+
+/* ── Email receipt designer (Settings → Email receipts) ───────────────────────── */
+.er-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 20rem); gap: 1.25rem; align-items: start; }
+@media (max-width: 46rem) { .er-grid { grid-template-columns: 1fr; } }
+.er-form { display: flex; flex-direction: column; gap: 0.8rem; min-width: 0; }
+.er-preview-wrap { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
+.er-logo-thumb { max-height: 44px; max-width: 140px; height: auto; border-radius: 8px; background: #fff; padding: 4px; }
+/* The preview is a light Stripe-style card regardless of the admin theme (email clients are light). */
+.er-receipt { background: #ffffff; color: #16242b; border: 1px solid #e6eaed; border-radius: 12px; padding: 20px 18px; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow-wrap: anywhere; }
+.er-receipt__head { text-align: center; padding-bottom: 6px; }
+.er-receipt__logo { max-height: 48px; max-width: 180px; height: auto; }
+.er-receipt__masjid { font-size: 18px; font-weight: 700; color: #16242b; }
+.er-receipt__ref { margin-top: 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #9aa7af; }
+.er-receipt__heading { margin: 10px 0 8px; font-size: 18px; line-height: 1.25; text-align: center; }
+.er-receipt__body { margin: 0 0 12px; font-size: 14px; line-height: 1.6; color: #42535c; text-align: center; white-space: pre-wrap; }
+.er-receipt__table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.er-receipt__table td { padding: 9px 0; color: #16242b; border-top: 1px solid #eef1f3; }
+.er-receipt__table tr:first-child td { border-top: 0; }
+.er-receipt__table td:first-child { color: #7a8892; }
+.er-receipt__table td:last-child { text-align: right; }
+.er-receipt__table td.er-strong { font-weight: 700; font-size: 15px; }
+.er-receipt__foot { margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef1f3; text-align: center; font-size: 12px; line-height: 1.6; color: #7a8892; }

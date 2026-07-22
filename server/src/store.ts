@@ -57,6 +57,13 @@ export interface MasjidAddress {
 export interface MasjidInfo {
   name: string;
   address: MasjidAddress;
+  /** Logo image URL (an uploaded '/uploads/…' path or an external https link) shown at the top of
+   *  the emailed receipt. '' → the receipt falls back to the masjid name as a text header. */
+  logo: string;
+  /** Contact details shown on the emailed receipt's footer ('' hides each). Not required. */
+  email: string;
+  phone: string;
+  website: string;
 }
 
 /** The giving screen the kiosk shows (designed in the admin panel; the designer UI is a later
@@ -203,6 +210,27 @@ export function grossUpForFees(baseMinor: number): number {
   return Math.max(baseMinor, total);
 }
 
+/** The emailed donation receipt (sent via the OpenMasjidOS Fabric email provider when the admin
+ *  enables it). subject/heading/body are the admin-editable text (the {name} {amount} {campaign}
+ *  {masjid} variables work); the receipt DETAILS (amount, date, payment method, fund), the masjid
+ *  logo + contact info are filled in automatically (see email.ts renderReceipt), so the paragraph
+ *  stays a clean thank-you. `accent` is a hex tint. Off by default — nothing is emailed until the
+ *  admin turns it on AND the OS has an email provider set up. */
+export interface EmailReceipt {
+  enabled: boolean;
+  subject: string;
+  heading: string;
+  body: string;
+  accent: string;
+}
+export const EMAIL_RECEIPT_DEFAULT: EmailReceipt = {
+  enabled: false,
+  subject: 'Your donation receipt — {masjid}',
+  heading: 'JazākAllāhu khayran, {name}!',
+  body: 'Thank you for your generous donation to {masjid}. May Allah accept it from you and reward you abundantly. Your receipt is below — please keep it for your records.',
+  accent: '',
+};
+
 /** A recorded donation as the admin views it (device + campaign names resolved). Amounts are
  *  integer minor units; `createdAt` is an ISO string. `deviceName` is '' if the kiosk was removed. */
 export interface DonationRecord {
@@ -218,6 +246,15 @@ export interface DonationRecord {
   status: string; // 'succeeded' | other Stripe status
   donorName: string;
   donorEmail: string;
+  /** Card brand + last 4 captured from Stripe on verify (for the receipt's "payment method" line). */
+  cardBrand: string;
+  cardLast4: string;
+  /** Branded-receipt-email lifecycle, DECIDED ONCE at intent (carried in PI metadata) and recorded
+   *  here on verify — so the send/outbox stays consistent with whether Stripe's own receipt was
+   *  suppressed. 'stripe' = Stripe sent its built-in receipt, we owe nothing; 'pending' = we
+   *  suppressed Stripe's and owe a branded one (retried); 'sent' = delivered; 'skipped' =
+   *  permanently un-sendable (no/invalid donor email, or the provider rejected it). */
+  receipt: 'stripe' | 'pending' | 'sent' | 'skipped';
   chargeId: string;
   createdAt: string;
 }
@@ -356,6 +393,9 @@ export class Store {
         status TEXT NOT NULL DEFAULT '',
         donor_name TEXT NOT NULL DEFAULT '',
         donor_email TEXT NOT NULL DEFAULT '',
+        card_brand TEXT NOT NULL DEFAULT '',
+        card_last4 TEXT NOT NULL DEFAULT '',
+        receipt TEXT NOT NULL DEFAULT 'stripe',
         charge_id TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
       );
@@ -423,9 +463,15 @@ export class Store {
     // Migrate older donation rows (pre-campaigns) to carry the new columns. This MUST run before any
     // index on those columns — an existing `donations` table isn't recreated by CREATE TABLE IF NOT
     // EXISTS, so the columns don't exist yet on an upgrade (a fresh DB has them from the CREATE above).
-    for (const col of ['campaign_id', 'campaign_title']) {
+    for (const col of ['campaign_id', 'campaign_title', 'card_brand', 'card_last4']) {
       const exists = (this.db.prepare(`PRAGMA table_info(donations)`).all() as { name: string }[]).some((c) => c.name === col);
       if (!exists) this.db.exec(`ALTER TABLE donations ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`);
+    }
+    // Branded-receipt lifecycle column (added with email receipts). Legacy rows default to 'stripe'
+    // (their receipts, if any, were Stripe's built-in ones) so the outbox never re-sends them.
+    {
+      const has = (this.db.prepare(`PRAGMA table_info(donations)`).all() as { name: string }[]).some((c) => c.name === 'receipt');
+      if (!has) this.db.exec("ALTER TABLE donations ADD COLUMN receipt TEXT NOT NULL DEFAULT 'stripe'");
     }
     // Now that campaign_id is guaranteed to exist, its index is safe to create.
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_donations_campaign ON donations(campaign_id)');
@@ -571,21 +617,61 @@ export class Store {
     this.bumpConfigVersion(); // kiosks refetch config (locationId) when this changes
   }
 
-  /** Masjid name + address — used to name/address the Terminal Location and on receipts. The
-   *  platform injects no profile, so the admin enters these in-app. */
+  /** Masjid name + address — used to name/address the Terminal Location and on receipts. Also holds
+   *  optional logo + contact details shown on the emailed receipt. The platform injects no profile,
+   *  so the admin enters these in-app. Missing fields (an older stored value) default to empty. */
   getMasjid(): MasjidInfo {
-    return this.getJson<MasjidInfo>('masjid', {
-      name: '',
-      address: { line1: '', line2: '', city: '', state: '', postalCode: '', country: '' },
-    });
+    const s = this.getJson<Partial<MasjidInfo>>('masjid', {});
+    return {
+      name: s.name ?? '',
+      address: {
+        line1: s.address?.line1 ?? '',
+        line2: s.address?.line2 ?? '',
+        city: s.address?.city ?? '',
+        state: s.address?.state ?? '',
+        postalCode: s.address?.postalCode ?? '',
+        country: s.address?.country ?? '',
+      },
+      logo: s.logo ?? '',
+      email: s.email ?? '',
+      phone: s.phone ?? '',
+      website: s.website ?? '',
+    };
   }
-  setMasjid(patch: { name?: string; address?: Partial<MasjidAddress> }): MasjidInfo {
+  setMasjid(patch: { name?: string; address?: Partial<MasjidAddress>; logo?: string; email?: string; phone?: string; website?: string }): MasjidInfo {
     const cur = this.getMasjid();
     const merged: MasjidInfo = {
       name: patch.name ?? cur.name,
       address: { ...cur.address, ...clean(patch.address ?? {}) },
+      logo: (patch.logo ?? cur.logo).slice(0, 500),
+      email: (patch.email ?? cur.email).slice(0, 200),
+      phone: (patch.phone ?? cur.phone).slice(0, 60),
+      website: (patch.website ?? cur.website).slice(0, 200),
     };
     this.setRaw('masjid', JSON.stringify(merged));
+    return merged;
+  }
+
+  /** The emailed donation-receipt template (admin-editable). Off by default. */
+  getEmailReceipt(): EmailReceipt {
+    const s = this.getJson<Partial<EmailReceipt>>('email_receipt', {});
+    return {
+      enabled: s.enabled ?? EMAIL_RECEIPT_DEFAULT.enabled,
+      subject: s.subject ?? EMAIL_RECEIPT_DEFAULT.subject,
+      heading: s.heading ?? EMAIL_RECEIPT_DEFAULT.heading,
+      body: s.body ?? EMAIL_RECEIPT_DEFAULT.body,
+      accent: s.accent ?? EMAIL_RECEIPT_DEFAULT.accent,
+    };
+  }
+  setEmailReceipt(patch: Partial<EmailReceipt>): EmailReceipt {
+    const merged = { ...this.getEmailReceipt(), ...clean(patch) };
+    merged.enabled = !!merged.enabled;
+    merged.subject = String(merged.subject ?? '').slice(0, 200);
+    merged.heading = String(merged.heading ?? '').slice(0, 200);
+    merged.body = String(merged.body ?? '').slice(0, 4000);
+    const a = String(merged.accent ?? '').trim();
+    merged.accent = /^#[0-9a-fA-F]{3,8}$/.test(a) ? a : '';
+    this.setRaw('email_receipt', JSON.stringify(merged));
     return merged;
   }
 
@@ -957,6 +1043,11 @@ export class Store {
   }
 
   // ── Donations (recorded ONLY after the server verifies the PI with Stripe) ──────
+  /** Record (or idempotently refresh) a verified donation. Returns `firstRecord` — true only when
+   *  this call INSERTED a new row — and the row's effective `receipt` lifecycle state, so the caller
+   *  sends a branded receipt exactly once. On a retried /complete (conflict) we refresh status/charge/
+   *  card details but NEVER overwrite `receipt` (a row already advanced to 'sent'/'skipped' must not
+   *  regress to 'pending', which would double-send). */
   recordDonation(d: {
     paymentIntentId: string;
     deviceId: string;
@@ -968,13 +1059,18 @@ export class Store {
     status: string;
     donorName?: string;
     donorEmail?: string;
+    cardBrand?: string;
+    cardLast4?: string;
+    receipt?: DonationRecord['receipt'];
     chargeId?: string;
-  }): void {
+  }): { firstRecord: boolean; receipt: DonationRecord['receipt'] } {
+    const existing = this.db.prepare('SELECT receipt FROM donations WHERE id = ?').get(d.paymentIntentId) as { receipt?: string } | undefined;
+    const firstRecord = !existing;
     this.db
       .prepare(
-        `INSERT INTO donations (id, payment_intent_id, device_id, campaign_id, campaign_title, amount_minor, currency, kind, status, donor_name, donor_email, charge_id, created_at)
-         VALUES (@id, @paymentIntentId, @deviceId, @campaignId, @campaignTitle, @amountMinor, @currency, @kind, @status, @donorName, @donorEmail, @chargeId, @createdAt)
-         ON CONFLICT(id) DO UPDATE SET status = excluded.status, charge_id = excluded.charge_id`,
+        `INSERT INTO donations (id, payment_intent_id, device_id, campaign_id, campaign_title, amount_minor, currency, kind, status, donor_name, donor_email, card_brand, card_last4, receipt, charge_id, created_at)
+         VALUES (@id, @paymentIntentId, @deviceId, @campaignId, @campaignTitle, @amountMinor, @currency, @kind, @status, @donorName, @donorEmail, @cardBrand, @cardLast4, @receipt, @chargeId, @createdAt)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status, charge_id = excluded.charge_id, card_brand = excluded.card_brand, card_last4 = excluded.card_last4`,
       )
       .run({
         id: d.paymentIntentId,
@@ -988,9 +1084,45 @@ export class Store {
         status: d.status,
         donorName: d.donorName || '',
         donorEmail: d.donorEmail || '',
+        cardBrand: d.cardBrand || '',
+        cardLast4: d.cardLast4 || '',
+        receipt: d.receipt ?? 'stripe',
         chargeId: d.chargeId || '',
         createdAt: new Date().toISOString(),
       });
+    // On a conflict the INSERT keeps the ORIGINAL receipt state; report that, not the passed value.
+    const receipt = firstRecord ? (d.receipt ?? 'stripe') : ((['stripe', 'pending', 'sent', 'skipped'] as const).includes(existing!.receipt as DonationRecord['receipt']) ? (existing!.receipt as DonationRecord['receipt']) : 'stripe');
+    return { firstRecord, receipt };
+  }
+
+  /** One recorded donation by its PaymentIntent id (for building/retrying its receipt). */
+  getDonationByPaymentIntent(pi: string): DonationRecord | null {
+    const r = this.db.prepare('SELECT d.*, dev.name AS device_name FROM donations d LEFT JOIN devices dev ON dev.id = d.device_id WHERE d.payment_intent_id = ?').get(pi) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? this.rowToDonation(r) : null;
+  }
+
+  /** Set the branded-receipt lifecycle state for a donation (idempotent). */
+  setDonationReceipt(pi: string, receipt: DonationRecord['receipt']): void {
+    this.db.prepare('UPDATE donations SET receipt = ? WHERE payment_intent_id = ?').run(receipt, pi);
+  }
+
+  /** Succeeded donations that still owe a branded receipt (receipt='pending'), aged between `minAgeMs`
+   *  and `maxAgeMs`. The `minAgeMs` FLOOR keeps the retry outbox from racing the inline send fired at
+   *  /complete: that send holds the row 'pending' for the few seconds its fabricEmail POST is in flight,
+   *  so without a floor a 60s outbox tick landing in that window would re-select the same row and send a
+   *  SECOND identical receipt. With the floor the outbox only ever retries a row that has been pending a
+   *  good while — i.e. one whose inline send genuinely didn't land. */
+  listPendingReceipts(maxAgeMs: number, minAgeMs = 0, limit = 50): DonationRecord[] {
+    const now = Date.now();
+    const floor = new Date(now - maxAgeMs).toISOString(); // oldest we still bother retrying
+    const ceil = new Date(now - minAgeMs).toISOString(); // youngest — skip rows the inline send still owns
+    return (
+      this.db
+        .prepare(`SELECT d.*, dev.name AS device_name FROM donations d LEFT JOIN devices dev ON dev.id = d.device_id WHERE d.status = 'succeeded' AND d.receipt = 'pending' AND d.created_at >= ? AND d.created_at <= ? ORDER BY d.created_at LIMIT ?`)
+        .all(floor, ceil, limit) as Record<string, unknown>[]
+    ).map((r) => this.rowToDonation(r));
   }
 
   // ── Tuition (students/billing) outbox — separate from donations (contract §5) ──────
@@ -1105,6 +1237,11 @@ export class Store {
       status: String(r.status),
       donorName: String(r.donor_name),
       donorEmail: String(r.donor_email),
+      cardBrand: String(r.card_brand ?? ''),
+      cardLast4: String(r.card_last4 ?? ''),
+      receipt: (['stripe', 'pending', 'sent', 'skipped'] as const).includes(String(r.receipt) as DonationRecord['receipt'])
+        ? (String(r.receipt) as DonationRecord['receipt'])
+        : 'stripe',
       chargeId: String(r.charge_id),
       createdAt: String(r.created_at),
     };

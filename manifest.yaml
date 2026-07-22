@@ -5,7 +5,7 @@ id: kiosk
 name: OpenMasjid Kiosk
 tagline: Tap-to-donate kiosk for a wall-mounted tablet with a Stripe card reader
 category: donations
-version: 0.9.24
+version: 0.9.25
 author: OpenMasjid-Solutions
 license: AGPL-3.0-only
 icon: icon.svg
@@ -51,6 +51,25 @@ stripe: true
 # Best-effort alerts (e.g. "£20 donation received at the foyer kiosk") relayed to the
 # masjid's configured webhook via POST /api/fabric/notify. Fails soft; never blocks.
 notifications: true
+# Send donors a branded receipt email via the masjid's OpenMasjidOS email provider
+# (POST /api/fabric/email). We supply only the donor's address, subject and body — the OS
+# sets the From and holds the mail credentials; this app never sees them. Fails soft: when
+# no provider is set up we leave Stripe's own receipt in place, so a donor is never left
+# with none.
+email: true
+# Admin alerts we can raise (POST /api/fabric/alert). The admin picks the channel
+# (email/webhook/both/off) per alert in OpenMasjidOS → Settings → Alerts; declaring an alert
+# here is the opt-in. Each fails soft — a muted alert is normal, never an error.
+alerts:
+  - id: reader-offline
+    label: Card reader offline
+    description: The tap-to-pay reader stopped responding — donations can't be taken until it's back.
+  - id: payment-failed
+    label: A payment couldn't be started
+    description: Stripe rejected a payment setup (bad or expired keys, or Stripe is down).
+  - id: test
+    label: Test message
+    description: A test you trigger from the app to confirm OpenMasjidOS is reaching you.
 # Learn our public address (GET /api/fabric/site → publicUrl + basePath) so a tablet at a
 # DIFFERENT site can be "remotely adopted" over the masjid's Cloudflare tunnel. We stay
 # base-path aware: the OS forwards the full /<basePath> prefix without stripping it.
