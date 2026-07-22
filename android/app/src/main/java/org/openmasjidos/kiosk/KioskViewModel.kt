@@ -211,7 +211,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         /** When a donation is under way, when its return-to-menu countdown started (null = off). */
         val idleReturnStartedMs: Long? = null,
         val latestAppVersion: String = "",
-        // Set when the admin (webui) or a maintainer (7-tap menu) asks this kiosk to update; the UI
+        // Set when the admin (webui) or a maintainer (10-tap menu) asks this kiosk to update; the UI
         // opens the APK link in the browser to install (Android can't update an ordinary app itself).
         val openUpdatePending: Boolean = false,
     )
@@ -330,7 +330,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     // ---- App update (browser install) --------------------------------------------------
     // Android can't update an ordinary app itself, so "update" = open the server's APK link in the
     // browser (Chrome) so a person can download + install it — the same path used to install the app
-    // the first time. Triggered either by a maintainer in the 7-tap menu or by the admin from the
+    // the first time. Triggered either by a maintainer in the 10-tap menu or by the admin from the
     // webui (delivered on the heartbeat). Both just flip [Local.openUpdatePending]; the UI turns that
     // into [UiState.openUpdateUrl], opens the browser, then calls [consumeOpenUpdate].
 
@@ -915,7 +915,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     private val cornerTaps = ArrayDeque<Long>()
 
-    /** Records a rapid tap on the attract screen; 7 within 3s reveals the unlock/settings path. */
+    /** Records a rapid tap on the attract screen; 10 within 3s reveals the unlock/settings path. */
     fun onSecretTap() {
         val now = System.currentTimeMillis()
         cornerTaps.addLast(now)
@@ -1063,7 +1063,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         const val IDLE_ABANDON_MS = 45_000L
         // While the keyed-card WebView is open the donor's taps don't reach us, so give a long window.
         const val MANUAL_IDLE_MS = 120_000L
-        const val SECRET_TAPS = 7
+        // Deliberately hard to trigger by accident: 10 rapid taps in the hidden corner within the
+        // window below. Bumped from 7 → 10 to further lock the kiosk down.
+        const val SECRET_TAPS = 10
         const val SECRET_WINDOW_MS = 3_000L
         const val FREE_ATTEMPTS = 3
         const val BACKOFF_BASE_SECONDS = 5L

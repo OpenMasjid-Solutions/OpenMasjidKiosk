@@ -34,14 +34,14 @@ The app then enters true **Lock Task Mode** automatically. Without device-owner 
 back to **screen pinning** (a one-time system confirmation) + full-screen immersive mode —
 the maintenance screen shows a banner when the tablet isn't fully locked down.
 
-Set the **exit PIN** in **Devices** (Admin) — staff type it (5 taps in the top corner →
+Set the **exit PIN** in **Devices** (Admin) — staff type it (10 taps in the top corner →
 PIN pad) to reach the maintenance screen. The PIN is verified on the tablet even if the
 network is down.
 
 ## 4. Keep it running
 - Keep the tablet **plugged in**; the Devices page flags "not charging".
 - It relaunches after a reboot and self-heals after a crash.
-- **To move it to another server or after revoking:** open the maintenance screen (5 taps →
+- **To move it to another server or after revoking:** open the maintenance screen (10 taps →
   PIN) → **Re-pair**.
 
 ### Removing the kiosk

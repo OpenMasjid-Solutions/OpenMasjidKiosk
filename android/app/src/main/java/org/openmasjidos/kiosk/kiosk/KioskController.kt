@@ -119,6 +119,10 @@ object KioskController {
         // HOME launcher + the re-launch-on-leave watchdog (MainActivity.onUserLeaveHint) bounce the
         // user back into the kiosk whenever they try to leave. A fully un-leavable kiosk that also
         // blocks the notification shade still requires device-owner provisioning (docs/TABLET_SETUP.md).
+
+        // Re-assert immersive LAST: entering Lock Task (or a just-granted HOME role) can momentarily
+        // re-show the status/navigation bars, so hide them again after all the above has run.
+        applyWindow(activity)
     }
 
     /** Leave kiosk lockdown (used by "Exit kiosk" after a verified PIN, and momentarily to open the

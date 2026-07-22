@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.9.26
+- **Tighter kiosk lockdown.** The hidden maintenance gesture now needs **10 rapid taps** (was 7) to
+  reach the exit-PIN, so it's even harder to trigger by accident. On a **device-owner** tablet the
+  status bar (notification shade) and navigation bar are removed entirely, and they're now re-hidden
+  the moment Lock Task starts so they can't flash into view. **(Requires updating the tablet app.)**
+  *For a truly un-leavable kiosk with no notification shade at all, provision the tablet as device
+  owner — the one-time ADB step in `docs/TABLET_SETUP.md`. Without it, Android only lets us hide the
+  bars (a swipe still briefly reveals them); with it, they're gone completely.*
+
 ## 0.9.25
 - **Email receipts + admin alerts (new).** Donors who give their email can now get a **branded,
   Stripe-style receipt** — your logo, a thank-you you write, and the amount/date/card/fund — sent

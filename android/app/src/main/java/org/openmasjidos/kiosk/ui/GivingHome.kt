@@ -66,7 +66,7 @@ import org.openmasjidos.kiosk.ui.theme.SurfaceRaisedDark
  * each carries its own accent + background. Selecting a non-main tab starts a 45s inactivity
  * countdown (a visual-only ring) that returns to the main tab; any touch resets it.
  *
- * The hidden maintenance gesture (7 taps) is detected on the screen BACKGROUND (unconsumed taps),
+ * The hidden maintenance gesture (10 taps) is detected on the screen BACKGROUND (unconsumed taps),
  * so it works on every step without colliding with the donor's amount buttons or the number pad.
  */
 @Composable
@@ -107,7 +107,7 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                     vm.onUserActivity()
                 }
             }
-            // Hidden maintenance gesture: 7 rapid taps anywhere on the screen background (works on
+            // Hidden maintenance gesture: 10 rapid taps anywhere on the screen background (works on
             // EVERY step, not just one screen). requireUnconsumed=true means taps that a button/numpad
             // already handled don't count — so entering a custom amount can't accidentally open it.
             .pointerInput(Unit) {
