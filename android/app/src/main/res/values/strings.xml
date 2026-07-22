@@ -80,6 +80,7 @@
     <string name="maintenance_update_body">Version %1$s is available (this kiosk is on %2$s).</string>
     <string name="maintenance_update_how">Tapping Update app opens the newest version in this tablet\'s browser to download and install — the same way the app was first installed. You may need to allow your browser to install apps and tap through a security notice for your server.</string>
     <string name="maintenance_update_button">Update app</string>
+    <string name="maintenance_update_downloading">Downloading update…</string>
     <string name="maintenance_exit">Exit kiosk</string>
     <string name="maintenance_exit_needs_pin">To leave kiosk mode, set an exit PIN in Admin → Devices, then unlock with it. This keeps the kiosk locked until the PIN reaches this tablet.</string>
     <string name="maintenance_return">Return to kiosk</string>
@@ -109,7 +110,11 @@
 
     <string name="kiosk_set_home_app">Set as Home app</string>
     <string name="kiosk_open_settings_pinning">Open tablet Settings (for Screen pinning)</string>
+    <string name="kiosk_open_accessibility">Turn on shade lock (Accessibility)</string>
+    <string name="accessibility_service_label">OpenMasjid Kiosk — shade lock</string>
+    <string name="accessibility_service_summary">Keeps the notification shade closed while the kiosk is locked.</string>
+    <string name="accessibility_service_description">Optional. While the kiosk is locked, this closes the notification shade / quick-settings the moment it is pulled down, so a donor can\'t reach settings from it. It reads no screen content and does nothing when the kiosk is unlocked (maintenance) or unpaired. Turn it on for the strongest lock without a computer.</string>
 
     <!-- Kiosk mode banner -->
-    <string name="kiosk_pinning_hint">Lock this tablet down — no computer needed. On this tablet open Settings → Security and: 1) turn ON \"Screen pinning\" (some tablets call it \"App pinning\"), 2) turn ON \"Ask for PIN/pattern before unpinning\", and 3) set a screen lock (PIN or pattern). The kiosk then pins itself: the notification shade and the Home/Recents buttons are blocked, and leaving needs your device PIN. Also tap \"Set as Home app\" below so Home returns here. (An even stronger, fully un-leavable lock is available with one-time device-owner setup — see docs/TABLET_SETUP.md — but it\'s optional.)</string>
+    <string name="kiosk_pinning_hint">Lock this tablet down — no computer needed. On this tablet open Settings → Security and: 1) turn ON \"Screen pinning\" (some tablets call it \"App pinning\"), 2) turn ON \"Ask for PIN/pattern before unpinning\", and 3) set a screen lock (PIN or pattern). The kiosk then pins itself: the notification shade and the Home/Recents buttons are blocked, and leaving needs your device PIN. Also tap \"Set as Home app\" below so Home returns here, and \"Turn on shade lock\" to enable the accessibility helper that keeps the notification shade shut. (An even stronger, fully un-leavable lock is available with one-time device-owner setup — see docs/TABLET_SETUP.md — but it\'s optional.)</string>
 </resources>

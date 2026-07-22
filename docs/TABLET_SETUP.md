@@ -36,12 +36,28 @@ pad. The PIN is verified on the tablet even if the network is down, so guard it.
    - **Security → Screen pinning** (some tablets: **App pinning**) → turn **ON**, and turn on
      **"Ask for PIN/pattern before unpinning."**
    - Set a **screen lock** (PIN or pattern) if the tablet doesn't have one.
-3. Return to the kiosk. It now **pins itself**: the **notification shade is blocked**, the
-   **Home/Recents buttons are blocked**, and getting out by hand needs the device PIN. The
-   app still opens the maintenance screen and exits normally behind **your** exit PIN.
+3. **Turn on the shade lock (optional but recommended).** From the maintenance screen tap
+   **Turn on shade lock (Accessibility)** and enable **OpenMasjid Kiosk — shade lock**. This
+   accessibility helper closes the notification shade the instant it's pulled down while the
+   kiosk is locked (it reads no screen content and does nothing when unlocked/unpaired). It's a
+   backstop for the moments screen pinning isn't active.
+4. Return to the kiosk. It now **pins itself**: the **notification shade is blocked**, the
+   **Home/Recents buttons are blocked**, the **Back button does nothing**, and getting out by
+   hand needs the device PIN. The app still opens the maintenance screen and exits normally
+   behind **your** exit PIN.
 
-That's a strong, self-contained kiosk with nothing but the tablet. The maintenance screen
-shows a reminder with these exact steps until they're done.
+**If your tablet supports it, also:** hide the navigation bar / use gesture navigation
+(**Settings → Display / System → Navigation bar**), and turn off lock-screen notifications.
+These are OEM-specific and optional — screen pinning already blocks the buttons — but they make
+the lock cleaner on tablets that allow it.
+
+That's a strong, self-contained kiosk with nothing but the tablet. The maintenance screen shows
+a reminder with these exact steps until they're done.
+
+**Updating the app** is now in-app: when an update is available, open the maintenance screen →
+**Update app**. The tablet downloads the new version over the same secure connection and hands it
+to the system installer — no browser, no leaving the kiosk. (You allow "install unknown apps" for
+OpenMasjid Kiosk once, the same as the first install.)
 
 ### Even stronger (optional — needs a computer once)
 For an *absolutely* un-leavable kiosk (the notification shade can't even be swiped in),

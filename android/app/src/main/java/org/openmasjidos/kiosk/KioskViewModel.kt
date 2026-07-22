@@ -175,8 +175,14 @@ data class UiState(
      *  drives the same countdown ring. */
     val idleReturnStartedMs: Long? = null,
     /** When non-null, the UI should open this URL (the server's APK download) in the browser so a
-     *  person can install the update, then call [KioskViewModel.consumeOpenUpdate]. */
+     *  person can install the update, then call [KioskViewModel.consumeOpenUpdate]. Only used as a
+     *  FALLBACK when the in-app download ([installApkPath]) failed. */
     val openUpdateUrl: String? = null,
+    /** A downloaded APK is ready to install IN-APP (no browser): the UI hands this path to the system
+     *  installer, then calls [KioskViewModel.consumeInstallApk]. */
+    val installApkPath: String? = null,
+    /** True while the update APK is downloading, so the maintenance button can show progress. */
+    val updating: Boolean = false,
 )
 
 /**
@@ -212,8 +218,12 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         val idleReturnStartedMs: Long? = null,
         val latestAppVersion: String = "",
         // Set when the admin (webui) or a maintainer (10-tap menu) asks this kiosk to update; the UI
-        // opens the APK link in the browser to install (Android can't update an ordinary app itself).
+        // opens the APK link in the browser to install (FALLBACK when the in-app download failed).
         val openUpdatePending: Boolean = false,
+        // In-app update: path of a downloaded APK ready to hand to the system installer, and whether a
+        // download is currently in flight (so the maintenance button shows "Downloading…").
+        val installApkPath: String? = null,
+        val updating: Boolean = false,
     )
 
     private val local = MutableStateFlow(Local(form = PairingForm(name = Build.MODEL ?: "Kiosk")))
@@ -241,6 +251,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             idleReturnStartedMs = l.idleReturnStartedMs,
             openUpdateUrl = if (l.openUpdatePending && pairing != null)
                 pairing.serverUrl.trimEnd('/') + "/download/openmasjidkiosk.apk" else null,
+            installApkPath = l.installApkPath,
+            updating = l.updating,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), UiState())
 
@@ -334,13 +346,29 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     // webui (delivered on the heartbeat). Both just flip [Local.openUpdatePending]; the UI turns that
     // into [UiState.openUpdateUrl], opens the browser, then calls [consumeOpenUpdate].
 
-    /** Maintainer tapped "Update app" in the maintenance screen. */
+    /** Maintainer tapped "Update app". Prefer an IN-APP update: download the APK via the pinned client
+     *  and hand it to the system installer (no browser, so the kiosk lockdown isn't broken by leaving
+     *  to Chrome). Falls back to opening the APK link in the browser only if the download fails.
+     *  Guarded so a double-tap can't start two downloads. */
     fun requestAppUpdate() {
-        repo.log("info", "app_update_open_browser", "maintenance")
-        local.update { it.copy(openUpdatePending = true) }
+        if (local.value.updating) return
+        repo.log("info", "app_update_requested", "maintenance")
+        local.update { it.copy(updating = true) }
+        viewModelScope.launch {
+            val file = repo.downloadUpdateApk()
+            if (file != null) {
+                local.update { it.copy(updating = false, installApkPath = file.absolutePath) }
+            } else {
+                repo.log("warn", "app_update_download_failed", "falling back to browser install")
+                local.update { it.copy(updating = false, openUpdatePending = true) }
+            }
+        }
     }
 
-    /** The UI has opened the update URL in the browser — clear the one-shot flag. */
+    /** The UI has handed the downloaded APK to the system installer — clear the one-shot path. */
+    fun consumeInstallApk() = local.update { it.copy(installApkPath = null) }
+
+    /** The UI has opened the update URL in the browser (fallback) — clear the one-shot flag. */
     fun consumeOpenUpdate() = local.update { it.copy(openUpdatePending = false) }
 
     // ---- Giving flow (donor-facing) ----------------------------------------------------

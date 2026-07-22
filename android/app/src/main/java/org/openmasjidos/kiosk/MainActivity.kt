@@ -18,8 +18,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.openmasjidos.kiosk.kiosk.KioskController
+import java.io.File
 import org.openmasjidos.kiosk.readers.ReaderManager
 import org.openmasjidos.kiosk.ui.KioskRoot
 import org.openmasjidos.kiosk.ui.RotatedRoot
@@ -111,12 +113,13 @@ class MainActivity : ComponentActivity() {
                         }
                         finishAndRemoveTask()
                     },
+                    onInstallApk = { path -> installApk(path) },
                     onOpenBrowser = { url ->
-                        // Updating means leaving the app for the browser to download + install the new
-                        // APK. Because we're the HOME launcher with a re-launch-on-leave watchdog, we
-                        // must FULLY END kiosk mode first — otherwise Home/leave bounces straight back
-                        // and the browser can never stay open. (The new version relaunches into kiosk;
-                        // if they cancel, a reboot returns to kiosk.)
+                        // FALLBACK app-update path (used only if the in-app download failed): leaving the
+                        // app for the browser to download + install the new APK. Because we're the HOME
+                        // launcher with a re-launch-on-leave watchdog, we must FULLY END kiosk mode first
+                        // — otherwise Home/leave bounces straight back and the browser can never stay
+                        // open. (The new version relaunches into kiosk; if they cancel, a reboot returns.)
                         exiting = true
                         KioskController.releaseHome(this)
                         KioskController.exitKiosk(this)
@@ -131,6 +134,12 @@ class MainActivity : ComponentActivity() {
                         // kiosk (exiting stays false) so onResume re-locks the moment they return.
                         KioskController.exitKiosk(this)
                         runCatching { startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    },
+                    onOpenAccessibility = {
+                        // Jump to Accessibility settings so the volunteer can enable the shade-lock
+                        // helper. Same temporary-excursion handling as onOpenSettings (re-locks on return).
+                        KioskController.exitKiosk(this)
+                        runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                     },
                 )
                 }
@@ -178,6 +187,37 @@ class MainActivity : ComponentActivity() {
      * pinning. On a device-owner tablet this never even fires (Lock Task blocks Home/Recents). During
      * a deliberate PIN-verified exit we let go via [exiting].
      */
+    /**
+     * Install a downloaded APK via the SYSTEM package installer (the in-app update path — no browser).
+     * On Android O+ the app needs the per-source "install unknown apps" allowance; if it's missing we
+     * send the maintainer to grant it once (same as the first sideload) and they can re-tap Update.
+     * We drop screen pinning first (the installer is its own system task, which pinning would block) —
+     * this is a temporary excursion (NOT `exiting`), so onResume re-locks on return, and a successful
+     * install relaunches the new version straight into the kiosk.
+     */
+    private fun installApk(path: String) {
+        val file = File(path)
+        if (!file.exists()) return
+        if (!packageManager.canRequestPackageInstalls()) {
+            runCatching {
+                startActivity(
+                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+            return
+        }
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        KioskController.exitKiosk(this)
+        runCatching {
+            startActivity(
+                Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (exiting) return
@@ -191,7 +231,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        // Re-hide the system bars whenever we regain focus (immersive sticky).
-        if (hasFocus) KioskController.applyWindow(this)
+        // On focus-regain (e.g. after the notification shade or a dialog stole focus) RE-ASSERT the
+        // FULL lockdown, not just immersive: re-enter screen pinning if it dropped (this is what keeps
+        // the recents button + cross-app nav closed) and re-hide the bars. Skipped mid-exit.
+        if (hasFocus && !exiting) KioskController.enterKiosk(this, vm.ui.value.phase == Phase.Paired)
     }
 }

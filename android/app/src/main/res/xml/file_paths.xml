@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+-->
+<!-- Exposes the app's cache dir to the FileProvider so the downloaded update.apk can be handed to
+     the system package installer via a content:// URI. Nothing else is shared. -->
+<paths>
+    <cache-path name="updates" path="." />
+</paths>

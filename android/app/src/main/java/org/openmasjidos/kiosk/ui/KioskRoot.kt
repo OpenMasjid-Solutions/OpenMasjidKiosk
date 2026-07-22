@@ -5,6 +5,7 @@ package org.openmasjidos.kiosk.ui
 
 import android.app.Activity
 import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -34,22 +35,33 @@ import org.openmasjidos.kiosk.ui.theme.InkMutedDark
  * @param isDeviceOwner whether the tablet is provisioned as device owner; drives the
  *   "not a locked-down kiosk yet" hint on the maintenance screen.
  * @param onExitKiosk stop lock task and leave the app (wired to the Activity in MainActivity).
- * @param onOpenBrowser drop lock task and open a URL in the browser (used to install an app update).
+ * @param onInstallApk hand a downloaded APK file path to the system installer (in-app update).
+ * @param onOpenBrowser drop lock task and open a URL in the browser (FALLBACK app-update install).
  */
 @Composable
 fun KioskRoot(
     vm: KioskViewModel,
     isDeviceOwner: Boolean,
     onExitKiosk: () -> Unit,
+    onInstallApk: (String) -> Unit,
     onOpenBrowser: (String) -> Unit,
     onSetHomeApp: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAccessibility: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
 
-    // When the admin (webui) or a maintainer asks this kiosk to update, open the APK link in the
-    // browser so a person can install it, then clear the one-shot flag.
+    // In-app update: a freshly downloaded APK is ready → hand it to the system installer (no browser).
+    val installPath = ui.installApkPath
+    LaunchedEffect(installPath) {
+        if (installPath != null) {
+            onInstallApk(installPath)
+            vm.consumeInstallApk()
+        }
+    }
+    // Fallback only: if the in-app download failed, open the APK link in the browser to install, then
+    // clear the one-shot flag.
     val updateUrl = ui.openUpdateUrl
     LaunchedEffect(updateUrl) {
         if (updateUrl != null) {
@@ -83,6 +95,11 @@ fun KioskRoot(
     val manual = ui.giving.manual
 
     Box(modifier = modifier) {
+        // Swallow the system Back everywhere in the kiosk: it must NEVER navigate out of our flow
+        // (e.g. back into the browser/installer, a previous task, or off the giving screen). Donors and
+        // maintainers use the on-screen controls; there is no "back out" of a kiosk. This holds even
+        // when screen pinning isn't active (a belt-and-braces alongside pinning).
+        BackHandler(enabled = true) {}
         when {
             // A re-pair lockout overrides everything — fail closed.
             ui.rePair != null -> RePairScreen(reason = ui.rePair!!, onRePair = vm::rePair)
@@ -100,7 +117,7 @@ fun KioskRoot(
             else -> { // Paired — boot straight into the giving home (campaign tabs; no attract screen)
                 GivingHome(vm = vm, ui = ui)
                 when (ui.overlay) {
-                    Overlay.None -> Unit // maintenance is reached by 7 rapid taps on the top header strip
+                    Overlay.None -> Unit // maintenance is reached by 10 rapid taps on the giving-screen background
                     Overlay.Pin -> PinPad(
                         state = ui.pin,
                         onSubmit = vm::submitPin,
@@ -113,6 +130,7 @@ fun KioskRoot(
                         noPinSet = ui.config?.pinHash?.isNotBlank() != true,
                         exitAllowed = ui.exitAllowed,
                         showPinningHint = !isDeviceOwner,
+                        updating = ui.updating,
                         onScanReaders = vm::scanForReaders,
                         onStopReaderScan = vm::stopReaderScan,
                         onConnectReader = vm::connectReader,
@@ -123,6 +141,7 @@ fun KioskRoot(
                         onUpdateApp = vm::requestAppUpdate,
                         onSetHomeApp = onSetHomeApp,
                         onOpenSettings = onOpenSettings,
+                        onOpenAccessibility = onOpenAccessibility,
                         onReturn = vm::closeOverlay,
                         onRePair = vm::rePair,
                         onExit = onExitKiosk,

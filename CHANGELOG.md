@@ -5,12 +5,20 @@
 
 ## 0.9.27
 - **Much stronger soft kiosk — no computer needed.** Without the (optional) device-owner setup, the
-  kiosk now uses **Android screen pinning**: it pins itself so the **notification shade and the
-  Home/Recents buttons are blocked**, and — once you turn on a screen lock with "ask before
-  unpinning" — getting out by hand needs your device PIN. Your **exit PIN** still opens maintenance
-  and leaves normally. The maintenance screen walks you through the one-time tablet setup (Set as
-  Home app → turn on Screen pinning + a screen lock in Settings → Security). No ADB, no cable, no PC.
-  **(Requires updating the tablet app.)**
+  kiosk now locks down far harder, all from the tablet:
+  - **Screen pinning, held.** The app pins itself and re-asserts it on resume and focus-change, so
+    the **notification shade and the Home/Recents buttons are blocked** (this closes the
+    recents → app-info → Settings escape). With a screen lock + "ask before unpinning," getting out
+    by hand needs your device PIN. Your **exit PIN** still opens maintenance and leaves normally.
+  - **Back does nothing.** The system Back button can no longer navigate out of the giving flow.
+  - **Shade lock (optional helper).** An opt-in accessibility helper closes the notification shade
+    the instant it's pulled down while locked — a backstop for moments pinning isn't active.
+  - **Update from inside the app — no browser.** "Update app" now downloads the new version over the
+    kiosk's own secure connection and hands it to the system installer, so updating never breaks the
+    lockdown by opening Chrome.
+  - The maintenance screen walks you through the one-time setup (Set as Home app → Screen pinning +
+    a screen lock → shade lock), and `docs/TABLET_SETUP.md` covers optional nav-bar hiding. No ADB,
+    no cable, no PC. **(Requires updating the tablet app.)**
 
 ## 0.9.26
 - **Tighter kiosk lockdown.** The hidden maintenance gesture now needs **10 rapid taps** (was 7) to

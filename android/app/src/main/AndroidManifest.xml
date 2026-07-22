@@ -18,6 +18,15 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!--
+      In-app APK update (§ maintenance): the app downloads the newest APK from its OWN server (over
+      the same pinned HTTPS as every other call) and hands it to the SYSTEM package installer, so a
+      maintainer never has to leave the locked-down kiosk for a browser. The install still shows the
+      OS "update this app?" prompt; the per-source "install unknown apps" allowance is granted once,
+      the same way the app was first sideloaded.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
       Slice 5 — Stripe Reader M2 (Bluetooth + USB). The Terminal SDK needs these; they are
       requested-and-explained ONLY inside the PIN-protected maintenance screen, never in the
       donor flow. Pairing uses a typed 6-digit code (no camera/QR), so no CAMERA permission.
@@ -74,6 +83,35 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- Serves the downloaded update APK to the system installer via a content:// URI (the
+             installer can't read our private cacheDir directly). See MainActivity.installApk. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- OPT-IN accessibility service that closes the notification shade on a locked soft kiosk
+             (the one thing a plain app can't do from its own window). Does nothing until the
+             volunteer enables it in Settings → Accessibility AND the kiosk is actively locked
+             (ShadeGuard.active). See ShadeGuardService + docs/TABLET_SETUP.md. -->
+        <service
+            android:name=".kiosk.ShadeGuardService"
+            android:exported="false"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
 
         <!-- Restart the kiosk after a reboot, even when not provisioned as device owner. -->
         <receiver

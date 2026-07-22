@@ -69,6 +69,7 @@ fun MaintenanceScreen(
     noPinSet: Boolean,
     exitAllowed: Boolean,
     showPinningHint: Boolean,
+    updating: Boolean,
     onScanReaders: (ReaderTransport) -> Unit,
     onStopReaderScan: () -> Unit,
     onConnectReader: (String) -> Unit,
@@ -79,6 +80,7 @@ fun MaintenanceScreen(
     onUpdateApp: () -> Unit,
     onSetHomeApp: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAccessibility: () -> Unit,
     onReturn: () -> Unit,
     onRePair: () -> Unit,
     onExit: () -> Unit,
@@ -125,6 +127,13 @@ fun MaintenanceScreen(
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(stringResource(R.string.kiosk_open_settings_pinning), color = InkDark) }
+                Spacer(Modifier.height(8.dp))
+                // Jump to Accessibility settings to enable the (optional) shade-lock helper.
+                OutlinedButton(
+                    onClick = onOpenAccessibility,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(stringResource(R.string.kiosk_open_accessibility), color = InkDark) }
             }
 
             Spacer(Modifier.height(24.dp))
@@ -198,13 +207,14 @@ fun MaintenanceScreen(
                     Spacer(Modifier.height(12.dp))
                     Button(
                         onClick = onUpdateApp,
+                        enabled = !updating, // downloading in-app — don't start a second download
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary,
                             contentColor = MaterialTheme.colorScheme.onPrimary,
                         ),
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text(stringResource(R.string.maintenance_update_button)) }
+                    ) { Text(stringResource(if (updating) R.string.maintenance_update_downloading else R.string.maintenance_update_button)) }
                 }
             }
 

@@ -20,6 +20,7 @@ import org.openmasjidos.kiosk.local.LogEntry
 import org.openmasjidos.kiosk.local.PairingRecord
 import org.openmasjidos.kiosk.kiosk.DeviceStatus
 import org.openmasjidos.kiosk.security.ScryptPin
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicReference
@@ -233,6 +234,28 @@ class KioskRepository(context: Context) {
     suspend fun getConnectionToken(): String = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: throw IOException("Not paired")
         KioskApi(pinnedClientFor(p.certSha256)).connectionToken(p.serverUrl, p.deviceToken)
+    }
+
+    /** Download the server's bundled APK to a private cache file, so the app can update ITSELF via the
+     *  system installer (no browser — see MainActivity.installApk). Uses the SAME pinned client as
+     *  every other call (the /download route is public, needs no token). Returns the file, or null on
+     *  any failure (the caller then falls back to opening the APK link in the browser). Fails soft. */
+    suspend fun downloadUpdateApk(): File? = withContext(Dispatchers.IO) {
+        val p = store.pairing.first() ?: return@withContext null
+        val url = p.serverUrl.trimEnd('/') + "/download/openmasjidkiosk.apk"
+        val req = Request.Builder().url(url).get().build()
+        try {
+            pinnedClientFor(p.certSha256).newCall(req).execute().use { resp ->
+                val body = resp.body
+                if (!resp.isSuccessful || body == null) return@withContext null
+                // Overwrite any previous download; a fresh file each time avoids a stale/partial APK.
+                val out = File(appContext.cacheDir, "update.apk")
+                body.byteStream().use { input -> out.outputStream().use { input.copyTo(it) } }
+                out
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     // ---- Donations (server validates the amount + verifies the payment) ────────────────

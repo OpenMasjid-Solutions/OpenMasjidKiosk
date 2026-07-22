@@ -150,11 +150,18 @@ object KioskController {
         // Re-assert immersive LAST: entering Lock Task / screen pinning (or a just-granted HOME role)
         // can momentarily re-show the status/navigation bars, so hide them again after all the above.
         applyWindow(activity)
+
+        // Let the (opt-in) shade-guard accessibility service close the notification shade — but ONLY
+        // while a PAIRED kiosk is actively locked, so it never fights the shade on the pairing screen.
+        ShadeGuard.active = paired
     }
 
     /** Leave kiosk lockdown (used by "Exit kiosk" after a verified PIN, and momentarily to open the
      *  browser for an app update). Restores the status bar so the maintainer can use the tablet. */
     fun exitKiosk(activity: Activity) {
+        // Stop guarding the shade first — the maintainer (in Settings / the installer) must be able to
+        // use it; onResume re-arms it when the kiosk re-locks.
+        ShadeGuard.active = false
         dpmIfOwner(activity)?.let { (dpm, admin) ->
             runCatching { dpm.setStatusBarDisabled(admin, false) }
         }
@@ -187,6 +194,7 @@ object KioskController {
      * its `exiting` guard.
      */
     fun exitKioskFully(activity: Activity): Boolean {
+        ShadeGuard.active = false // fully leaving — never keep guarding the shade
         val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
         if (am != null && am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
             runCatching { activity.stopLockTask() }
