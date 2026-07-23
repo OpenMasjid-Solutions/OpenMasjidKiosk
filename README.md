@@ -163,3 +163,6 @@ flow runs without hardware. See [`docs/`](docs/) for tablet + reader setup.
 Source code: <https://github.com/OpenMasjid-Solutions/OpenMasjidKiosk>
 
 **License: [AGPL-3.0-only](LICENSE).** © 2026 OpenMasjid-Solutions.
+
+
+live. laugh. coffee.
