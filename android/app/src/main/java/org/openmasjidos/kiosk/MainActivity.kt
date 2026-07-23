@@ -83,14 +83,15 @@ class MainActivity : ComponentActivity() {
                 // ourselves rather than asking the system (setRequestedOrientation), because many
                 // tablets ignore orientation requests — drawing it rotated always works.
                 val uiState by vm.ui.collectAsStateWithLifecycle()
-                // Re-assert lockdown whenever paired-ness flips WHILE the kiosk is on screen (e.g. an
-                // admin REVOKE arriving on a heartbeat): screen-pin when it becomes Paired, and RELEASE
-                // the pin the moment it drops to the pairing screen so a revoked soft-kiosk tablet is
-                // never trapped. onResume covers the return-from-Settings case; this covers a phase
-                // change that happens with no resume.
-                val paired = uiState.phase == Phase.Paired
-                LaunchedEffect(paired) {
-                    if (!exiting) KioskController.enterKiosk(this@MainActivity, paired)
+                // Re-assert lockdown whenever the LOCKED state flips WHILE the kiosk is on screen (e.g.
+                // an admin REVOKE or a cert-mismatch RE-PAIR arriving on a heartbeat): screen-pin when
+                // locked, and RELEASE the pin the moment it drops to the pairing / re-pair screen so
+                // the tablet is never trapped on a screen with no in-app exit. LOCKED = paired AND not
+                // in a re-pair lockout. onResume covers the return-from-Settings case; this covers a
+                // state change that happens with no resume.
+                val locked = uiState.phase == Phase.Paired && uiState.rePair == null
+                LaunchedEffect(locked) {
+                    if (!exiting) KioskController.enterKiosk(this@MainActivity, locked)
                 }
                 RotatedRoot(orientationDegrees(uiState.config?.orientation)) {
                 KioskRoot(
@@ -156,7 +157,7 @@ class MainActivity : ComponentActivity() {
         // applies immersive. Skipped once we've ended kiosk mode for an update (exiting) so the
         // browser/installer isn't yanked away. `paired` gates soft-kiosk pinning so the pairing screen
         // is never pinned (it has no in-app unpin) — see KioskController.enterKiosk.
-        if (!exiting) KioskController.enterKiosk(this, vm.ui.value.phase == Phase.Paired)
+        if (!exiting) KioskController.enterKiosk(this, vm.ui.value.phase == Phase.Paired && vm.ui.value.rePair == null)
     }
 
     /**
@@ -198,7 +199,14 @@ class MainActivity : ComponentActivity() {
     private fun installApk(path: String) {
         val file = File(path)
         if (!file.exists()) return
+        // Drop the kiosk lock FIRST — BOTH the "allow install from this source" Settings screen and
+        // the system installer are separate system tasks that screen pinning / Lock Task would block
+        // (the launch is silently suppressed while pinned). Temporary excursion (NOT `exiting`), so
+        // onResume re-locks on return; a successful install relaunches the new version into the kiosk.
+        KioskController.exitKiosk(this)
         if (!packageManager.canRequestPackageInstalls()) {
+            // First in-app update: our package hasn't been granted "install unknown apps" yet (the
+            // browser held it at first sideload). Send the maintainer to grant it, then re-tap Update.
             runCatching {
                 startActivity(
                     Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))
@@ -208,7 +216,6 @@ class MainActivity : ComponentActivity() {
             return
         }
         val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-        KioskController.exitKiosk(this)
         runCatching {
             startActivity(
                 Intent(Intent.ACTION_VIEW)
@@ -234,6 +241,6 @@ class MainActivity : ComponentActivity() {
         // On focus-regain (e.g. after the notification shade or a dialog stole focus) RE-ASSERT the
         // FULL lockdown, not just immersive: re-enter screen pinning if it dropped (this is what keeps
         // the recents button + cross-app nav closed) and re-hide the bars. Skipped mid-exit.
-        if (hasFocus && !exiting) KioskController.enterKiosk(this, vm.ui.value.phase == Phase.Paired)
+        if (hasFocus && !exiting) KioskController.enterKiosk(this, vm.ui.value.phase == Phase.Paired && vm.ui.value.rePair == null)
     }
 }
