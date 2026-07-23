@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "osayed27-alt",
+      "id": 308568470,
+      "comment_id": 5064657529,
+      "created_at": "2026-07-23T23:49:32Z",
+      "repoId": 1287679358,
+      "pullRequestNo": 2
+    }
+  ]
 }
