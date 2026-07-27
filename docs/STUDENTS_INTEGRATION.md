@@ -175,9 +175,24 @@ breakdown we don't need — omit it and Students derives the split itself, oldes
   "payerNote": "paid at the front desk" }  // optional, ≤200 chars
 → { "v": 1, "recorded": true, "paymentId": "pay_71", "duplicate": false }
 ```
-- **Full balance** → omit `allocations` (Students auto-allocates oldest-due-first; surplus → credit).
-- **Specific months** → one `allocations[]` entry per ticked invoice (its `id` + the amount charged for
-  it). Students validates them.
+- **Full balance** → omit `allocations` **and** `students` (Students auto-allocates oldest-due-first
+  across the family; surplus → that child's credit). That is exactly what "pay everything" means.
+- **Specific months** → one `allocations[]` entry per ticked invoice **and** a `students[]` breakdown
+  grouping those invoices by child, summing exactly to `amountCents`.
+
+  > **Send `students[]` — this is not optional in practice.** Students 0.39.0 derives the ledger split
+  > from `students[]`; when it is absent it walks the *whole family's* open invoices oldest-due-first.
+  > Its Fabric `record-payment` **parses `allocations[]` but does not use it** (`recordSplit` takes only
+  > the per-child shares). So with two children, ticking Maryam's July bill and sending allocations
+  > alone books the money against Yusuf's older bill instead — the charge and the household balance are
+  > right, the per-child ledger is not. We send both: `students[]` for the split that actually lands,
+  > `allocations[]` because the contract still documents it and a later Students may honour it again.
+  > **Flagged upstream:** §11.2 still presents `allocations[]` as honoured — contract and implementation
+  > disagree there, and the implementation is what runs.
+
+  Within one child's share, Students applies oldest-due-first among *that child's* invoices, so ticking
+  their August bill while July is open pays July down first. The child and the amount are right; which
+  of their own months clears is Students' call.
 - Idempotent on `idempotencyKey` (= the PI id); a replay returns the original `paymentId` with
   `duplicate:true`.
 
@@ -254,9 +269,10 @@ charging the wrong account.
 - The tuition tile renders the **Student ID** shell (one field, no PIN, no amount pad), confirms the
   child's name via `identify`, then fetches the balance + per-month invoices via `lookup` and offers
   **pay-all** and **pick-months**. Invoices are labelled with the child when there are siblings.
-- A card-present approval calls `record-payment` (allocations for picked months; omitted for full
-  balance), idempotent on the PI id; a dropped confirmation is retried from a persistent outbox +
-  `check`.
+- A card-present approval calls `record-payment` (for picked months: `allocations[]` **plus** the
+  per-child `students[]` split; both omitted for full balance), idempotent on the PI id; a dropped
+  confirmation is retried from a persistent outbox + `check`, with the split stored so a retry after a
+  restart still attributes the same way.
 - The tuition tile charges the reader’s account, which is the **school’s tuition Stripe account** (§4);
   a mismatch warns the admin.
 - Receipt says **“payment”**; tuition is excluded from donation totals + year-end letters.

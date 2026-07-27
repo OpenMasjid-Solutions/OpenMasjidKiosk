@@ -1260,6 +1260,9 @@ async function main(): Promise<void> {
         stripeAccountId: row.stripeAccountId || undefined,
       },
       allocations: row.allocations ?? undefined,
+      // The per-child split of a "choose what to pay" charge (v2). Students derives its own when this
+      // is absent, which is right for a pay-full charge and wrong for picked invoices.
+      students: row.students ?? undefined,
     });
     if (res.status === 'recorded') store.setTuitionRecordStatus(piId, 'recorded', res.paymentId);
     else if (res.status === 'rejected') store.setTuitionRecordStatus(piId, 'skipped');
@@ -1341,7 +1344,9 @@ async function main(): Promise<void> {
       familyLabel: r.family.label,
       currency: r.family.currency,
       balanceCents: r.family.balanceCents,
-      invoices: r.family.openInvoices.map((i) => ({ id: i.id, balanceCents: i.balanceCents })),
+      // studentId is held server-side only — it is what lets the pay step tell Students whose bill
+      // each picked invoice is (contract v2), and it never goes to the tablet.
+      invoices: r.family.openInvoices.map((i) => ({ id: i.id, balanceCents: i.balanceCents, studentId: i.studentId })),
     });
     return {
       data: {
@@ -1352,8 +1357,15 @@ async function main(): Promise<void> {
           students: r.family.students, // firstName + lastInitial (+ their own balance) — per contract
           balanceCents: r.family.balanceCents,
           currency: r.family.currency,
-          // id (for selection) + label + dueDate + balanceCents + whose bill it is (v2: per-child bills)
-          openInvoices: r.family.openInvoices,
+          // id (for selection) + label + dueDate + balanceCents + whose bill it is as a NAME. The
+          // internal studentId stays on the server (it's in the session, for the pay step).
+          openInvoices: r.family.openInvoices.map((i) => ({
+            id: i.id,
+            label: i.label,
+            dueDate: i.dueDate,
+            balanceCents: i.balanceCents,
+            studentName: i.studentName,
+          })),
         },
       },
     };
@@ -1419,6 +1431,7 @@ async function main(): Promise<void> {
         amountMinor: amt.amountCents,
         currency,
         allocations: amt.allocations,
+        students: amt.students, // per-child split (v2); null for a pay-full charge
       });
       return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, chargeMinor: amt.amountCents, currency } };
     } catch (err) {

@@ -272,6 +272,8 @@ export interface TuitionOutboxRow {
   amountMinor: number;
   currency: string;
   allocations: { invoiceId: string; amountCents: number }[] | null;
+  /** The per-CHILD split (contract v2) — null = let Students derive it (a pay-full charge). */
+  students: { studentId: string; amountCents: number }[] | null;
   chargeId: string;
   payStatus: string; // pending | succeeded | failed
   recordStatus: string; // pending | recorded | skipped
@@ -451,6 +453,7 @@ export class Store {
         amount_minor INTEGER NOT NULL,
         currency TEXT NOT NULL,
         allocations TEXT NOT NULL DEFAULT '',          -- JSON [{invoiceId,amountCents}] or '' for pay-full
+        student_shares TEXT NOT NULL DEFAULT '',       -- JSON [{studentId,amountCents}] (v2 per-child split) or ''
         charge_id TEXT NOT NULL DEFAULT '',
         pay_status TEXT NOT NULL DEFAULT 'pending',     -- pending | succeeded | failed
         record_status TEXT NOT NULL DEFAULT 'pending',  -- pending | recorded | skipped
@@ -499,6 +502,12 @@ export class Store {
     {
       const dcols = (this.db.prepare('PRAGMA table_info(devices)').all() as { name: string }[]).map((c) => c.name);
       if (!dcols.includes('orientation')) this.db.exec("ALTER TABLE devices ADD COLUMN orientation TEXT NOT NULL DEFAULT 'auto'");
+    }
+    // The per-child split of a tuition charge (students/billing v2). Absent on installs that predate
+    // it; an in-flight outbox row without it simply lets Students derive the split, as before.
+    {
+      const tcols = (this.db.prepare('PRAGMA table_info(tuition_outbox)').all() as { name: string }[]).map((c) => c.name);
+      if (!tcols.includes('student_shares')) this.db.exec("ALTER TABLE tuition_outbox ADD COLUMN student_shares TEXT NOT NULL DEFAULT ''");
     }
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
@@ -1140,13 +1149,14 @@ export class Store {
     amountMinor: number;
     currency: string;
     allocations?: { invoiceId: string; amountCents: number }[] | null;
+    students?: { studentId: string; amountCents: number }[] | null;
   }): void {
     this.db
       .prepare(
         `INSERT INTO tuition_outbox (payment_intent_id, device_id, campaign_id, stripe_account_id, family_id,
-           student_id, family_label, amount_minor, currency, allocations, created_at)
+           student_id, family_label, amount_minor, currency, allocations, student_shares, created_at)
          VALUES (@pi, @deviceId, @campaignId, @stripeAccountId, @familyId, @studentId, @familyLabel,
-           @amountMinor, @currency, @allocations, @createdAt)
+           @amountMinor, @currency, @allocations, @studentShares, @createdAt)
          ON CONFLICT(payment_intent_id) DO NOTHING`,
       )
       .run({
@@ -1160,6 +1170,7 @@ export class Store {
         amountMinor: d.amountMinor,
         currency: d.currency,
         allocations: d.allocations && d.allocations.length ? JSON.stringify(d.allocations) : '',
+        studentShares: d.students && d.students.length ? JSON.stringify(d.students) : '',
         createdAt: new Date().toISOString(),
       });
   }
@@ -1193,16 +1204,19 @@ export class Store {
   }
 
   private rowToTuitionOutbox(r: Record<string, unknown>): TuitionOutboxRow {
-    let allocations: { invoiceId: string; amountCents: number }[] | null = null;
-    const raw = String(r.allocations ?? '');
-    if (raw) {
+    /** Both breakdowns are stored as JSON; a null/garbled one just means "let Students derive it". */
+    const parseJsonArray = <T>(raw: unknown): T[] | null => {
+      const s = String(raw ?? '');
+      if (!s) return null;
       try {
-        const arr = JSON.parse(raw);
-        if (Array.isArray(arr)) allocations = arr;
+        const arr = JSON.parse(s);
+        return Array.isArray(arr) ? (arr as T[]) : null;
       } catch {
-        /* leave null → Students auto-allocates */
+        return null;
       }
-    }
+    };
+    const allocations = parseJsonArray<{ invoiceId: string; amountCents: number }>(r.allocations);
+    const students = parseJsonArray<{ studentId: string; amountCents: number }>(r.student_shares);
     return {
       paymentIntentId: String(r.payment_intent_id),
       deviceId: String(r.device_id ?? ''),
@@ -1214,6 +1228,7 @@ export class Store {
       amountMinor: Number(r.amount_minor),
       currency: String(r.currency),
       allocations,
+      students,
       chargeId: String(r.charge_id ?? ''),
       payStatus: String(r.pay_status),
       recordStatus: String(r.record_status),

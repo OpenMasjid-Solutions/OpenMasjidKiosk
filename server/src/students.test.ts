@@ -45,7 +45,7 @@ function stubBroker(reply: unknown): { calls: Captured[]; restore: () => void } 
   };
 }
 
-function session(balanceCents: number, invoices: { id: string; balanceCents: number }[]) {
+function session(balanceCents: number, invoices: { id: string; balanceCents: number; studentId?: string }[]) {
   return createTuitionSession({
     campaignId: 'cmp_1',
     deviceId: 'dev_1',
@@ -54,7 +54,7 @@ function session(balanceCents: number, invoices: { id: string; balanceCents: num
     familyLabel: 'Ismail family',
     currency: 'USD',
     balanceCents,
-    invoices,
+    invoices: invoices.map((i) => ({ studentId: 'stu_1', ...i })),
   });
 }
 
@@ -118,8 +118,10 @@ test('lookup posts { v: 2, studentCode } — no name, no pin (the 0.39.0 break)'
     if (r.status !== 'found') return;
     assert.equal(r.matchedStudentId, 'stu_1');
     assert.equal(r.family.balanceCents, 35000);
-    // v2: bills are per child, so an invoice says whose it is (siblings ⇒ identical labels otherwise).
+    // v2: bills are per child, so an invoice says whose it is (siblings ⇒ identical labels otherwise)
+    // — as a name for the tablet, and as the internal id the pay step splits the charge with.
     assert.equal(r.family.openInvoices[0].studentName, 'Maryam');
+    assert.equal(r.family.openInvoices[0].studentId, 'stu_2');
     // Internal student ids never reach the tablet — only display fields do.
     assert.deepEqual(r.family.students, [
       { firstName: 'Yusuf', lastInitial: 'I', balanceCents: 20000 },
@@ -167,6 +169,7 @@ test('the money path stays on v: 1 — record-payment and check are unchanged by
     });
     assert.equal(rec.calls[0].body.v, 1);
     assert.equal(rec.calls[0].body.channel, 'kiosk');
+    assert.equal(rec.calls[0].body.students, undefined); // no split → nothing v2-only on the wire
   } finally {
     rec.restore();
   }
@@ -179,9 +182,44 @@ test('the money path stays on v: 1 — record-payment and check are unchanged by
   }
 });
 
+test('a per-child split rides on record-payment and announces v: 2 (the field only exists there)', async () => {
+  const rec = stubBroker({
+    v: 2,
+    recorded: true,
+    paymentId: 'pay_71',
+    duplicate: false,
+    payments: [
+      { studentId: 'stu_2', paymentId: 'pay_71', amountCents: 30000, duplicate: false },
+      { studentId: 'stu_1', paymentId: 'pay_72', amountCents: 20000, duplicate: false },
+    ],
+  });
+  try {
+    const r = await recordStudentPayment({
+      idempotencyKey: 'pi_3PabcDEF',
+      familyId: 'fam_x1',
+      amountCents: 50000,
+      currency: 'USD',
+      occurredAt: '2026-07-15T18:03:22Z',
+      externalRef: { stripePaymentIntentId: 'pi_3PabcDEF' },
+      students: [
+        { studentId: 'stu_2', amountCents: 30000 },
+        { studentId: 'stu_1', amountCents: 20000 },
+      ],
+    });
+    assert.equal(rec.calls[0].body.v, 2);
+    assert.deepEqual(rec.calls[0].body.students, [
+      { studentId: 'stu_2', amountCents: 30000 },
+      { studentId: 'stu_1', amountCents: 20000 },
+    ]);
+    assert.deepEqual(r, { status: 'recorded', paymentId: 'pay_71', duplicate: false });
+  } finally {
+    rec.restore();
+  }
+});
+
 test('computeTuitionAmount "full" pays the whole balance, no allocations (Students auto-allocates)', () => {
   const s = session(35000, [{ id: 'inv_9', balanceCents: 15000 }, { id: 'inv_10', balanceCents: 20000 }]);
-  assert.deepEqual(computeTuitionAmount(s, { kind: 'full' }), { amountCents: 35000, allocations: null });
+  assert.deepEqual(computeTuitionAmount(s, { kind: 'full' }), { amountCents: 35000, allocations: null, students: null });
 });
 
 test('computeTuitionAmount "full" with nothing due errors (never a zero charge)', () => {
@@ -193,7 +231,42 @@ test('computeTuitionAmount invoices sums the SERVER-side stored amounts (client 
   assert.deepEqual(computeTuitionAmount(s, { kind: 'invoices', invoiceIds: ['inv_9'] }), {
     amountCents: 15000,
     allocations: [{ invoiceId: 'inv_9', amountCents: 15000 }],
+    students: [{ studentId: 'stu_1', amountCents: 15000 }],
   });
+});
+
+// v2: Students derives the ledger split from students[], NOT from allocations[] — so a picked invoice
+// must carry the child it belongs to or a sibling's older bill gets paid down instead.
+test('computeTuitionAmount groups picked invoices per CHILD, summing exactly to the charge', () => {
+  const s = session(50000, [
+    { id: 'inv_9', balanceCents: 15000, studentId: 'stu_2' },
+    { id: 'inv_8', balanceCents: 20000, studentId: 'stu_1' },
+    { id: 'inv_7', balanceCents: 15000, studentId: 'stu_2' },
+  ]);
+  const r = computeTuitionAmount(s, { kind: 'invoices', invoiceIds: ['inv_9', 'inv_7', 'inv_8'] });
+  assert.ok(!('error' in r));
+  if ('error' in r) return;
+  assert.equal(r.amountCents, 50000);
+  assert.deepEqual(r.students, [
+    { studentId: 'stu_2', amountCents: 30000 }, // both of Maryam's months, added together
+    { studentId: 'stu_1', amountCents: 20000 },
+  ]);
+  assert.equal(r.students?.reduce((n, x) => n + x.amountCents, 0), r.amountCents);
+});
+
+test('computeTuitionAmount drops the split when a provider omitted an invoice\'s child (never a short split)', () => {
+  // A partial split sums to less than the charge and Students would reject it with
+  // invalid_allocation — better to let it derive one than to fail the record.
+  const s = session(35000, [
+    { id: 'inv_9', balanceCents: 15000, studentId: 'stu_2' },
+    { id: 'inv_8', balanceCents: 20000, studentId: '' },
+  ]);
+  const r = computeTuitionAmount(s, { kind: 'invoices', invoiceIds: ['inv_9', 'inv_8'] });
+  assert.ok(!('error' in r));
+  if ('error' in r) return;
+  assert.equal(r.amountCents, 35000);
+  assert.equal(r.students, null);
+  assert.equal(r.allocations?.length, 2);
 });
 
 test('computeTuitionAmount rejects an unknown invoice id (can\'t attribute a made-up charge)', () => {
@@ -211,6 +284,7 @@ test('computeTuitionAmount dedups repeated invoice ids (no double-charging one i
   assert.deepEqual(computeTuitionAmount(s, { kind: 'invoices', invoiceIds: ['inv_9', 'inv_9'] }), {
     amountCents: 15000,
     allocations: [{ invoiceId: 'inv_9', amountCents: 15000 }],
+    students: [{ studentId: 'stu_1', amountCents: 15000 }],
   });
 });
 
@@ -237,6 +311,7 @@ test('tuition outbox: enqueued → pending until paid → recorded leaves the qu
       amountMinor: 15000,
       currency: 'USD',
       allocations: [{ invoiceId: 'inv_9', amountCents: 15000 }],
+      students: [{ studentId: 'stu_1', amountCents: 15000 }],
     });
     // Not in the retry queue until the charge succeeds (never record a non-succeeded payment).
     assert.equal(s.listPendingTuitionRecords().length, 0);
@@ -245,6 +320,9 @@ test('tuition outbox: enqueued → pending until paid → recorded leaves the qu
     assert.equal(pending.length, 1);
     assert.equal(pending[0].familyId, 'fam_1');
     assert.deepEqual(pending[0].allocations, [{ invoiceId: 'inv_9', amountCents: 15000 }]);
+    // The per-child split must survive a restart, or a retried push would be attributed by
+    // Students' own oldest-due-first derivation instead of what the parent chose.
+    assert.deepEqual(pending[0].students, [{ studentId: 'stu_1', amountCents: 15000 }]);
     // Once recorded in Students it drops out of the queue.
     s.setTuitionRecordStatus('pi_1', 'recorded', 'pay_71');
     assert.equal(s.listPendingTuitionRecords().length, 0);

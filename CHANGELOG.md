@@ -3,6 +3,16 @@
 
 # Changelog
 
+## 0.9.29
+- **Paying for one child now lands on that child's bill.** With OpenMasjid Students billing per child
+  (0.39.0), a family with more than one child could tick *Maryam's* month at the kiosk and have the
+  money booked against a sibling's older bill instead — the amount charged and the family balance were
+  always right, but the school's per-child ledger wasn't. The kiosk now tells Students exactly how much
+  of the payment belongs to each child, and that split is kept safe until the payment is confirmed, so
+  a retry after a dropped connection attributes it the same way. **Paying the full balance is
+  unchanged** (Students still clears the oldest bills first). Admin panel + server only — no tablet
+  update needed beyond 0.9.28.
+
 ## 0.9.28
 - **Tuition: no more PIN — just the Student ID.** OpenMasjid Students **0.39.0** dropped student PINs,
   so the kiosk's tuition screen now asks for the child's **Student ID** (the `YUS1234` code on your
