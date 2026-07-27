@@ -3,6 +3,19 @@
 
 # Changelog
 
+## 0.9.28
+- **Tuition: no more PIN — just the Student ID.** OpenMasjid Students **0.39.0** dropped student PINs,
+  so the kiosk's tuition screen now asks for the child's **Student ID** (the `YUS1234` code on your
+  statement) and nothing else. The kiosk then shows **"Is this your child?"** with the child's first
+  name, and only once the parent taps **Yes** does the balance appear. That confirmation catches a
+  mistyped ID — which a PIN never did — and takes one field off the keypad.
+  **Requires OpenMasjid Students 0.39.0 or newer, and a tablet app update:** on 0.39.0 the old
+  name + PIN lookup is rejected outright, so an un-updated kiosk's tuition tile can't fetch a balance.
+- **Invoices say whose they are.** Students now bills **per child**, so when a family has more than one
+  child at the school, each month in "Choose what to pay" is labelled with the child it belongs to.
+- Paying, receipts and the Students ledger are **unchanged** — an in-flight payment, a retry from the
+  outbox, and every other campaign type behave exactly as before.
+
 ## 0.9.27
 - **Much stronger soft kiosk — no computer needed.** Without the (optional) device-owner setup, the
   kiosk now locks down far harder, all from the tablet:

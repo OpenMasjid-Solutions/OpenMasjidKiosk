@@ -46,7 +46,7 @@ enum class Overlay { None, Pin, Maintenance }
 /** The donor-facing giving flow (Paired phase). The kiosk now boots straight into [Amount] (no
  *  attract screen); [Idle] is retained only as a defensive default. Processing = the card was read
  *  and we're verifying with the server (so the tap is acknowledged immediately). */
-enum class GivingStep { Idle, Amount, LargeAmount, Details, Card, Processing, Thanks, Error, TuitionInvoices }
+enum class GivingStep { Idle, Amount, LargeAmount, Details, Card, Processing, Thanks, Error, TuitionConfirm, TuitionInvoices }
 
 /** How long a non-main campaign tab may sit idle before the kiosk returns to the main tab. */
 const val KIOSK_AUTO_RETURN_MS = 45_000L
@@ -67,20 +67,24 @@ data class ManualEntry(
 /** Outcome the UI reports back after presenting the manual card form. */
 enum class ManualResult { Completed, Canceled, Failed }
 
-/** An open invoice a parent can pay (display + the opaque id used for selection). */
-data class TuitionInvoiceUi(val id: String, val label: String, val dueDate: String, val balanceMinor: Long)
+/** An open invoice a parent can pay (display + the opaque id used for selection). [studentName] is
+ *  whose bill it is — blank for an only child (contract v2: one bill per student). */
+data class TuitionInvoiceUi(val id: String, val label: String, val dueDate: String, val balanceMinor: Long, val studentName: String = "")
 
-/** State of the tuition (students/billing) shell — the name+PIN lookup, then the family's balance +
- *  invoices to pay. Only set when the active campaign is a `tuition` campaign. Holds nothing beyond
- *  what's on screen and is cleared whenever the flow resets, so no family's balance lingers for the
- *  next person (contract §6). */
+/** State of the tuition (students/billing) shell — the Student ID entry, the "is this your child?"
+ *  confirmation, then the family's balance + invoices to pay. Only set when the active campaign is a
+ *  `tuition` campaign. Holds nothing beyond what's on screen and is cleared whenever the flow resets,
+ *  so no family's balance lingers for the next person (contract §6).
+ *
+ *  Contract v2 (Students 0.39.0 §11.0): there is no PIN. The Student ID alone identifies the child and
+ *  the parent confirms the name we echo back — that confirmation is what catches a mistyped ID. */
 data class TuitionState(
     val schoolName: String = "",
     val tagline: String = "",
     val available: Boolean = true,      // Students info.enabled; false → the tile shows "unavailable"
-    val name: String = "",
-    val pin: String = "",
-    val looking: Boolean = false,       // a lookup is in flight
+    val studentCode: String = "",       // the ID printed on the statement, e.g. YUS1234
+    val identifiedName: String = "",    // the child `identify` matched — shown for confirmation
+    val looking: Boolean = false,       // an identify/lookup is in flight
     val notFound: Boolean = false,      // uniform "couldn't find that"
     val error: String? = null,          // e.g. temporarily unavailable / choose an item
     val session: String = "",           // opaque server session id (set after a successful lookup)
@@ -417,13 +421,15 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         idleResetJob?.cancel()
         val g = local.value.giving
         val step = g.step
-        val armStep = step == GivingStep.LargeAmount || step == GivingStep.Details || step == GivingStep.Card || step == GivingStep.Error || step == GivingStep.TuitionInvoices
+        val armStep = step == GivingStep.LargeAmount || step == GivingStep.Details || step == GivingStep.Card || step == GivingStep.Error ||
+            step == GivingStep.TuitionConfirm || step == GivingStep.TuitionInvoices
         // A tuition campaign rests on GivingStep.Amount, but the lookup shell there holds a typed
-        // student name (plaintext) + family PIN. That is PII a walked-away parent must not leave for
-        // the next person — and on the MAIN/single tab the return-to-main timer never fires — so once
-        // anything is typed we arm the idle timer here and clear the fields on timeout.
+        // Student ID — which identifies a child and is enough to see their balance. That is not
+        // something a walked-away parent should leave for the next person, and on the MAIN/single tab
+        // the return-to-main timer never fires, so once anything is typed we arm the idle timer here
+        // and clear the field on timeout.
         val tuitionDirty = step == GivingStep.Amount && activeCampaign()?.type == "tuition" &&
-            (g.tuition?.name?.isNotBlank() == true || g.tuition?.pin?.isNotBlank() == true)
+            g.tuition?.studentCode?.isNotBlank() == true
         if (!armStep && !tuitionDirty) {
             if (local.value.idleReturnStartedMs != null) local.update { it.copy(idleReturnStartedMs = null) }
             return
@@ -437,11 +443,13 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             delay(timeout)
             val cur = local.value.giving
             val s = cur.step
-            if (s == GivingStep.LargeAmount || s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error || s == GivingStep.TuitionInvoices) {
+            if (s == GivingStep.LargeAmount || s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error ||
+                s == GivingStep.TuitionConfirm || s == GivingStep.TuitionInvoices
+            ) {
                 cancelGiving()
             } else if (s == GivingStep.Amount && activeCampaign()?.type == "tuition" &&
-                (cur.tuition?.name?.isNotBlank() == true || cur.tuition?.pin?.isNotBlank() == true)) {
-                // Wipe the abandoned name/PIN (and any looked-up family) back to a fresh lookup shell,
+                cur.tuition?.studentCode?.isNotBlank() == true) {
+                // Wipe the abandoned Student ID (and any looked-up family) back to a fresh lookup shell,
                 // keeping the tile itself on screen — no restart, no lingering balance for a passer-by.
                 updateTuition { TuitionState(schoolName = it.schoolName, tagline = it.tagline, available = it.available) }
                 if (local.value.idleReturnStartedMs != null) local.update { it.copy(idleReturnStartedMs = null) }
@@ -784,27 +792,81 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // Typing re-arms the idle-abandon timer (and the return-to-main timer on a non-main tab) so an
-    // abandoned name/PIN is always cleared — see rescheduleIdleReset's tuition branch.
-    fun setTuitionName(v: String) { updateTuition { it.copy(name = v.take(120), notFound = false, error = null) }; onUserActivity() }
-    fun setTuitionPin(v: String) { updateTuition { it.copy(pin = v.take(20), notFound = false, error = null) }; onUserActivity() }
+    // abandoned Student ID is always cleared — see rescheduleIdleReset's tuition branch. The ID is
+    // normalised the way the school does it (uppercase, no spaces/hyphens) so "yus-1234" just works.
+    fun setTuitionStudentCode(v: String) {
+        updateTuition { it.copy(studentCode = v.uppercase().filter { ch -> ch != ' ' && ch != '-' }.take(32), notFound = false, error = null) }
+        onUserActivity()
+    }
 
-    /** Look up the family by name + PIN, then move to the invoices step. A wrong PIN / name mismatch is
-     *  a uniform "not found"; a broker outage is "temporarily unavailable" (never "wrong PIN"). */
-    fun tuitionLookup() {
+    /** Step 1 (contract v2 §11.0): resolve the typed Student ID to a child's name and ask the parent to
+     *  confirm it. No balance is fetched yet — that confirmation is what replaced the PIN, so a
+     *  mistyped ID is caught here rather than paying a stranger's bill. A mistyped/unknown/locked ID is
+     *  a uniform "not found"; a broker outage is "temporarily unavailable" (never "wrong ID"). */
+    fun tuitionIdentify() {
         onUserActivity()
         val c = activeCampaign() ?: return
         val t = local.value.giving.tuition ?: return
-        if (t.name.isBlank() || t.pin.isBlank()) {
-            updateTuition { it.copy(error = "Enter the student’s name and PIN.") }
+        if (t.studentCode.isBlank()) {
+            updateTuition { it.copy(error = "Enter the Student ID.") }
             return
         }
         updateTuition { it.copy(looking = true, notFound = false, error = null) }
         givingJob?.cancel()
         givingJob = viewModelScope.launch {
-            val res = runCatching { repo.tuitionLookup(c.id, t.name.trim(), t.pin.trim()) }.getOrNull()
+            val res = runCatching { repo.tuitionIdentify(c.id, t.studentCode.trim()) }.getOrNull()
             when {
                 res == null -> updateTuition { it.copy(looking = false, error = "Tuition is temporarily unavailable — please try again.") }
                 !res.found -> updateTuition { it.copy(looking = false, notFound = true) }
+                else -> {
+                    updateGiving {
+                        it.copy(
+                            step = GivingStep.TuitionConfirm,
+                            error = null,
+                            tuition = (it.tuition ?: TuitionState()).copy(looking = false, notFound = false, error = null, identifiedName = res.name),
+                        )
+                    }
+                    rescheduleIdleReset()
+                }
+            }
+        }
+    }
+
+    /** "No, that's not my child" — back to the ID entry with the mistyped code cleared. */
+    fun tuitionRejectStudent() {
+        onUserActivity()
+        givingJob?.cancel()
+        updateGiving {
+            it.copy(
+                step = GivingStep.Amount,
+                error = null,
+                tuition = (it.tuition ?: TuitionState()).copy(studentCode = "", identifiedName = "", looking = false, notFound = false, error = null),
+            )
+        }
+        rescheduleIdleReset()
+    }
+
+    /** Step 2: the parent confirmed the name → fetch the balance for that SAME Student ID and move to
+     *  the invoices step. */
+    fun tuitionConfirmStudent() {
+        onUserActivity()
+        val c = activeCampaign() ?: return
+        val t = local.value.giving.tuition ?: return
+        if (t.studentCode.isBlank()) return
+        updateTuition { it.copy(looking = true, notFound = false, error = null) }
+        givingJob?.cancel()
+        givingJob = viewModelScope.launch {
+            val res = runCatching { repo.tuitionLookup(c.id, t.studentCode.trim()) }.getOrNull()
+            when {
+                res == null -> updateTuition { it.copy(looking = false, error = "Tuition is temporarily unavailable — please try again.") }
+                // Vanishingly rare (identify just matched it) — send them back to the ID screen rather
+                // than stranding them on a confirmation for a child we can no longer price.
+                !res.found -> updateGiving {
+                    it.copy(
+                        step = GivingStep.Amount,
+                        tuition = (it.tuition ?: TuitionState()).copy(looking = false, notFound = true, identifiedName = ""),
+                    )
+                }
                 else -> {
                     val fam = res.family!!
                     updateGiving {
@@ -819,7 +881,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                                 familyLabel = fam.label,
                                 balanceMinor = fam.balanceMinor,
                                 currency = fam.currency,
-                                invoices = fam.invoices.map { i -> TuitionInvoiceUi(i.id, i.label, i.dueDate, i.balanceMinor) },
+                                invoices = fam.invoices.map { i -> TuitionInvoiceUi(i.id, i.label, i.dueDate, i.balanceMinor, i.studentName) },
                                 payFull = true,
                                 selected = emptySet(),
                             ),

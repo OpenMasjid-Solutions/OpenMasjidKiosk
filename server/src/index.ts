@@ -24,7 +24,7 @@ import { Store, grossUpForFees, type Device, type DonationRecord, type EmailRece
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus } from './fabric';
 import { renderReceipt, type ReceiptContext } from './email';
-import { studentsInfo, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, billingConfigured } from './students';
+import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, billingConfigured } from './students';
 import { LoginLimiter } from './rateLimit';
 import { toCsv } from './csv';
 import {
@@ -477,10 +477,12 @@ async function main(): Promise<void> {
 
   // ── Devices: pairing, fleet management, kiosk PIN ───────────────────────────
   const pairLimiter = new LoginLimiter(); // brute-force guard for 6-digit pairing codes
-  // Tuition name+PIN lookups: a fixed rolling window per peer (20 / 60s), capped regardless of
-  // success or failure — a valid lookup must NOT refill the brute-force budget (a shared-IP attacker
-  // with one good pair could otherwise reset the backoff). Students itself locks a PIN after repeated
-  // failures (contract §14); this is defence-in-depth. Well above any real kiosk's lookup rate.
+  // Tuition Student-ID lookups (identify + lookup SHARE this bucket, as they do at Students): a fixed
+  // rolling window per peer (20 / 60s), capped regardless of success or failure — a valid lookup must
+  // NOT refill the brute-force budget (a shared-IP attacker with one good ID could otherwise reset the
+  // backoff), and splitting the budget per endpoint would just let a sweep alternate between them.
+  // Students locks a Student ID after 6 failed probes an hour (contract §11.0/§14); this is
+  // defence-in-depth so the kiosk is never the open relay. Well above any real kiosk's lookup rate.
   const tuitionLookupHits = new Map<string, { count: number; resetAt: number }>();
   const tuitionLookupOk = (ip: string): boolean => {
     const now = Date.now();
@@ -1043,10 +1045,10 @@ async function main(): Promise<void> {
     const campaign = (parsed.data.campaignId ? store.getCampaign(parsed.data.campaignId) : null) ?? store.getMainCampaign();
     if (!campaign) return reply.code(400).send({ error: 'Giving isn’t set up yet.' });
     if (!campaign.live && !campaign.isMain) return reply.code(400).send({ error: 'That appeal isn’t available.' });
-    // A tuition appeal is NOT paid through the donation flow — it has its own name+PIN → balance →
+    // A tuition appeal is NOT paid through the donation flow — it has its own Student ID → balance →
     // record-to-Students path (/api/kiosk/tuition/*). Reject it here so a crafted tablet can't mint a
     // tuition charge as a plain donation (wrong metadata, polluted totals, no Students record).
-    if (campaign.type === 'tuition') return reply.code(400).send({ error: 'Tuition is paid on its own screen (name + PIN).' });
+    if (campaign.type === 'tuition') return reply.code(400).send({ error: 'Tuition is paid on its own screen (Student ID).' });
     // Amount is validated against THIS campaign's presets/custom bounds — never trust the tablet.
     if (!store.isAllowedAmountForCampaign(campaign, amountMinor)) return reply.code(400).send({ error: 'That amount isn’t available.' });
     // Resolve the campaign's Stripe account (its own, or the primary/reader account when unset).
@@ -1230,11 +1232,13 @@ async function main(): Promise<void> {
   });
 
   // ── Tuition (students/billing) — a `tuition` campaign shells out to OpenMasjid Students ─────
-  // The parent taps the tuition tile, types their child's name + PIN, we verify + fetch the balance
-  // from Students over the Fabric broker, they pay the full balance or pick invoices, the M2 reader
-  // takes the card, and we record it into the Students ledger (never as a kiosk "donation"). The app
-  // secret stays on the server; the PIN is inert input (body only, never logged/stored/in metadata);
-  // amounts are computed server-side from a held session. Everything fails soft if Students is absent.
+  // The parent taps the tuition tile and types their child's Student ID; we `identify` it, the tablet
+  // asks "is this <first name>?", and only on confirmation do we `lookup` the balance over the Fabric
+  // broker. They then pay the full balance or pick invoices, the M2 reader takes the card, and we
+  // record it into the Students ledger (never as a kiosk "donation"). Contract v2 (§11.0) — there is
+  // no PIN any more; the name confirmation is what catches a mistyped ID. The app secret stays on the
+  // server; the Student ID is inert input (body only, never logged/stored/in metadata); amounts are
+  // computed server-side from a held session. Everything fails soft if Students is absent.
 
   /** Push a succeeded tuition charge to the Students ledger (idempotent on the PI id); update the
    *  outbox. `recorded` → done; `rejected` → give up (Students' daily reconciliation is the backstop);
@@ -1285,23 +1289,44 @@ async function main(): Promise<void> {
     return { data: { enabled: true, schoolName: r.info.schoolName, currency: r.info.currency, tagline: r.info.tagline } };
   });
 
-  // Resolve a student name + PIN to a family + balance. Rate-limited per peer; the PIN is NEVER logged.
-  // A wrong PIN and a name mismatch return the SAME `found:false` (no enumeration oracle).
-  const TuitionLookupBody = z.object({
+  // Step 1 of the v2 flow: a typed Student ID → the child's first name, so the tablet can ask "is this
+  // the right child?" BEFORE any balance appears. Returns a name and nothing else (§11.2) — no balance,
+  // no invoices, no siblings, no ids. Unknown / withdrawn / locked / tuition-off all answer the same
+  // uniform `found:false`. Rate-limited per peer on the same bucket as the lookup below.
+  const TuitionCodeBody = z.object({
     campaignId: z.string().max(120),
-    name: z.string().trim().min(1).max(120),
-    pin: z.string().trim().min(1).max(40),
+    // Max 32 to match the provider's own cap; normalised (case/spaces/hyphens) in students.ts.
+    studentCode: z.string().trim().min(1).max(32),
   });
+  app.post('/api/kiosk/tuition/identify', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const peer = req.socket.remoteAddress ?? 'unknown';
+    if (!tuitionLookupOk(peer)) return reply.code(429).send({ error: 'Too many tries. Please wait a moment and try again.' });
+    const parsed = TuitionCodeBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Enter the Student ID.' });
+    const campaign = store.getCampaign(parsed.data.campaignId);
+    if (!campaign || campaign.type !== 'tuition') return reply.code(400).send({ error: 'That isn’t a tuition appeal.' });
+    const r = await studentsIdentify(parsed.data.studentCode);
+    if (r.status === 'unavailable') return reply.code(503).send({ error: 'Tuition is temporarily unavailable — please try again shortly.' });
+    if (r.status === 'not-found') return { data: { found: false } };
+    // First name + last initial only — exactly what the parent needs to say "yes, that's my child".
+    return { data: { found: true, student: { firstName: r.student.firstName, lastInitial: r.student.lastInitial } } };
+  });
+
+  // Step 2: the parent has confirmed the name → resolve the SAME Student ID to the family + balance.
+  // Rate-limited per peer; the ID is NEVER logged. Every mismatch returns the same `found:false`
+  // (no enumeration oracle). There is no PIN at v2 — see §11.0.
   app.post('/api/kiosk/tuition/lookup', async (req, reply) => {
     const d = authDevice(req, reply);
     if (!d) return;
     const peer = req.socket.remoteAddress ?? 'unknown';
     if (!tuitionLookupOk(peer)) return reply.code(429).send({ error: 'Too many tries. Please wait a moment and try again.' });
-    const parsed = TuitionLookupBody.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'Enter the student’s name and PIN.' });
+    const parsed = TuitionCodeBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Enter the Student ID.' });
     const campaign = store.getCampaign(parsed.data.campaignId);
     if (!campaign || campaign.type !== 'tuition') return reply.code(400).send({ error: 'That isn’t a tuition appeal.' });
-    const r = await studentsLookup(parsed.data.name, parsed.data.pin);
+    const r = await studentsLookup(parsed.data.studentCode);
     if (r.status === 'unavailable') return reply.code(503).send({ error: 'Tuition is temporarily unavailable — please try again shortly.' });
     if (r.status === 'not-found') {
       // Uniform "not found" (no enumeration oracle); the rolling window already counted this attempt.
@@ -1324,10 +1349,11 @@ async function main(): Promise<void> {
         session: session.id, // opaque; the family/student ids stay on the server
         family: {
           label: r.family.label,
-          students: r.family.students, // firstName + lastInitial only (per contract)
+          students: r.family.students, // firstName + lastInitial (+ their own balance) — per contract
           balanceCents: r.family.balanceCents,
           currency: r.family.currency,
-          openInvoices: r.family.openInvoices, // id (for selection) + label + dueDate + balanceCents
+          // id (for selection) + label + dueDate + balanceCents + whose bill it is (v2: per-child bills)
+          openInvoices: r.family.openInvoices,
         },
       },
     };

@@ -5,16 +5,30 @@
 
 > **One line:** when a campaign's type is **`tuition`**, the kiosk tile does **not** run its own
 > donation flow. It becomes a thin shell around the **OpenMasjid Students** app: a parent taps the
-> tile, types their **child's name + PIN** on the tablet, we verify + fetch the balance from Students
-> over the Fabric, they pay the whole balance or pick which months, they tap/insert the card on the
-> **Reader M2**, and we record the payment back into the Students ledger. **Students owns everything
-> inside the tuition tile** — the label, the lookup, the balance, the allocation, the recording. The
-> kiosk only renders the shell and drives the reader.
+> tile, types their **child's Student ID** on the tablet, confirms the name we echo back, we fetch the
+> balance from Students over the Fabric, they pay the whole balance or pick which months, they
+> tap/insert the card on the **Reader M2**, and we record the payment back into the Students ledger.
+> **Students owns everything inside the tuition tile** — the label, the lookup, the balance, the
+> allocation, the recording. The kiosk only renders the shell and drives the reader.
 
-The contract is **`students/billing` v1**, defined verbatim in the Students repo:
+The contract is **`students/billing` v2**, defined verbatim in the Students repo:
 `OpenMasjidStudentManager/docs/FABRIC_BILLING_CONTRACT.md` (§11) — the source of truth for every
-request/response shape below. If it and this brief disagree, the contract wins. Every response carries
-`"v": 1`.
+request/response shape below. If it and this brief disagree, the contract wins. Responses carry
+`"v": 2`.
+
+**What changed at v2 (Students 0.39.0, §11.0) — and what did not:**
+
+- **PINs are gone.** `lookup` no longer takes `name` + `pin`; it takes the **Student ID** alone
+  (`YUS1234` — three letters from the first name + four digits, printed on the statement). A v1-shaped
+  lookup now **400s**, so this is not optional: an un-upgraded kiosk's tuition screen simply breaks.
+- **`identify` replaced the PIN.** We resolve the typed ID to a first name, the parent confirms "yes,
+  that's my child", and only then do we call `lookup`. That confirmation catches the realistic failure
+  (a mistyped ID) that a PIN never did.
+- **Bills are per child.** `lookup` reports a balance per student as well as the household total, and
+  every open invoice says which child it belongs to.
+- **The money path is untouched.** `info`, `record-payment` and `check` are byte-identical between v1
+  and v2; we deliberately still send them as `"v": 1` (the provider accepts both) so a recorded payment
+  never depends on this upgrade.
 
 ---
 
@@ -23,16 +37,20 @@ request/response shape below. If it and this brief disagree, the contract wins. 
 A `tuition` tile runs **exactly this**, nothing more:
 
 1. Tap the **tuition tile** (labelled from `info.schoolName` / `info.tagline`).
-2. **Two fields on the tablet:** *Student name* and *PIN*. Nothing else — no amount pad up front.
-3. Tap **Find my balance** → kiosk server calls `lookup` (name + PIN).
-   - Not found → one friendly line (“We couldn’t find that — please check the name and PIN, or ask the
-     office”). **No hint about which part was wrong** (Students returns a uniform `found:false`).
-4. **Verified** → show the **family label**, the **current balance due**, and the **open invoices**
-   (one row per month/term, each with its own amount + due date).
-5. **Pay:** two choices —
-   - **Pay the full balance** (the whole `balanceCents`), or
+2. **One field on the tablet:** the child's *Student ID*. Nothing else — no PIN, no amount pad up front.
+3. Tap **Continue** → kiosk server calls `identify` (the ID alone).
+   - Not found → one friendly line (“We couldn’t find that — please check the Student ID, or ask the
+     office”). **No hint about what was wrong** (Students returns a uniform `found:false` for an
+     unknown, withdrawn or locked ID).
+4. **Confirm the child:** “Is this **Yusuf I.**?” — *Yes, show the balance* / *No — try another ID*.
+   **No balance is fetched or shown until they say yes.** This step is required by §11.2, not a nicety.
+5. **Confirmed** → kiosk server calls `lookup` with the same ID → show the **family label**, the
+   **current balance due**, and the **open invoices** (one row per month/term, each with its own
+   amount, due date and — when there are siblings — whose bill it is).
+6. **Pay:** two choices —
+   - **Pay the full balance** (the whole household `balanceCents`), or
    - **Choose what to pay** — tick one or more invoices (e.g. one or two months) and pay just those.
-6. **Present card on the Reader M2** (card-present PaymentIntent). On approval → we record it into
+7. **Present card on the Reader M2** (card-present PaymentIntent). On approval → we record it into
    Students and print/show a receipt that says **“payment”**, never “donation”. Done.
 
 No account, no login — the same anonymous, walk-up model as every other kiosk tile.
@@ -64,7 +82,8 @@ kiosk server calls the OS broker. **Never ship the app secret to the tablet.**
 ```
 POST ${OPENMASJID_BASE_URL}/api/fabric/app/students/billing/<method>
 Header:  X-OpenMasjid-App-Secret: <OUR OWN app secret>     # proves who we are to the OS
-Body:    application/json, { "v": 1, ... }, ≤ 256 KB, respond < 10 s
+Body:    application/json, { "v": 2, ... }, ≤ 256 KB, respond < 10 s
+         # "v": 2 on identify + lookup; "v": 1 on info / record-payment / check (unchanged shapes)
 ```
 
 The OS core verifies **our** secret, checks our manifest declares `fabric.consumes: [students/billing]`,
@@ -84,30 +103,45 @@ the Students app’s secret and never reach it directly.
 ### `info` — should the tuition tile show at all?
 ```jsonc
 { "v": 1 }
-→ { "v": 1, "enabled": true, "schoolName": "An-Noor Weekend School",
-    "currency": "usd", "tagline": "Pay tuition with your child's name and PIN" }
+→ { "v": 2, "enabled": true, "schoolName": "An-Noor Weekend School",
+    "currency": "usd", "tagline": "Pay tuition with your child's Student ID" }
 ```
 `enabled:false` (school not set up / external payments off) → **hide the tuition tile**. Poll on the
 same cadence you refresh campaigns.
 
-### `lookup` — name + PIN → family + balance (step 3→4)
+### `identify` — Student ID → the child's name (step 3→4)
 ```jsonc
-{ "v": 1, "name": "Yusuf Ismail", "pin": "482913" }
+{ "v": 2, "studentCode": "YUS1234" }        // normalised there too, so "yus-1234" is fine
+// found — a first name + last initial and NOTHING else:
+→ { "v": 2, "found": true, "student": { "studentCode": "YUS1234", "firstName": "Yusuf", "lastInitial": "I" } }
+// not found (unknown / withdrawn / locked ID, or tuition switched off):
+→ { "v": 2, "found": false }
+```
+**Call this first.** It carries no balance, no invoices, no siblings and no family id — which is what
+makes it safe to answer *before* the parent has confirmed anything. Show the name, ask “is this your
+child?”, and only call `lookup` on a yes.
+
+### `lookup` — a confirmed Student ID → family + balance (step 5)
+```jsonc
+{ "v": 2, "studentCode": "YUS1234" }         // v2: no `name`, no `pin` — a v1 body 400s
 // found:
-→ { "v": 1, "found": true,
-    "matchedStudent": { "id": "stu_1" },
+→ { "v": 2, "found": true,
+    "matchedStudent": { "id": "stu_1", "balanceCents": 20000 },
     "family": { "id": "fam_x1", "label": "Ismail family",
-      "students": [{ "firstName": "Yusuf", "lastInitial": "I" }],
+      "students": [{ "studentId": "stu_1", "studentCode": "YUS1234", "firstName": "Yusuf",
+                     "lastInitial": "I", "balanceCents": 20000 }],
       "balanceCents": 35000, "currency": "usd",
-      "openInvoices": [{ "id": "inv_9", "label": "Tuition — Jul 2026",
+      "openInvoices": [{ "id": "inv_9", "studentId": "stu_2", "label": "Tuition — Jul 2026",
                          "dueDate": "2026-07-01", "balanceCents": 15000 }] } }
 // not found (identical shape + latency whatever mismatched):
-→ { "v": 1, "found": false }
+→ { "v": 2, "found": false }
 ```
 Show the balance from `family.balanceCents`; render one selectable row per `openInvoices[]` (the
-“pick months” list). **Never display more than the contract returns** — no full last names, DOB, or
-contact info. Hold `family.id` + `matchedStudent.id` on the kiosk server for the pay step; the tablet
-only needs display fields.
+“pick months” list), and label each row with the child it belongs to (`studentId` → that child's first
+name from `family.students[]`) when the family has more than one — bills are per student at v2, so two
+children produce two identically-labelled rows otherwise. **Never display more than the contract
+returns** — no full last names, DOB, or contact info. Hold `family.id` + `matchedStudent.id` (and the
+internal `studentId`s) on the kiosk server for the pay step; the tablet only gets display fields.
 
 ### The charge (our job — Stripe Terminal / Reader M2, card-present)
 On the Stripe account the reader is registered to (see §4), create a **card-present** PaymentIntent for
@@ -120,11 +154,14 @@ omos_app            = kiosk
 students_family_id  = fam_x1                   (REQUIRED, from lookup)
 students_student_id = stu_1                     (optional, matchedStudent.id)
 ```
-Description: `School balance — <family label>`. **Never** put the PIN or the typed name in metadata,
-description, receipt, or any log — metadata is visible in the Stripe dashboard + exports.
+Description: `School balance — <family label>`. **Never** put the Student ID or a child's name in
+metadata, description, receipt, or any log (§11.3) — metadata is visible in the Stripe dashboard +
+exports.
 
 ### `record-payment` — book it in the Students ledger (idempotent)
-After the reader approves and the PaymentIntent succeeds:
+After the reader approves and the PaymentIntent succeeds. Unchanged at v2 and still sent as `"v": 1`,
+so the money path never depends on the lookup upgrade (v2 adds an optional per-child `students[]`
+breakdown we don't need — omit it and Students derives the split itself, oldest-due-first):
 ```jsonc
 { "v": 1,
   "idempotencyKey": "pi_3PabcDEF",        // the Stripe PaymentIntent id
@@ -190,16 +227,23 @@ charging the wrong account.
 ## 6. Security (§14)
 
 - The **app secret stays on the kiosk server**, never on the tablet (§2).
-- **Rate-limit the lookup** on the kiosk server (it takes a PIN). Students also locks a PIN after
-  repeated failures and returns a uniform `found:false`, but the kiosk must not be the open relay that
-  lets someone grind PINs at the front desk — cap attempts per session/device.
-- The PIN is **inert input**: it lives only in the lookup request body — **never** in a URL, a log line,
-  Stripe metadata, the receipt, or the Terminal display. Store nothing about the lookup after the tile
-  closes.
-- Treat every `lookup` field as hostile text; render family/student data as text, never HTML.
+- **Rate-limit `identify` and `lookup` on ONE shared bucket** on the kiosk server (20 / 60 s per peer,
+  counted whether or not the call succeeds). A Student ID is not a secret — it is printed on statements
+  and its letters come from the child's first name — but it is the whole credential for "see a balance
+  and pay it", and 4 digits is ~10k guesses per prefix. Students locks a code after 6 failed probes an
+  hour (`identify`, `lookup` and its own parent registration share that bucket, so a sweep can't launder
+  failures by switching endpoints); the kiosk must not be the open relay that lets someone grind IDs at
+  the front desk. Splitting our budget per endpoint would defeat it the same way.
+- The Student ID is **inert input**: it lives only in the identify/lookup request body — **never** in a
+  URL, a log line, Stripe metadata, the receipt, or the Terminal display. Store nothing about the lookup
+  after the tile closes.
+- **Never skip the confirmation step.** `lookup` is called only after the parent confirms the name from
+  `identify` (§11.2). That is what stops a mistyped ID from paying a stranger's bill.
+- Treat every `identify`/`lookup` field as hostile text; render family/student data as text, never HTML.
 - On `found:false`, same message + timing regardless — no enumeration.
-- Clear the entered name/PIN + the looked-up family from the tablet when the tile is closed or times
-  out (walk-up device — don’t leave one family’s balance on screen for the next person).
+- Clear the entered Student ID, the confirmed name + the looked-up family from the tablet when the tile
+  is closed or times out (walk-up device — don’t leave one family’s balance on screen for the next
+  person).
 
 ---
 
@@ -207,8 +251,9 @@ charging the wrong account.
 
 - `manifest.yaml` declares `fabric.consumes: [students/billing]`; the broker call returns 200 (not
   `not_granted`) once the OS grants it.
-- The tuition tile renders the **name + PIN** shell (no amount pad), verifies via `lookup`, shows the
-  balance + per-month invoices, and offers **pay-all** and **pick-months**.
+- The tuition tile renders the **Student ID** shell (one field, no PIN, no amount pad), confirms the
+  child's name via `identify`, then fetches the balance + per-month invoices via `lookup` and offers
+  **pay-all** and **pick-months**. Invoices are labelled with the child when there are siblings.
 - A card-present approval calls `record-payment` (allocations for picked months; omitted for full
   balance), idempotent on the PI id; a dropped confirmation is retried from a persistent outbox +
   `check`.
@@ -216,5 +261,6 @@ charging the wrong account.
   a mismatch warns the admin.
 - Receipt says **“payment”**; tuition is excluded from donation totals + year-end letters.
 - Everything **fails soft** when Students is unreachable / `enabled:false` / a `fabric_error` arrives.
-- The app secret never reaches the tablet; the lookup is rate-limited; the PIN never appears in logs,
-  the receipt, the reader display, or metadata; name/PIN/family cleared on tile close.
+- The app secret never reaches the tablet; identify + lookup share one rate-limit bucket; the Student ID
+  never appears in logs, the receipt, the reader display, or metadata; ID/name/family cleared on tile
+  close.

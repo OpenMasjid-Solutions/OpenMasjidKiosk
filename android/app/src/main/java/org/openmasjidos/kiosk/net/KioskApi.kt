@@ -47,8 +47,9 @@ data class CompletedDonation(
 /** Tuition (students/billing) shell data — the tile label + whether tuition is available at all. */
 data class TuitionInfo(val enabled: Boolean, val schoolName: String, val currency: String, val tagline: String)
 
-/** One open invoice a parent can choose to pay. [balanceMinor] is the smallest currency unit. */
-data class TuitionInvoice(val id: String, val label: String, val dueDate: String, val balanceMinor: Long)
+/** One open invoice a parent can choose to pay. [balanceMinor] is the smallest currency unit.
+ *  [studentName] is whose bill it is — blank for an only child (contract v2: bills are per student). */
+data class TuitionInvoice(val id: String, val label: String, val dueDate: String, val balanceMinor: Long, val studentName: String = "")
 
 /** A looked-up family + its balance. [session] is the OPAQUE server-side session id used to pay — the
  *  real family/student ids stay on the server. */
@@ -61,8 +62,13 @@ data class TuitionFamily(
     val invoices: List<TuitionInvoice>,
 )
 
+/** Result of `identify`: the child a typed Student ID belongs to, so the parent can confirm the name
+ *  before any balance is shown (contract v2 §11.0 — this replaced the PIN). [name] is a first name +
+ *  last initial and nothing else; blank when [found] is false. */
+data class TuitionIdentifyResult(val found: Boolean, val name: String)
+
 /** Result of a tuition lookup: found (+ family), or a uniform not-found. An UNAVAILABLE broker error is
- *  surfaced as an ApiException (so the UI says "temporarily unavailable", never "wrong PIN"). */
+ *  surfaced as an ApiException (so the UI says "temporarily unavailable", never "wrong ID"). */
 data class TuitionLookupResult(val found: Boolean, val family: TuitionFamily?)
 
 /** Server-verified outcome of a tuition payment (recorded to Students, never as a kiosk donation). */
@@ -246,17 +252,30 @@ class KioskApi(private val client: OkHttpClient) {
         return TuitionInfo(json.optBoolean("enabled", false), json.optString("schoolName"), json.optString("currency"), json.optString("tagline"))
     }
 
-    /** `POST /api/kiosk/tuition/lookup` — student name + PIN → family + balance. The PIN is sent in the
-     *  body only. `found:false` is uniform; a broker outage throws ApiException(503). */
-    fun tuitionLookup(baseUrl: String, token: String, campaignId: String, name: String, pin: String): TuitionLookupResult {
-        val body = JSONObject().put("campaignId", campaignId).put("name", name).put("pin", pin)
+    /** `POST /api/kiosk/tuition/identify` — Student ID → the child's name, for the "is this the right
+     *  child?" confirmation. Answers a name and nothing else; `found:false` is uniform (unknown,
+     *  withdrawn or locked ID all look the same); a broker outage throws ApiException(503). */
+    fun tuitionIdentify(baseUrl: String, token: String, campaignId: String, studentCode: String): TuitionIdentifyResult {
+        val body = JSONObject().put("campaignId", campaignId).put("studentCode", studentCode)
+        val json = post(baseUrl, "/api/kiosk/tuition/identify", body, token)
+        if (!json.optBoolean("found", false)) return TuitionIdentifyResult(false, "")
+        val s = json.optJSONObject("student") ?: JSONObject()
+        val name = listOf(s.optString("firstName"), s.optString("lastInitial")).filter { it.isNotBlank() }.joinToString(" ")
+        return TuitionIdentifyResult(true, name)
+    }
+
+    /** `POST /api/kiosk/tuition/lookup` — Student ID → family + balance (contract v2: no name, no PIN).
+     *  Called only AFTER the parent confirmed the name from `identify`. The ID is sent in the body only.
+     *  `found:false` is uniform; a broker outage throws ApiException(503). */
+    fun tuitionLookup(baseUrl: String, token: String, campaignId: String, studentCode: String): TuitionLookupResult {
+        val body = JSONObject().put("campaignId", campaignId).put("studentCode", studentCode)
         val json = post(baseUrl, "/api/kiosk/tuition/lookup", body, token)
         if (!json.optBoolean("found", false)) return TuitionLookupResult(false, null)
         val f = json.getJSONObject("family")
         val invArr = f.optJSONArray("openInvoices") ?: JSONArray()
         val invoices = (0 until invArr.length()).map { i ->
             val o = invArr.getJSONObject(i)
-            TuitionInvoice(o.optString("id"), o.optString("label"), o.optString("dueDate"), o.optLong("balanceCents", 0L))
+            TuitionInvoice(o.optString("id"), o.optString("label"), o.optString("dueDate"), o.optLong("balanceCents", 0L), o.optString("studentName"))
         }
         val stuArr = f.optJSONArray("students") ?: JSONArray()
         val students = (0 until stuArr.length()).map { i ->

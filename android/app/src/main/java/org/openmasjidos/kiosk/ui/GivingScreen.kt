@@ -108,9 +108,10 @@ fun GivingScreen(
     onEnterManually: () -> Unit,
     onCancel: () -> Unit,
     onTuitionStart: () -> Unit = {},
-    onTuitionName: (String) -> Unit = {},
-    onTuitionPin: (String) -> Unit = {},
-    onTuitionLookup: () -> Unit = {},
+    onTuitionStudentCode: (String) -> Unit = {},
+    onTuitionIdentify: () -> Unit = {},
+    onTuitionConfirmStudent: () -> Unit = {},
+    onTuitionRejectStudent: () -> Unit = {},
     onTuitionPayFull: (Boolean) -> Unit = {},
     onTuitionToggleInvoice: (String) -> Unit = {},
     onTuitionPay: () -> Unit = {},
@@ -123,10 +124,13 @@ fun GivingScreen(
     val isTuition = campaign.type == "tuition"
     when {
         // A `tuition` campaign replaces the amount grid with the Students shell: the resting screen is
-        // the name+PIN lookup (full-screen — it hosts the in-app keyboard), then the invoices/pay step.
-        // The card/processing/thanks/error steps below are shared with donations.
+        // the Student ID entry (full-screen — it hosts the in-app keyboard), then the "is this your
+        // child?" confirmation, then the invoices/pay step. The card/processing/thanks/error steps
+        // below are shared with donations.
         isTuition && (giving.step == GivingStep.Amount || giving.step == GivingStep.Idle) ->
-            TuitionLookupStep(giving.tuition, campaign, style, onTuitionStart, onTuitionName, onTuitionPin, onTuitionLookup, onCancel, modifier)
+            TuitionLookupStep(giving.tuition, campaign, style, onTuitionStart, onTuitionStudentCode, onTuitionIdentify, onCancel, modifier)
+        isTuition && giving.step == GivingStep.TuitionConfirm ->
+            TuitionConfirmStep(giving.tuition, style, onTuitionConfirmStudent, onTuitionRejectStudent, modifier)
         isTuition && giving.step == GivingStep.TuitionInvoices ->
             TuitionInvoicesStep(giving.tuition, style, onTuitionPayFull, onTuitionToggleInvoice, onTuitionPay, onCancel, modifier)
         giving.step == GivingStep.Amount || giving.step == GivingStep.Idle ->
@@ -579,27 +583,26 @@ private fun KioskField(label: String, value: String, active: Boolean, style: Sce
     }
 }
 
-// ── Tuition (students/billing) — the tuition tile shell (name+PIN → balance/invoices → reader) ───
-private enum class TuitionField { NAME, PIN }
-
-/** Name + PIN lookup — the resting screen for a `tuition` campaign. Full-screen so it can host the
- *  in-app keyboard (which rotates with the UI). Fetches the school label/availability on mount. The
- *  PIN is masked on screen and only sent to the server; it's never stored or logged here. */
+// ── Tuition (students/billing) — the tuition tile shell (Student ID → confirm → balance → reader) ─
+/** Student ID entry — the resting screen for a `tuition` campaign. Full-screen so it can host the
+ *  in-app keyboard (which rotates with the UI). Fetches the school label/availability on mount.
+ *
+ *  Contract v2 (Students 0.39.0 §11.0): one field, no PIN. The ID is the whole credential and the
+ *  parent confirms the child's name on the next screen; that confirmation is what catches a mistyped
+ *  ID. Nothing typed here is stored or logged — it's cleared when the parent walks away. */
 @Composable
 private fun TuitionLookupStep(
     tuition: TuitionState?,
     campaign: Campaign,
     style: SceneStyle,
     onStart: () -> Unit,
-    onName: (String) -> Unit,
-    onPin: (String) -> Unit,
-    onLookup: () -> Unit,
+    onStudentCode: (String) -> Unit,
+    onIdentify: () -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(campaign.id) { onStart() }
     val t = tuition ?: TuitionState()
-    var active by remember { mutableStateOf(TuitionField.NAME) }
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -619,7 +622,7 @@ private fun TuitionLookupStep(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                t.tagline.ifBlank { "Enter your child's name and PIN" },
+                t.tagline.ifBlank { "Enter your child's Student ID" },
                 fontSize = 18.sp,
                 lineHeight = 24.sp,
                 color = style.onSceneMuted,
@@ -636,13 +639,18 @@ private fun TuitionLookupStep(
                     style = MaterialTheme.typography.bodyLarge,
                 )
             } else {
-                KioskField("Student's name", t.name, active == TuitionField.NAME, style) { active = TuitionField.NAME }
-                Spacer(Modifier.height(12.dp))
-                KioskField("PIN", "•".repeat(t.pin.length), active == TuitionField.PIN, style) { active = TuitionField.PIN }
+                KioskField("Student ID", t.studentCode, active = true, style = style) { }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "It's on your statement — three letters and four numbers, like YUS1234.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = style.onSceneMuted,
+                    textAlign = TextAlign.Center,
+                )
                 if (t.notFound) {
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "We couldn't find that — please check the name and PIN, or ask the office.",
+                        "We couldn't find that — please check the Student ID, or ask the office.",
                         color = DangerDark,
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
@@ -654,12 +662,12 @@ private fun TuitionLookupStep(
                 }
                 Spacer(Modifier.height(20.dp))
                 Button(
-                    onClick = onLookup,
-                    enabled = !t.looking,
+                    onClick = onIdentify,
+                    enabled = !t.looking && t.studentCode.isNotBlank(),
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
                     modifier = Modifier.fillMaxWidth().height(60.dp),
-                ) { Text(if (t.looking) "Checking…" else "Find my balance", style = MaterialTheme.typography.titleLarge) }
+                ) { Text(if (t.looking) "Checking…" else "Continue", style = MaterialTheme.typography.titleLarge) }
             }
             Spacer(Modifier.height(8.dp))
             TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
@@ -668,10 +676,65 @@ private fun TuitionLookupStep(
             Spacer(Modifier.height(10.dp))
             KioskKeyboard(
                 style = style,
-                onKey = { ch -> if (active == TuitionField.NAME) onName(t.name + ch) else onPin(t.pin + ch) },
-                onBackspace = { if (active == TuitionField.NAME) onName(t.name.dropLast(1)) else onPin(t.pin.dropLast(1)) },
-                onDone = { if (active == TuitionField.NAME) active = TuitionField.PIN else onLookup() },
+                onKey = { ch -> onStudentCode(t.studentCode + ch) },
+                onBackspace = { onStudentCode(t.studentCode.dropLast(1)) },
+                onDone = onIdentify,
             )
+        }
+    }
+}
+
+/** "Is this your child?" — the confirmation that replaced the PIN (contract v2 §11.0). We show only the
+ *  first name + last initial `identify` returned; no balance appears until the parent says yes. */
+@Composable
+private fun TuitionConfirmStep(
+    tuition: TuitionState?,
+    style: SceneStyle,
+    onConfirm: () -> Unit,
+    onReject: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val t = tuition ?: TuitionState()
+    // Centred, but scrollable so a short landscape screen can never clip the two buttons.
+    Column(
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 620.dp).fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("Is this your child?", style = MaterialTheme.typography.headlineSmall, color = style.onSceneMuted, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(14.dp))
+            Text(
+                t.identifiedName.ifBlank { "This student" },
+                style = MaterialTheme.typography.displaySmall,
+                color = style.accent,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            t.error?.let {
+                Spacer(Modifier.height(14.dp))
+                Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+            }
+            Spacer(Modifier.height(28.dp))
+            Button(
+                onClick = onConfirm,
+                enabled = !t.looking,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
+                modifier = Modifier.fillMaxWidth().height(64.dp),
+            ) { Text(if (t.looking) "Checking…" else "Yes, show the balance", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onReject,
+                enabled = !t.looking,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+            ) { Text("No — try another ID", color = style.onScene, style = MaterialTheme.typography.titleMedium) }
         }
     }
 }
@@ -724,9 +787,15 @@ private fun TuitionInvoicesStep(
                         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(inv.label.ifBlank { "Tuition" }, style = MaterialTheme.typography.titleMedium, color = style.tileInk)
-                                if (inv.dueDate.isNotBlank()) {
+                                // With one bill per child (contract v2), two children can have the same
+                                // month's label — say whose this is so the right one gets ticked.
+                                val sub = listOfNotNull(
+                                    inv.studentName.takeIf { it.isNotBlank() },
+                                    inv.dueDate.takeIf { it.isNotBlank() }?.let { "Due $it" },
+                                ).joinToString(" · ")
+                                if (sub.isNotBlank()) {
                                     Spacer(Modifier.height(2.dp))
-                                    Text("Due ${inv.dueDate}", style = MaterialTheme.typography.bodySmall, color = style.tileInk.copy(alpha = 0.6f))
+                                    Text(sub, style = MaterialTheme.typography.bodySmall, color = style.tileInk.copy(alpha = 0.6f))
                                 }
                             }
                             Spacer(Modifier.size(10.dp))
