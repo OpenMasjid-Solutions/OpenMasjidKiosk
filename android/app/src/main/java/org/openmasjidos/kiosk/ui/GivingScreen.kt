@@ -152,13 +152,18 @@ fun GivingScreen(
     }
 }
 
-/** Transparent centred column for the form-like steps (GivingHome owns the background). */
+/** Transparent centred column for the form-like steps (GivingHome owns the background).
+ *  Scrollable as well as centred: kiosk type is deliberately large, and on a short screen (or in
+ *  landscape) a step like the card prompt must be able to scroll rather than clip its buttons. */
 @Composable
 private fun CenteredScene(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        contentAlignment = Alignment.Center,
+    ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.widthIn(max = 620.dp).fillMaxWidth().padding(28.dp),
+            modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(28.dp),
             content = content,
         )
     }
@@ -220,8 +225,7 @@ private fun AmountStep(
             text = campaign.description.ifBlank { "Choose an amount to give" },
             // A supporting paragraph — kept modest so a fuller description fits without being cut off,
             // and capped at 3 lines so it never squeezes the amount grid on a short screen.
-            fontSize = 20.sp,
-            lineHeight = 26.sp,
+            style = MaterialTheme.typography.titleMedium,
             color = style.onSceneMuted,
             textAlign = TextAlign.Center,
             maxLines = 3,
@@ -319,7 +323,7 @@ private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Mo
                 val glyphs = label.length.coerceAtLeast(2)
                 val byWidth = maxWidth.value / (glyphs * 0.62f)
                 val byHeight = maxHeight.value * 0.74f
-                val amountSize = byWidth.coerceAtMost(byHeight).coerceIn(26f, 120f)
+                val amountSize = byWidth.coerceAtMost(byHeight).coerceIn(30f, 132f)
                 Text(
                     label,
                     fontSize = amountSize.sp,
@@ -335,7 +339,7 @@ private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Mo
                 modifier = Modifier.fillMaxWidth().background(style.accent).padding(vertical = 18.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("Donate", fontSize = 27.sp, fontWeight = FontWeight.Bold, color = style.onAccent)
+                Text("Donate", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = style.onAccent)
             }
         }
     }
@@ -384,7 +388,7 @@ private fun ColumnScope.Numpad(
                         containerColor = if (isOk) style.accent else style.tile,
                         contentColor = if (isOk) style.onAccent else style.tileInk,
                     ),
-                    modifier = Modifier.weight(1f).height(66.dp),
+                    modifier = Modifier.weight(1f).height(78.dp),
                 ) { Text(key, style = MaterialTheme.typography.titleLarge) }
             }
         }
@@ -438,7 +442,7 @@ private fun ColumnScope.LargeAmountStep(
         onClick = onProceed,
         shape = RoundedCornerShape(16.dp),
         colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
-        modifier = Modifier.fillMaxWidth().height(60.dp),
+        modifier = Modifier.fillMaxWidth().height(72.dp),
     ) { Text("Give ${formatMoney(giving.amountMinor, currency)} by card", style = MaterialTheme.typography.titleLarge) }
     Spacer(Modifier.height(6.dp))
     Text(
@@ -472,8 +476,10 @@ private fun DetailsStep(
     val emailOn = giving.monthly || (config?.emailPolicy ?: "off") != "off"
     val nameReq = giving.monthly || config?.namePolicy == "required"
     val emailReq = giving.monthly || config?.emailPolicy == "required"
-    // The field our in-app keyboard edits (default to the first shown field so it's ready immediately).
-    var active by remember { mutableStateOf(if (nameOn) DetailsField.NAME else if (emailOn) DetailsField.EMAIL else null) }
+    // The field our in-app keyboard edits — NOTHING is selected until the donor taps a field. A
+    // keyboard that opens by itself reads as "you must fill this in", and donors were stopping at an
+    // optional name/email instead of going straight to Continue. Tapping a field opens it.
+    var active by remember { mutableStateOf<DetailsField?>(null) }
     val feeClarify = "This is the Visa / Mastercard / Amex card fee — not a platform fee. OpenMasjid Solutions is free, unlimited, forever."
 
     Column(
@@ -494,11 +500,22 @@ private fun DetailsStep(
             )
             Spacer(Modifier.height(18.dp))
             if (nameOn) {
-                KioskField(if (nameReq) "Name (required)" else "Name (optional)", giving.donorName, active == DetailsField.NAME, style) { active = DetailsField.NAME }
+                KioskField(if (nameReq) "Name (required)" else "Name (optional)", giving.donorName, active == DetailsField.NAME, style, "Tap here to type") { active = DetailsField.NAME }
                 Spacer(Modifier.height(12.dp))
             }
             if (emailOn) {
-                KioskField(if (emailReq) "Email (required)" else "Email (optional)", giving.donorEmail, active == DetailsField.EMAIL, style) { active = DetailsField.EMAIL }
+                KioskField(if (emailReq) "Email (required)" else "Email (optional)", giving.donorEmail, active == DetailsField.EMAIL, style, "Tap here to type") { active = DetailsField.EMAIL }
+            }
+            // With the keyboard no longer opening by itself, say once how to reach it — and, when both
+            // fields are optional, that skipping is fine.
+            if (active == null && (nameOn || emailOn)) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    if (nameReq || emailReq) "Tap a box above to type." else "Tap a box to type, or just continue.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = style.onSceneMuted,
+                    textAlign = TextAlign.Center,
+                )
             }
             // Cover-fees: a forced-fee campaign (Zakat / required Tuition) shows a note with no toggle;
             // a Donation with the offer on shows a donor opt-in toggle.
@@ -541,7 +558,7 @@ private fun DetailsStep(
                 onClick = onSubmit,
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
-                modifier = Modifier.fillMaxWidth().height(60.dp),
+                modifier = Modifier.fillMaxWidth().height(72.dp),
             ) { Text("Continue", style = MaterialTheme.typography.titleLarge) }
             Spacer(Modifier.height(8.dp))
             TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
@@ -562,22 +579,39 @@ private fun DetailsStep(
 }
 
 /** A tap-to-edit field display (no system IME — the in-app [KioskKeyboard] drives it). Highlights when
- *  it's the active field. */
+ *  it's the active field, and shows [placeholder] while empty so an untouched field reads as an
+ *  invitation rather than a blank the donor must fill. */
 @Composable
-private fun KioskField(label: String, value: String, active: Boolean, style: SceneStyle, onClick: () -> Unit) {
+private fun KioskField(
+    label: String,
+    value: String,
+    active: Boolean,
+    style: SceneStyle,
+    placeholder: String = "",
+    onClick: () -> Unit,
+) {
     Column(Modifier.fillMaxWidth()) {
         Text(label, style = MaterialTheme.typography.labelLarge, color = style.onSceneMuted)
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         Surface(
             onClick = onClick,
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(14.dp),
             color = style.tile,
             contentColor = style.tileInk,
-            border = BorderStroke(if (active) 2.dp else 1.dp, if (active) style.accent else style.onSceneMuted.copy(alpha = 0.35f)),
-            modifier = Modifier.fillMaxWidth().height(56.dp),
+            // A clearly-visible resting outline (not a hairline) — the box has to look tappable now
+            // that no keyboard pops up to point at it.
+            border = BorderStroke(if (active) 3.dp else 2.dp, if (active) style.accent else style.tileInk.copy(alpha = 0.35f)),
+            modifier = Modifier.fillMaxWidth().height(76.dp),
         ) {
-            Box(Modifier.fillMaxSize().padding(horizontal = 14.dp), contentAlignment = Alignment.CenterStart) {
-                Text(value.ifEmpty { " " }, style = MaterialTheme.typography.titleMedium, color = style.tileInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Box(Modifier.fillMaxSize().padding(horizontal = 18.dp), contentAlignment = Alignment.CenterStart) {
+                val empty = value.isEmpty()
+                Text(
+                    if (empty) placeholder else value,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = if (empty) style.tileInk.copy(alpha = 0.55f) else style.tileInk,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -603,6 +637,9 @@ private fun TuitionLookupStep(
 ) {
     LaunchedEffect(campaign.id) { onStart() }
     val t = tuition ?: TuitionState()
+    // The keyboard waits to be asked for (see DetailsStep) — a parent walking up to a keypad that is
+    // already open reads it as a demand rather than an offer.
+    var editing by remember(campaign.id) { mutableStateOf(false) }
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -623,8 +660,7 @@ private fun TuitionLookupStep(
             Spacer(Modifier.height(6.dp))
             Text(
                 t.tagline.ifBlank { "Enter your child's Student ID" },
-                fontSize = 18.sp,
-                lineHeight = 24.sp,
+                style = MaterialTheme.typography.titleMedium,
                 color = style.onSceneMuted,
                 textAlign = TextAlign.Center,
                 maxLines = 3,
@@ -639,11 +675,17 @@ private fun TuitionLookupStep(
                     style = MaterialTheme.typography.bodyLarge,
                 )
             } else {
-                KioskField("Student ID", t.studentCode, active = true, style = style) { }
-                Spacer(Modifier.height(6.dp))
+                KioskField(
+                    label = "Student ID",
+                    value = t.studentCode,
+                    active = editing,
+                    style = style,
+                    placeholder = "Tap here to type",
+                ) { editing = true }
+                Spacer(Modifier.height(8.dp))
                 Text(
                     "It's on your statement — three letters and four numbers, like YUS1234.",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = style.onSceneMuted,
                     textAlign = TextAlign.Center,
                 )
@@ -666,19 +708,19 @@ private fun TuitionLookupStep(
                     enabled = !t.looking && t.studentCode.isNotBlank(),
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
-                    modifier = Modifier.fillMaxWidth().height(60.dp),
+                    modifier = Modifier.fillMaxWidth().height(72.dp),
                 ) { Text(if (t.looking) "Checking…" else "Continue", style = MaterialTheme.typography.titleLarge) }
             }
             Spacer(Modifier.height(8.dp))
             TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
         }
-        if (t.available) {
+        if (t.available && editing) {
             Spacer(Modifier.height(10.dp))
             KioskKeyboard(
                 style = style,
                 onKey = { ch -> onStudentCode(t.studentCode + ch) },
                 onBackspace = { onStudentCode(t.studentCode.dropLast(1)) },
-                onDone = onIdentify,
+                onDone = { editing = false; onIdentify() },
             )
         }
     }
@@ -726,14 +768,14 @@ private fun TuitionConfirmStep(
                 enabled = !t.looking,
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
-                modifier = Modifier.fillMaxWidth().height(64.dp),
+                modifier = Modifier.fillMaxWidth().height(78.dp),
             ) { Text(if (t.looking) "Checking…" else "Yes, show the balance", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
             Spacer(Modifier.height(12.dp))
             OutlinedButton(
                 onClick = onReject,
                 enabled = !t.looking,
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().height(56.dp),
+                modifier = Modifier.fillMaxWidth().height(68.dp),
             ) { Text("No — try another ID", color = style.onScene, style = MaterialTheme.typography.titleMedium) }
         }
     }
@@ -781,7 +823,7 @@ private fun TuitionInvoicesStep(
                         shape = RoundedCornerShape(12.dp),
                         color = style.tile,
                         contentColor = style.tileInk,
-                        border = BorderStroke(if (ticked) 2.dp else 1.dp, if (ticked) style.accent else style.onSceneMuted.copy(alpha = 0.3f)),
+                        border = BorderStroke(if (ticked) 2.dp else 1.dp, if (ticked) style.accent else style.tileInk.copy(alpha = 0.45f)),
                         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
                     ) {
                         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -795,7 +837,7 @@ private fun TuitionInvoicesStep(
                                 ).joinToString(" · ")
                                 if (sub.isNotBlank()) {
                                     Spacer(Modifier.height(2.dp))
-                                    Text(sub, style = MaterialTheme.typography.bodySmall, color = style.tileInk.copy(alpha = 0.6f))
+                                    Text(sub, style = MaterialTheme.typography.bodySmall, color = style.tileInk.copy(alpha = 0.78f))
                                 }
                             }
                             Spacer(Modifier.size(10.dp))
@@ -819,7 +861,7 @@ private fun TuitionInvoicesStep(
             enabled = payAmount > 0,
             shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
-            modifier = Modifier.fillMaxWidth().height(64.dp),
+            modifier = Modifier.fillMaxWidth().height(78.dp),
         ) { Text(if (payAmount > 0) "Pay ${formatMoney(payAmount, currency)}" else "Choose what to pay", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         Spacer(Modifier.height(6.dp))
         TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
@@ -846,10 +888,24 @@ private fun ColumnScope.CardStep(
         // While the keyed-entry PaymentIntent is being created, show a calm "opening" line instead of
         // the reader's tap prompt, so switching from the reader to keyed entry is seamless.
         text = if (preparing) "Opening secure card entry…" else (readerPrompt?.takeIf { it.isNotBlank() } ?: "Tap, insert or swipe your card"),
-        style = MaterialTheme.typography.headlineSmall,
+        style = MaterialTheme.typography.headlineMedium,
         color = style.onScene,
         textAlign = TextAlign.Center,
     )
+    if (!preparing) {
+        // The single most common failure at the reader is lifting the card too early — a contactless
+        // read plus the online authorisation takes a few seconds, and a card pulled away mid-read
+        // reads to the donor as "it didn't work". Say the quiet part out loud, in the accent colour
+        // so it is not mistaken for fine print.
+        Spacer(Modifier.height(14.dp))
+        Text(
+            "Hold your card on the reader for at least 5 seconds",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = style.accent,
+            textAlign = TextAlign.Center,
+        )
+    }
     if (manualEnabled && !preparing) {
         Spacer(Modifier.height(20.dp))
         Button(
@@ -934,7 +990,7 @@ private fun ColumnScope.ErrorStep(error: String?, style: SceneStyle, onRetry: ()
         onClick = onRetry,
         shape = RoundedCornerShape(16.dp),
         colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
-        modifier = Modifier.fillMaxWidth().height(58.dp),
+        modifier = Modifier.fillMaxWidth().height(72.dp),
     ) { Text("Try again", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) }
     Spacer(Modifier.height(8.dp))
     TextButton(onClick = onCancel) { Text("Not now", color = style.onSceneMuted) }

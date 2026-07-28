@@ -3,6 +3,25 @@
 
 # Changelog
 
+## 0.9.30
+- **Much bigger, easier-to-read writing everywhere.** Every screen — the giving screen, the number
+  pad, details, tuition, the thank-you, the volunteer screens — steps up about a third in size and a
+  weight bolder, so the kiosk reads from across the foyer instead of at arm's length. Buttons, the
+  keyboard keys, the PIN pad and the tap-to-type boxes all grew to match, and any screen that runs
+  out of room now scrolls instead of cutting a button off.
+- **Text now contrasts with whatever colours you set.** The kiosk works out the text colour from the
+  campaign background it's actually painted on, rather than assuming, so headings and small print stay
+  readable on a light, dark or strongly-coloured campaign. Secondary lines (subtitles, hints, "Due …")
+  are no longer a faint grey.
+- **"Hold your card on the reader for at least 5 seconds"** now appears on the payment screen, in the
+  accent colour under the tap prompt. Lifting the card early is the most common reason a payment looks
+  like it failed.
+- **The keyboard only opens when you tap a box.** It used to open by itself on the details and tuition
+  screens, which made people think a name, email or ID was required before they could carry on. Empty
+  boxes now say "Tap here to type", and when name and email are optional the screen says you can just
+  continue.
+- **(Requires updating the tablet app.)** Server and admin panel are unchanged.
+
 ## 0.9.29
 - **Paying for one child now lands on that child's bill.** With OpenMasjid Students billing per child
   (0.39.0), a family with more than one child could tick *Maryam's* month at the kiosk and have the

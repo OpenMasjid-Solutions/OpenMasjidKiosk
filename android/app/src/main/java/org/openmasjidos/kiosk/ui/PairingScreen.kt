@@ -139,7 +139,7 @@ fun PairingScreen(
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp),
+                    .height(68.dp),
             ) {
                 if (form.busy) {
                     CircularProgressIndicator(

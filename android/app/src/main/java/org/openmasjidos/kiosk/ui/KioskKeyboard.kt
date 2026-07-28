@@ -139,9 +139,10 @@ private fun RowScope.Key(
         shape = RoundedCornerShape(8.dp),
         color = if (accent) style.accent else style.tile,
         contentColor = if (accent) style.onAccent else style.tileInk,
-        // Letters/actions are tall + thumb-friendly; the number strip is compact (~half height) so it
-        // looks like a standard phone number row rather than a second bank of letter keys.
-        modifier = Modifier.weight(weight).height(if (compact) 46.dp else 72.dp),
+        // Letters/actions are tall + thumb-friendly; the number strip is compact (~two-thirds height)
+        // so it looks like a standard phone number row rather than a second bank of letter keys.
+        // Sized for a standing adult stabbing at a wall-mounted tablet, not a thumb on a phone.
+        modifier = Modifier.weight(weight).height(if (compact) 58.dp else 84.dp),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(

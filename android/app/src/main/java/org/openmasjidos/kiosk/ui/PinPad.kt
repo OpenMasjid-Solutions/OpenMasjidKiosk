@@ -182,13 +182,13 @@ private fun Key(label: String, enabled: Boolean, onClick: () -> Unit) {
         enabled = enabled,
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
-        modifier = Modifier.size(72.dp),
+        modifier = Modifier.size(84.dp),
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             Text(
                 text = label,
                 color = InkDark,
-                fontSize = 28.sp,
+                fontSize = 34.sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
@@ -208,7 +208,7 @@ private fun SmallKey(
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier
             .widthIn(min = 72.dp)
-            .height(72.dp),
+            .height(84.dp),
     ) {
         Text(
             text = label,
