@@ -115,6 +115,7 @@ fun GivingScreen(
     onTuitionPayFull: (Boolean) -> Unit = {},
     onTuitionToggleInvoice: (String) -> Unit = {},
     onTuitionPay: () -> Unit = {},
+    onTuitionPayAmount: (Long) -> Unit = {},
     loadImage: suspend (String) -> ImageBitmap? = { null },
     modifier: Modifier = Modifier,
 ) {
@@ -132,7 +133,7 @@ fun GivingScreen(
         isTuition && giving.step == GivingStep.TuitionConfirm ->
             TuitionConfirmStep(giving.tuition, style, onTuitionConfirmStudent, onTuitionRejectStudent, modifier)
         isTuition && giving.step == GivingStep.TuitionInvoices ->
-            TuitionInvoicesStep(giving.tuition, style, onTuitionPayFull, onTuitionToggleInvoice, onTuitionPay, onCancel, modifier)
+            TuitionInvoicesStep(giving.tuition, style, onTuitionPayFull, onTuitionToggleInvoice, onTuitionPay, onTuitionPayAmount, onCancel, modifier)
         giving.step == GivingStep.Amount || giving.step == GivingStep.Idle ->
             AmountStep(giving, campaign, currency, style, readerConnected, config?.footerText ?: "OpenMasjid Solutions", onSetMonthly, onChooseAmount, loadImage, modifier)
         // Details has its own full-screen scrollable layout (it hosts the in-app keyboard), so it is
@@ -618,6 +619,10 @@ private fun KioskField(
 }
 
 // ── Tuition (students/billing) — the tuition tile shell (Student ID → confirm → balance → reader) ─
+/** Ceiling for a TYPED tuition amount, mirroring the server's own cap (students.ts MAX_TUITION_CENTS)
+ *  so the pad can't offer a charge the server will refuse. Generous — a family clearing a year for
+ *  several children — but bounded, because this is a keypad in a foyer. */
+private const val TUITION_MAX_MINOR = 2_000_000L
 /** Student ID entry — the resting screen for a `tuition` campaign. Full-screen so it can host the
  *  in-app keyboard (which rotates with the UI). Fetches the school label/availability on mount.
  *
@@ -781,7 +786,12 @@ private fun TuitionConfirmStep(
     }
 }
 
-/** The family's balance + open invoices: pay the full balance or pick specific ones, then the reader. */
+/** The family's account + open invoices: pay the full balance, pick specific months, or type an
+ *  amount — including when nothing is due, which is how a family pays a term up front (0.41.0).
+ *
+ *  A zero balance is ambiguous on its own, so the account line reads from BOTH figures: what's owed,
+ *  what has already been paid ahead, or "nothing due". Whichever it is, paying stays available when
+ *  the school allows it. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TuitionInvoicesStep(
@@ -790,11 +800,27 @@ private fun TuitionInvoicesStep(
     onPayFull: (Boolean) -> Unit,
     onToggleInvoice: (String) -> Unit,
     onPay: () -> Unit,
+    onPayAmount: (Long) -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val t = tuition ?: TuitionState()
     val currency = t.currency.ifBlank { "USD" }
+    val owes = t.balanceMinor > 0
+    // Nothing owed and the school takes money ahead → the amount pad IS this screen; there is no
+    // balance to pay "in full" and no month to tick.
+    var padOpen by remember(t.session) { mutableStateOf(!owes && t.allowAdvance) }
+    if (padOpen) {
+        TuitionAmountPad(
+            t = t,
+            style = style,
+            onConfirm = onPayAmount,
+            // With a balance the pad is a detour off the balance screen; with none it is the screen,
+            // so "back" leaves the tuition flow entirely.
+            onBack = { if (owes) padOpen = false else onCancel() },
+        )
+        return
+    }
     val payAmount = if (t.payFull) t.balanceMinor else t.invoices.filter { t.selected.contains(it.id) }.sumOf { it.balanceMinor }
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp),
@@ -804,17 +830,53 @@ private fun TuitionInvoicesStep(
             modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(t.familyLabel.ifBlank { "Your balance" }, style = MaterialTheme.typography.headlineSmall, color = style.onScene, textAlign = TextAlign.Center)
+            Text(t.familyLabel.ifBlank { "Your account" }, style = MaterialTheme.typography.headlineSmall, color = style.onScene, textAlign = TextAlign.Center)
             Spacer(Modifier.height(4.dp))
-            Text("Balance due ${formatMoney(t.balanceMinor, currency)}", style = MaterialTheme.typography.headlineMedium, color = style.accent, fontWeight = FontWeight.Bold)
+            // What the account actually says. Balance and credit are never both non-zero.
+            when {
+                owes -> Text(
+                    "Balance due ${formatMoney(t.balanceMinor, currency)}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = style.accent,
+                    fontWeight = FontWeight.Bold,
+                )
+                t.creditMinor > 0 -> {
+                    Text(
+                        "${formatMoney(t.creditMinor, currency)} paid ahead",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = SuccessDark,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "It comes off the next bill automatically.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = style.onSceneMuted,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                else -> Text(
+                    "Nothing due",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = style.onScene,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
             Spacer(Modifier.height(16.dp))
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
-                SegmentedButton(selected = t.payFull, onClick = { onPayFull(true) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Full balance") }
-                SegmentedButton(selected = !t.payFull, onClick = { onPayFull(false) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Choose what to pay") }
+            if (owes) {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
+                    SegmentedButton(selected = t.payFull, onClick = { onPayFull(true) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Full balance") }
+                    SegmentedButton(selected = !t.payFull, onClick = { onPayFull(false) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Choose what to pay") }
+                }
             }
             Spacer(Modifier.height(14.dp))
             if (t.invoices.isEmpty()) {
-                Text("Nothing is currently due — thank you.", color = style.onSceneMuted, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
+                Text(
+                    if (t.allowAdvance) "You can still pay towards the next bill." else "Nothing is currently due — thank you.",
+                    color = style.onSceneMuted,
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                )
             } else {
                 t.invoices.forEach { inv ->
                     val ticked = !t.payFull && t.selected.contains(inv.id)
@@ -856,15 +918,108 @@ private fun TuitionInvoicesStep(
             }
         }
         Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = onPay,
-            enabled = payAmount > 0,
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
-            modifier = Modifier.fillMaxWidth().height(78.dp),
-        ) { Text(if (payAmount > 0) "Pay ${formatMoney(payAmount, currency)}" else "Choose what to pay", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+        if (owes) {
+            Button(
+                onClick = onPay,
+                enabled = payAmount > 0,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
+                modifier = Modifier.fillMaxWidth().height(78.dp),
+            ) { Text(if (payAmount > 0) "Pay ${formatMoney(payAmount, currency)}" else "Choose what to pay", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+        }
+        // Paying a different amount — part of a balance, or ahead of any bill. The only way to pay
+        // when nothing is due, and the school has to have said it takes money that way.
+        if (t.allowAdvance) {
+            if (owes) Spacer(Modifier.height(10.dp))
+            val payAheadPrimary = !owes
+            Button(
+                onClick = { padOpen = true },
+                shape = RoundedCornerShape(16.dp),
+                colors = if (payAheadPrimary) {
+                    ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent)
+                } else {
+                    ButtonDefaults.buttonColors(containerColor = style.tile, contentColor = style.tileInk)
+                },
+                modifier = Modifier.fillMaxWidth().height(if (payAheadPrimary) 78.dp else 68.dp),
+            ) {
+                Text(
+                    if (owes) "Pay a different amount" else "Pay towards the next bill",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
         Spacer(Modifier.height(6.dp))
         TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
+    }
+}
+
+/** A number pad for a typed tuition amount — a part payment, or money paid ahead. Floored at the
+ *  school's minimum (the server re-checks it), and capped so a slipped finger can't charge a fortune. */
+@Composable
+private fun TuitionAmountPad(
+    t: TuitionState,
+    style: SceneStyle,
+    onConfirm: (Long) -> Unit,
+    onBack: () -> Unit,
+) {
+    val currency = t.currency.ifBlank { "USD" }
+    val factor = factorFor(currency)
+    var digits by remember(t.session) { mutableStateOf("") }
+    val major = digits.toLongOrNull() ?: 0L
+    val minor = major * factor
+    val min = t.minAmountMinor
+    val valid = minor >= min && minor <= TUITION_MAX_MINOR
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            if (t.balanceMinor > 0) "How much would you like to pay?" else "Pay towards the next bill",
+            style = MaterialTheme.typography.headlineSmall,
+            color = style.onScene,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(formatMoney(minor, currency), style = MaterialTheme.typography.displayMedium, color = style.accent, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            if (minor in 1 until min) "Smallest payment is ${formatMoney(min, currency)}" else "Smallest payment ${formatMoney(min, currency)}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (minor in 1 until min) DangerDark else style.onSceneMuted,
+            textAlign = TextAlign.Center,
+        )
+        t.error?.let {
+            Spacer(Modifier.height(10.dp))
+            Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+        }
+        Spacer(Modifier.height(18.dp))
+        listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf("⌫", "0", "OK")).forEach { row ->
+            Row(Modifier.fillMaxWidth().widthIn(max = 520.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                row.forEach { keyLabel ->
+                    val isOk = keyLabel == "OK"
+                    Button(
+                        onClick = {
+                            when (keyLabel) {
+                                "⌫" -> if (digits.isNotEmpty()) digits = digits.dropLast(1)
+                                "OK" -> if (valid) onConfirm(minor)
+                                else -> if (digits.length < 7) digits = (digits + keyLabel).trimStart('0')
+                            }
+                        },
+                        enabled = !isOk || valid,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isOk) style.accent else style.tile,
+                            contentColor = if (isOk) style.onAccent else style.tileInk,
+                        ),
+                        modifier = Modifier.weight(1f).height(78.dp),
+                    ) { Text(keyLabel, style = MaterialTheme.typography.titleLarge) }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+        TextButton(onClick = onBack) { Text("Back", color = style.onSceneMuted, style = MaterialTheme.typography.titleMedium) }
     }
 }
 

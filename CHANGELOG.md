@@ -3,6 +3,26 @@
 
 # Changelog
 
+## 0.9.31
+- **Parents can pay tuition ahead at the kiosk.** If a family wants to hand over a term — or the whole
+  year — before it's billed, the kiosk now takes it. Where the balance screen used to be a dead end for
+  a family with nothing outstanding, there's a keypad: **"Pay towards the next bill"**. OpenMasjid
+  Students holds the money as that child's credit and takes it off their next invoice automatically.
+  Needs **OpenMasjid Students 0.41.0** and a school that has advance payments switched on — otherwise
+  the kiosk behaves exactly as before and says nothing is due.
+- **The screen now says what the account actually is.** A zero balance used to look the same whether a
+  family was square or had already paid ahead. The kiosk now shows **"Balance due £X"**, **"£X paid
+  ahead — it comes off the next bill automatically"**, or **"Nothing due"**, and each child in the
+  family is listed with their own figure.
+- **Pay a different amount against a balance.** Alongside "Full balance" and "Choose what to pay",
+  a parent can type any amount — part of what's owed, or more than it. Anything beyond the bill becomes
+  credit rather than being lost.
+- **No sub-£1/$1 payments.** Every route to the reader — full balance, picked months, or a typed amount
+  — is floored at the school's own minimum and never below a pound/dollar, since a smaller charge costs
+  more in card fees than it collects. The kiosk shows the minimum on the keypad, and the server enforces
+  it independently of the tablet.
+- **(Requires updating the tablet app.)**
+
 ## 0.9.30
 - **Much bigger, easier-to-read writing everywhere.** Every screen — the giving screen, the number
   pad, details, tuition, the thank-you, the volunteer screens — steps up about a third in size and a

@@ -158,6 +158,7 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                             onTuitionPayFull = vm::setTuitionPayFull,
                             onTuitionToggleInvoice = vm::toggleTuitionInvoice,
                             onTuitionPay = vm::payTuition,
+                            onTuitionPayAmount = vm::payTuitionAmount,
                             loadImage = { url -> vm.image(url)?.asImageBitmap() },
                         )
                     }

@@ -44,22 +44,38 @@ data class CompletedDonation(
     val monthlyCreated: Boolean = false,
 )
 
-/** Tuition (students/billing) shell data — the tile label + whether tuition is available at all. */
-data class TuitionInfo(val enabled: Boolean, val schoolName: String, val currency: String, val tagline: String)
+/** Tuition (students/billing) shell data — the tile label + whether tuition is available at all.
+ *  [allowAdvance] means the school takes money when nothing is due (pay a term up front); the tablet
+ *  offers an amount pad in that case. [minAmountMinor] is the floor for a typed amount. */
+data class TuitionInfo(
+    val enabled: Boolean,
+    val schoolName: String,
+    val currency: String,
+    val tagline: String,
+    val allowAdvance: Boolean = false,
+    val minAmountMinor: Long = 100L,
+)
 
 /** One open invoice a parent can choose to pay. [balanceMinor] is the smallest currency unit.
  *  [studentName] is whose bill it is — blank for an only child (contract v2: bills are per student). */
 data class TuitionInvoice(val id: String, val label: String, val dueDate: String, val balanceMinor: Long, val studentName: String = "")
 
 /** A looked-up family + its balance. [session] is the OPAQUE server-side session id used to pay — the
- *  real family/student ids stay on the server. */
+ *  real family/student ids stay on the server.
+ *
+ *  [creditMinor] is money already paid ahead (0.41.0): at most one of balance/credit is non-zero, and
+ *  without it a zero balance can't be told apart from "paid ahead". [allowAdvance]/[minAmountMinor]
+ *  ride along from the school's settings so the pay screen can offer an amount and floor it. */
 data class TuitionFamily(
     val session: String,
     val label: String,
     val students: List<String>,
     val balanceMinor: Long,
+    val creditMinor: Long,
     val currency: String,
     val invoices: List<TuitionInvoice>,
+    val allowAdvance: Boolean,
+    val minAmountMinor: Long,
 )
 
 /** Result of `identify`: the child a typed Student ID belongs to, so the parent can confirm the name
@@ -249,7 +265,14 @@ class KioskApi(private val client: OkHttpClient) {
     /** `GET /api/kiosk/tuition/info` — whether the tuition tile shows + its school label. */
     fun tuitionInfo(baseUrl: String, token: String): TuitionInfo {
         val json = get(baseUrl, "/api/kiosk/tuition/info", token)
-        return TuitionInfo(json.optBoolean("enabled", false), json.optString("schoolName"), json.optString("currency"), json.optString("tagline"))
+        return TuitionInfo(
+            json.optBoolean("enabled", false),
+            json.optString("schoolName"),
+            json.optString("currency"),
+            json.optString("tagline"),
+            json.optBoolean("allowAdvance", false),
+            json.optLong("minAmountMinor", 100L),
+        )
     }
 
     /** `POST /api/kiosk/tuition/identify` — Student ID → the child's name, for the "is this the right
@@ -284,15 +307,38 @@ class KioskApi(private val client: OkHttpClient) {
         }
         return TuitionLookupResult(
             true,
-            TuitionFamily(json.optString("session"), f.optString("label"), students, f.optLong("balanceCents", 0L), f.optString("currency"), invoices),
+            TuitionFamily(
+                session = json.optString("session"),
+                label = f.optString("label"),
+                students = students,
+                balanceMinor = f.optLong("balanceCents", 0L),
+                creditMinor = f.optLong("creditCents", 0L),
+                currency = f.optString("currency"),
+                invoices = invoices,
+                allowAdvance = json.optBoolean("allowAdvance", false),
+                minAmountMinor = json.optLong("minAmountMinor", 100L),
+            ),
         )
     }
 
     /** `POST /api/kiosk/tuition/payment-intents` — the server recomputes the amount from the session
-     *  (full balance or the ticked invoices) and mints a card-present PaymentIntent. */
-    fun createTuitionPaymentIntent(baseUrl: String, token: String, session: String, payFull: Boolean, invoiceIds: List<String>, idempotencyKey: String): CreatedPaymentIntent {
-        val selection = JSONObject().put("kind", if (payFull) "full" else "invoices")
-        if (!payFull) selection.put("invoiceIds", JSONArray(invoiceIds))
+     *  (full balance, the ticked invoices, or a typed amount) and mints a card-present PaymentIntent.
+     *  [amountMinor], when non-null, is a part payment or money paid ahead; the server re-checks it
+     *  against the school's floor and its own copy of the balance. */
+    fun createTuitionPaymentIntent(
+        baseUrl: String,
+        token: String,
+        session: String,
+        payFull: Boolean,
+        invoiceIds: List<String>,
+        amountMinor: Long?,
+        idempotencyKey: String,
+    ): CreatedPaymentIntent {
+        val selection = when {
+            amountMinor != null -> JSONObject().put("kind", "amount").put("amountMinor", amountMinor)
+            payFull -> JSONObject().put("kind", "full")
+            else -> JSONObject().put("kind", "invoices").put("invoiceIds", JSONArray(invoiceIds))
+        }
         val body = JSONObject().put("session", session).put("selection", selection).put("idempotencyKey", idempotencyKey)
         val json = post(baseUrl, "/api/kiosk/tuition/payment-intents", body, token)
         return CreatedPaymentIntent(json.getString("paymentIntentId"), json.getString("clientSecret"), null, json.optLong("chargeMinor", 0L), false)

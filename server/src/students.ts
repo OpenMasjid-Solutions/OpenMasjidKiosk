@@ -111,11 +111,24 @@ const intNonNeg = (v: unknown): number => {
 };
 
 // ── info ────────────────────────────────────────────────────────────────────
+/** Our own floor, whatever the school advertises: a card-present charge under a pound/dollar costs
+ *  more in card fees than it collects, and a mis-tap on the pad shouldn't be able to mint one. */
+export const MIN_TUITION_CENTS = 100;
+/** A sanity ceiling on a TYPED advance so a slipped finger can't charge $200,000 at a foyer kiosk.
+ *  Generous enough for a family clearing a year for several children in one go. */
+export const MAX_TUITION_CENTS = 2_000_000;
+
 export interface StudentsInfo {
   enabled: boolean;
   schoolName: string;
   currency: string;
   tagline: string;
+  /** 0.41.0 (§11.0a): the school takes money when NOTHING is due — a term up front, the year in one
+   *  go. Absent on an older Students, and then deliberately false: a consumer cannot tell "nothing
+   *  due" from "cannot pay here" on its own, so paying ahead is offered only when advertised. */
+  allowAdvance: boolean;
+  /** The floor for a typed amount, never below [MIN_TUITION_CENTS]. */
+  minAmountCents: number;
 }
 export type InfoResult = { available: true; info: StudentsInfo } | { available: false };
 
@@ -125,6 +138,9 @@ function parseInfo(d: Record<string, unknown>): StudentsInfo {
     schoolName: str(d.schoolName, 120),
     currency: str(d.currency, 10).toUpperCase(),
     tagline: str(d.tagline, 200),
+    allowAdvance: d.allowAdvance === true,
+    // Take the stricter of the school's floor and ours — never let a provider lower it below a pound.
+    minAmountCents: Math.max(MIN_TUITION_CENTS, intNonNeg(d.minAmountCents)),
   };
 }
 
@@ -213,9 +229,13 @@ export interface StudentInvoice {
 export interface StudentFamily {
   id: string;
   label: string;
-  /** v2 adds a per-child `balanceCents` (and the sibling's own id/code, which stay server-side). */
-  students: { firstName: string; lastInitial: string; balanceCents: number }[];
+  /** v2 adds a per-child `balanceCents` (and the sibling's own id/code, which stay server-side);
+   *  0.41.0 adds that child's `creditCents`. */
+  students: { firstName: string; lastInitial: string; balanceCents: number; creditCents: number }[];
   balanceCents: number;
+  /** 0.41.0 (§11.0a): money already paid ahead. At most one of balance/credit is ever non-zero, and
+   *  a zero balance is otherwise ambiguous — square, paid ahead, or "you can't pay here". */
+  creditCents: number;
   currency: string;
   openInvoices: StudentInvoice[];
 }
@@ -239,6 +259,7 @@ function parseFamily(d: Record<string, unknown>): StudentFamily | null {
       firstName: str(s.firstName, 60),
       lastInitial: str(s.lastInitial, 4),
       balanceCents: intNonNeg(s.balanceCents),
+      creditCents: intNonNeg(s.creditCents),
     }));
   const nameOf = new Map(kids.filter((k) => k.studentId).map((k) => [k.studentId, k.firstName]));
   const invRaw = Array.isArray(f.openInvoices) ? f.openInvoices : [];
@@ -261,8 +282,9 @@ function parseFamily(d: Record<string, unknown>): StudentFamily | null {
   return {
     id,
     label: str(f.label, 120),
-    students: kids.map(({ firstName, lastInitial, balanceCents }) => ({ firstName, lastInitial, balanceCents })),
+    students: kids.map(({ firstName, lastInitial, balanceCents, creditCents }) => ({ firstName, lastInitial, balanceCents, creditCents })),
     balanceCents: intNonNeg(f.balanceCents),
+    creditCents: intNonNeg(f.creditCents),
     currency: str(f.currency, 10).toUpperCase(),
     openInvoices,
   };
@@ -372,6 +394,13 @@ export interface TuitionSession {
   familyLabel: string;
   currency: string;
   balanceCents: number;
+  /** Money already paid ahead at lookup time — display only; it never reduces a charge (the school's
+   *  ledger absorbs credit against the next invoice, we don't net it off here). */
+  creditCents: number;
+  /** Whether the school takes money when nothing is due, and the floor for a typed amount. Captured
+   *  from `info` at lookup time so the pay step validates against the SERVER's copy, not the tablet's. */
+  allowAdvance: boolean;
+  minAmountCents: number;
   /** `studentId` is held here (never handed to the tablet) so a picked-invoice charge can tell
    *  Students which child each pound belongs to — see RecordPaymentInput.students. */
   invoices: { id: string; balanceCents: number; studentId: string }[];
@@ -408,7 +437,11 @@ export function consumeTuitionSession(id: string): void {
 }
 
 // ── Amount computation (PURE — the security-critical bit; unit-tested) ──────
-export type TuitionSelection = { kind: 'full' } | { kind: 'invoices'; invoiceIds: string[] };
+export type TuitionSelection =
+  | { kind: 'full' }
+  | { kind: 'invoices'; invoiceIds: string[] }
+  /** A typed amount: a part payment against what's owed, or money paid AHEAD (§11.0a). */
+  | { kind: 'amount'; amountCents: number };
 export type AmountResult =
   | {
       amountCents: number;
@@ -430,7 +463,23 @@ export type AmountResult =
 export function computeTuitionAmount(session: TuitionSession, selection: TuitionSelection): AmountResult {
   if (selection.kind === 'full') {
     if (session.balanceCents <= 0) return { error: 'nothing-due' };
+    if (session.balanceCents < session.minAmountCents) return { error: 'below-min' };
     return { amountCents: session.balanceCents, allocations: null, students: null };
+  }
+  if (selection.kind === 'amount') {
+    // A TYPED amount — the advance/part-payment path (§11.0a). Neither breakdown is sent: Students
+    // walks the family's open invoices oldest-due-first and holds anything beyond them as the matched
+    // child's credit (record-payment carries that child as the top-level studentId), which is exactly
+    // "pay $1,400 against a $350 month and settle the next three too".
+    const amountCents = Math.trunc(selection.amountCents);
+    if (!Number.isFinite(amountCents) || amountCents <= 0) return { error: 'no-amount' };
+    // The floor is the SERVER's copy from `info`, never a number the tablet sent.
+    if (amountCents < session.minAmountCents) return { error: 'below-min' };
+    if (amountCents > MAX_TUITION_CENTS) return { error: 'too-large' };
+    // Paying ahead is only offered when the school advertised it; paying part of a real balance is
+    // always fine, so an amount within what's owed needs no such permission.
+    if (amountCents > session.balanceCents && !session.allowAdvance) return { error: 'advance-not-allowed' };
+    return { amountCents, allocations: null, students: null };
   }
   const ids = [...new Set(selection.invoiceIds)];
   if (!ids.length) return { error: 'no-selection' };
@@ -445,6 +494,9 @@ export function computeTuitionAmount(session: TuitionSession, selection: Tuition
     sum += inv.balanceCents;
   }
   if (sum <= 0) return { error: 'nothing-due' };
+  // The floor applies to every path, not just typed amounts — a leftover 50c invoice costs more in
+  // card fees than it collects, and the parent is better off letting it roll into the next month.
+  if (sum < session.minAmountCents) return { error: 'below-min' };
   // Only send a split we can vouch for: it must cover the whole charge to the penny, or Students
   // rejects it with `invalid_allocation` (§11.2). A provider that omitted an invoice's studentId
   // leaves us short — drop the split and let Students derive it rather than fail the record.

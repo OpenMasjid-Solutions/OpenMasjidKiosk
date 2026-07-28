@@ -24,7 +24,7 @@ import { Store, grossUpForFees, type Device, type DonationRecord, type EmailRece
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus } from './fabric';
 import { renderReceipt, type ReceiptContext } from './email';
-import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, billingConfigured } from './students';
+import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { LoginLimiter } from './rateLimit';
 import { toCsv } from './csv';
 import {
@@ -1289,7 +1289,18 @@ async function main(): Promise<void> {
     if (!d) return;
     const r = await studentsInfo();
     if (!r.available || !r.info.enabled) return { data: { enabled: false } };
-    return { data: { enabled: true, schoolName: r.info.schoolName, currency: r.info.currency, tagline: r.info.tagline } };
+    return {
+      data: {
+        enabled: true,
+        schoolName: r.info.schoolName,
+        currency: r.info.currency,
+        tagline: r.info.tagline,
+        // 0.41.0 (§11.0a): whether a parent may pay when nothing is due, and the floor for a typed
+        // amount. The tablet uses these to render; the server re-checks both at pay time.
+        allowAdvance: r.info.allowAdvance,
+        minAmountMinor: r.info.minAmountCents,
+      },
+    };
   });
 
   // Step 1 of the v2 flow: a typed Student ID → the child's first name, so the tablet can ask "is this
@@ -1335,6 +1346,12 @@ async function main(): Promise<void> {
       // Uniform "not found" (no enumeration oracle); the rolling window already counted this attempt.
       return { data: { found: false } };
     }
+    // The school's advance/floor policy, captured into the session so the pay step validates against
+    // the server's copy. Cached ~5 min alongside the tile label; unavailable → no paying ahead.
+    const info = await studentsInfo();
+    const policy = info.available
+      ? { allowAdvance: info.info.allowAdvance, minAmountCents: info.info.minAmountCents }
+      : { allowAdvance: false, minAmountCents: MIN_TUITION_CENTS };
     // Stash the family + invoices server-side; the tablet only gets display fields + an opaque session id.
     const session = createTuitionSession({
       campaignId: campaign.id,
@@ -1344,6 +1361,9 @@ async function main(): Promise<void> {
       familyLabel: r.family.label,
       currency: r.family.currency,
       balanceCents: r.family.balanceCents,
+      creditCents: r.family.creditCents,
+      allowAdvance: policy.allowAdvance,
+      minAmountCents: policy.minAmountCents,
       // studentId is held server-side only — it is what lets the pay step tell Students whose bill
       // each picked invoice is (contract v2), and it never goes to the tablet.
       invoices: r.family.openInvoices.map((i) => ({ id: i.id, balanceCents: i.balanceCents, studentId: i.studentId })),
@@ -1352,10 +1372,16 @@ async function main(): Promise<void> {
       data: {
         found: true,
         session: session.id, // opaque; the family/student ids stay on the server
+        // What the tablet needs to offer "pay ahead" and to floor a typed amount.
+        allowAdvance: policy.allowAdvance,
+        minAmountMinor: policy.minAmountCents,
         family: {
           label: r.family.label,
-          students: r.family.students, // firstName + lastInitial (+ their own balance) — per contract
+          students: r.family.students, // firstName + lastInitial (+ their own balance/credit) — per contract
           balanceCents: r.family.balanceCents,
+          // 0.41.0: money already paid ahead. A zero balance means "square" or "paid ahead", and the
+          // parent should see which — once an advance settles its invoice this is the only signal left.
+          creditCents: r.family.creditCents,
           currency: r.family.currency,
           // id (for selection) + label + dueDate + balanceCents + whose bill it is as a NAME. The
           // internal studentId stays on the server (it's in the session, for the pay step).
@@ -1378,6 +1404,9 @@ async function main(): Promise<void> {
     selection: z.discriminatedUnion('kind', [
       z.object({ kind: z.literal('full') }),
       z.object({ kind: z.literal('invoices'), invoiceIds: z.array(z.string().max(128)).min(1).max(60) }),
+      // A typed amount — a part payment, or money paid ahead when nothing is due (§11.0a). Bounds are
+      // re-derived from the SESSION in computeTuitionAmount; this only keeps junk out of the maths.
+      z.object({ kind: z.literal('amount'), amountMinor: z.number().int().positive().max(MAX_TUITION_CENTS) }),
     ]),
     idempotencyKey: z.string().trim().min(8).max(255).optional(),
   });
@@ -1392,8 +1421,26 @@ async function main(): Promise<void> {
     }
     const campaign = store.getCampaign(session.campaignId);
     if (!campaign || campaign.type !== 'tuition') return reply.code(400).send({ error: 'That isn’t a tuition appeal.' });
-    const amt = computeTuitionAmount(session, parsed.data.selection);
-    if ('error' in amt) return reply.code(400).send({ error: 'Please choose what to pay.' });
+    const sel = parsed.data.selection;
+    const amt = computeTuitionAmount(
+      session,
+      sel.kind === 'amount' ? { kind: 'amount', amountCents: sel.amountMinor } : sel,
+    );
+    if ('error' in amt) {
+      // Say which rule stopped it — a floor or a school that doesn't take money ahead is something the
+      // parent can act on, unlike a generic "invalid".
+      const message =
+        amt.error === 'below-min'
+          ? `The smallest payment is ${formatMoney(session.minAmountCents, session.currency || store.getCurrency())}.`
+          : amt.error === 'too-large'
+            ? 'That amount is too large to take here — please see the office.'
+            : amt.error === 'advance-not-allowed'
+              ? 'This school isn’t taking payments in advance right now.'
+              : amt.error === 'nothing-due'
+                ? 'There’s nothing due to pay.'
+                : 'Please choose what to pay.';
+      return reply.code(400).send({ error: message });
+    }
     // Tuition is card-present on the reader's (primary) account — which MUST be the school's account so
     // Students' reconciliation finds it (contract §4). We charge the primary account here.
     const acct = await resolveAccount();

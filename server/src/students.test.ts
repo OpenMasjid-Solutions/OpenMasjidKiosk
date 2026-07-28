@@ -11,6 +11,7 @@ import {
   normalizeStudentCode,
   recordStudentPayment,
   studentsIdentify,
+  studentsInfo,
   studentsLookup,
 } from './students';
 import { config } from './config';
@@ -45,7 +46,11 @@ function stubBroker(reply: unknown): { calls: Captured[]; restore: () => void } 
   };
 }
 
-function session(balanceCents: number, invoices: { id: string; balanceCents: number; studentId?: string }[]) {
+function session(
+  balanceCents: number,
+  invoices: { id: string; balanceCents: number; studentId?: string }[],
+  opts: { allowAdvance?: boolean; minAmountCents?: number; creditCents?: number } = {},
+) {
   return createTuitionSession({
     campaignId: 'cmp_1',
     deviceId: 'dev_1',
@@ -54,6 +59,9 @@ function session(balanceCents: number, invoices: { id: string; balanceCents: num
     familyLabel: 'Ismail family',
     currency: 'USD',
     balanceCents,
+    creditCents: opts.creditCents ?? 0,
+    allowAdvance: opts.allowAdvance ?? true,
+    minAmountCents: opts.minAmountCents ?? 100,
     invoices: invoices.map((i) => ({ studentId: 'stu_1', ...i })),
   });
 }
@@ -124,8 +132,8 @@ test('lookup posts { v: 2, studentCode } — no name, no pin (the 0.39.0 break)'
     assert.equal(r.family.openInvoices[0].studentId, 'stu_2');
     // Internal student ids never reach the tablet — only display fields do.
     assert.deepEqual(r.family.students, [
-      { firstName: 'Yusuf', lastInitial: 'I', balanceCents: 20000 },
-      { firstName: 'Maryam', lastInitial: 'I', balanceCents: 15000 },
+      { firstName: 'Yusuf', lastInitial: 'I', balanceCents: 20000, creditCents: 0 },
+      { firstName: 'Maryam', lastInitial: 'I', balanceCents: 15000, creditCents: 0 },
     ]);
   } finally {
     broker.restore();
@@ -151,6 +159,57 @@ test('lookup: an only child gets no per-invoice name (nothing to disambiguate)',
     assert.equal(r.status === 'found' && r.family.openInvoices[0].studentName, '');
   } finally {
     broker.restore();
+  }
+});
+
+// ── 0.41.0 additive fields: credit, and the advance/floor policy ──
+test('lookup reads creditCents for the household and each child (a zero balance is ambiguous alone)', async () => {
+  const broker = stubBroker({
+    v: 2,
+    found: true,
+    matchedStudent: { id: 'stu_2', balanceCents: 0, creditCents: 5000 },
+    family: {
+      id: 'fam_x1',
+      label: 'Ismail family',
+      students: [
+        { studentId: 'stu_1', firstName: 'Yusuf', lastInitial: 'I', balanceCents: 0, creditCents: 0 },
+        { studentId: 'stu_2', firstName: 'Maryam', lastInitial: 'I', balanceCents: 0, creditCents: 5000 },
+      ],
+      balanceCents: 0,
+      creditCents: 5000,
+      currency: 'usd',
+      openInvoices: [],
+    },
+  });
+  try {
+    const r = await studentsLookup('MAR8802');
+    assert.equal(r.status, 'found');
+    if (r.status !== 'found') return;
+    assert.equal(r.family.balanceCents, 0);
+    assert.equal(r.family.creditCents, 5000);
+    assert.deepEqual(r.family.students.map((s) => [s.firstName, s.creditCents]), [['Yusuf', 0], ['Maryam', 5000]]);
+  } finally {
+    broker.restore();
+  }
+});
+
+test('info reads allowAdvance + minAmountCents, and never lets the floor drop below $1', async () => {
+  const low = stubBroker({ v: 2, enabled: true, schoolName: 'An-Noor', currency: 'usd', tagline: 't', allowAdvance: true, minAmountCents: 25 });
+  try {
+    const r = await studentsInfo(true);
+    assert.equal(r.available && r.info.allowAdvance, true);
+    assert.equal(r.available && r.info.minAmountCents, 100); // ours wins over a lower school floor
+  } finally {
+    low.restore();
+  }
+  const high = stubBroker({ v: 2, enabled: true, schoolName: 'An-Noor', currency: 'usd', tagline: 't', minAmountCents: 500 });
+  try {
+    const r = await studentsInfo(true);
+    // Absent allowAdvance → false: "nothing due" and "can't pay here" look identical without it.
+    assert.equal(r.available && r.info.allowAdvance, false);
+    assert.equal(r.available && r.info.minAmountCents, 500);
+  } finally {
+    high.restore();
   }
 });
 
@@ -286,6 +345,58 @@ test('computeTuitionAmount dedups repeated invoice ids (no double-charging one i
     allocations: [{ invoiceId: 'inv_9', amountCents: 15000 }],
     students: [{ studentId: 'stu_1', amountCents: 15000 }],
   });
+});
+
+// ── Advance / part payments (§11.0a) — a typed amount, floored, cap-checked ──
+test('a typed amount pays part of a balance, with no breakdown (Students allocates oldest-first)', () => {
+  const s = session(35000, [{ id: 'inv_9', balanceCents: 35000 }]);
+  assert.deepEqual(computeTuitionAmount(s, { kind: 'amount', amountCents: 10000 }), {
+    amountCents: 10000,
+    allocations: null,
+    students: null,
+  });
+});
+
+test('a typed amount may EXCEED the balance — the surplus becomes the child\'s credit', () => {
+  const s = session(35000, [{ id: 'inv_9', balanceCents: 35000 }]);
+  const r = computeTuitionAmount(s, { kind: 'amount', amountCents: 140000 });
+  assert.deepEqual(r, { amountCents: 140000, allocations: null, students: null });
+});
+
+test('paying ahead with NOTHING due is allowed when the school advertised it', () => {
+  const s = session(0, [], { allowAdvance: true });
+  assert.deepEqual(computeTuitionAmount(s, { kind: 'amount', amountCents: 50000 }), {
+    amountCents: 50000,
+    allocations: null,
+    students: null,
+  });
+});
+
+test('paying ahead is refused when the school did NOT advertise it (an older Students, too)', () => {
+  const s = session(0, [], { allowAdvance: false });
+  assert.deepEqual(computeTuitionAmount(s, { kind: 'amount', amountCents: 50000 }), { error: 'advance-not-allowed' });
+  // …but paying part of a REAL balance never needed that permission.
+  const owing = session(35000, [{ id: 'inv_9', balanceCents: 35000 }], { allowAdvance: false });
+  assert.equal('amountCents' in computeTuitionAmount(owing, { kind: 'amount', amountCents: 20000 }), true);
+});
+
+test('the floor blocks a sub-$1 charge on EVERY path (typed, full balance, picked invoice)', () => {
+  const typed = session(35000, [{ id: 'inv_9', balanceCents: 35000 }]);
+  assert.deepEqual(computeTuitionAmount(typed, { kind: 'amount', amountCents: 99 }), { error: 'below-min' });
+  assert.deepEqual(computeTuitionAmount(typed, { kind: 'amount', amountCents: 0 }), { error: 'no-amount' });
+  // A 60c leftover balance costs more in card fees than it collects — let it roll into next month.
+  assert.deepEqual(computeTuitionAmount(session(60, [{ id: 'inv_9', balanceCents: 60 }]), { kind: 'full' }), { error: 'below-min' });
+  assert.deepEqual(
+    computeTuitionAmount(session(60, [{ id: 'inv_9', balanceCents: 60 }]), { kind: 'invoices', invoiceIds: ['inv_9'] }),
+    { error: 'below-min' },
+  );
+});
+
+test('the floor honours a school minimum ABOVE ours, and a typed fortune is capped', () => {
+  const s = session(500000, [{ id: 'inv_9', balanceCents: 500000 }], { minAmountCents: 500 });
+  assert.deepEqual(computeTuitionAmount(s, { kind: 'amount', amountCents: 400 }), { error: 'below-min' });
+  assert.equal('amountCents' in computeTuitionAmount(s, { kind: 'amount', amountCents: 500 }), true);
+  assert.deepEqual(computeTuitionAmount(s, { kind: 'amount', amountCents: 99_999_999 }), { error: 'too-large' });
 });
 
 test('tuition session round-trips by opaque id and holds family/device server-side', () => {

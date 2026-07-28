@@ -90,10 +90,17 @@ data class TuitionState(
     val session: String = "",           // opaque server session id (set after a successful lookup)
     val familyLabel: String = "",
     val balanceMinor: Long = 0L,
+    /** Money already paid ahead (0.41.0). At most one of balance/credit is non-zero; without this a
+     *  zero balance can't be told apart from "you're paid up ahead". */
+    val creditMinor: Long = 0L,
     val currency: String = "",
     val invoices: List<TuitionInvoiceUi> = emptyList(),
     val payFull: Boolean = true,
     val selected: Set<String> = emptySet(), // ticked invoice ids when !payFull
+    /** The school takes money when nothing is due (pay a term up front). Drives the amount pad. */
+    val allowAdvance: Boolean = false,
+    /** Floor for a typed amount — the school's, never below the kiosk's own £1/$1 minimum. */
+    val minAmountMinor: Long = 100L,
 )
 
 /** State of an in-progress donation. Amounts are integer MINOR units (validated server-side).
@@ -786,6 +793,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                     schoolName = info?.schoolName ?: it.schoolName,
                     tagline = info?.tagline ?: it.tagline,
                     available = info?.enabled ?: it.available,
+                    // The advance/floor policy also arrives with the lookup; keeping it here too means
+                    // the pay screen is right even on the first paint after a config change.
+                    allowAdvance = info?.allowAdvance ?: it.allowAdvance,
+                    minAmountMinor = info?.minAmountMinor ?: it.minAmountMinor,
                 )
             }
         }
@@ -880,6 +891,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                                 session = fam.session,
                                 familyLabel = fam.label,
                                 balanceMinor = fam.balanceMinor,
+                                creditMinor = fam.creditMinor,
+                                allowAdvance = fam.allowAdvance,
+                                minAmountMinor = fam.minAmountMinor,
                                 currency = fam.currency,
                                 invoices = fam.invoices.map { i -> TuitionInvoiceUi(i.id, i.label, i.dueDate, i.balanceMinor, i.studentName) },
                                 payFull = true,
@@ -903,10 +917,16 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         updateTuition { st -> st.copy(payFull = false, error = null, selected = if (st.selected.contains(id)) st.selected - id else st.selected + id) }
     }
 
-    /** Pay the tuition balance (full or picked invoices) on the reader. Mirrors the donation reader
-     *  flow but the amount is recomputed server-side from the held session, and it records a "payment"
-     *  into the Students ledger — never a kiosk donation. */
-    fun payTuition() {
+    /** Pay tuition on the reader: the whole balance, the picked invoices, or — when [amountMinor] is
+     *  given — a typed amount, which may be a part payment or money paid AHEAD of any bill (0.41.0).
+     *  Mirrors the donation reader flow, but the amount is recomputed server-side from the held
+     *  session, and it records a "payment" into the Students ledger — never a kiosk donation. */
+    fun payTuition() = payTuitionInternal(null)
+
+    /** Pay a TYPED amount — a part payment, or money paid ahead when nothing is due. */
+    fun payTuitionAmount(amountMinor: Long) = payTuitionInternal(amountMinor)
+
+    private fun payTuitionInternal(amountMinor: Long?) {
         val t = local.value.giving.tuition ?: return
         val readerConnected = ui.value.reader.conn == ReaderConn.Connected
         if (!readerConnected) {
@@ -915,21 +935,31 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         }
         val payFull = t.payFull
         val ids = t.selected.toList()
-        if (!payFull && ids.isEmpty()) {
+        if (amountMinor == null && !payFull && ids.isEmpty()) {
             updateTuition { it.copy(error = "Choose at least one item to pay, or pay the full balance.") }
+            return
+        }
+        // Belt to the server's braces: it re-checks the floor against its own copy of the school's
+        // settings. The pad shows the actual minimum, so this line only has to stop the charge.
+        if (amountMinor != null && amountMinor < t.minAmountMinor) {
+            updateTuition { it.copy(error = "That's below the smallest payment this school accepts.") }
             return
         }
         // Show the amount immediately on the Card/Processing/Thanks screens (no "$0" flash before the
         // PI round-trip). This is a DISPLAY estimate from the looked-up balances; the server recomputes
         // the authoritative charge from the held session and serverChargeMinor overrides it below.
-        val displayMinor = if (payFull) t.balanceMinor else t.invoices.filter { ids.contains(it.id) }.sumOf { it.balanceMinor }
+        val displayMinor = when {
+            amountMinor != null -> amountMinor
+            payFull -> t.balanceMinor
+            else -> t.invoices.filter { ids.contains(it.id) }.sumOf { it.balanceMinor }
+        }
         updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null, amountMinor = displayMinor) }
         givingJob?.cancel()
         givingJob = viewModelScope.launch {
             val idem = UUID.randomUUID().toString()
-            repo.log("info", "tuition_started", "payFull=$payFull items=${ids.size}")
+            repo.log("info", "tuition_started", if (amountMinor != null) "typedAmount" else "payFull=$payFull items=${ids.size}")
             val pi = try {
-                repo.createTuitionPaymentIntent(t.session, payFull, ids, idem)
+                repo.createTuitionPaymentIntent(t.session, payFull, ids, amountMinor, idem)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {

@@ -308,9 +308,16 @@ class KioskRepository(context: Context) {
 
     /** Mint the card-present tuition PaymentIntent for the full balance or the ticked invoices (the
      *  server recomputes the amount from its held session — the tablet only sends the selection). */
-    suspend fun createTuitionPaymentIntent(session: String, payFull: Boolean, invoiceIds: List<String>, idempotencyKey: String): CreatedPaymentIntent = withContext(Dispatchers.IO) {
+    suspend fun createTuitionPaymentIntent(
+        session: String,
+        payFull: Boolean,
+        invoiceIds: List<String>,
+        amountMinor: Long?,
+        idempotencyKey: String,
+    ): CreatedPaymentIntent = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: throw IOException("Not paired")
-        KioskApi(pinnedClientFor(p.certSha256)).createTuitionPaymentIntent(p.serverUrl, p.deviceToken, session, payFull, invoiceIds, idempotencyKey)
+        KioskApi(pinnedClientFor(p.certSha256))
+            .createTuitionPaymentIntent(p.serverUrl, p.deviceToken, session, payFull, invoiceIds, amountMinor, idempotencyKey)
     }
 
     /** After the reader confirms, verify the tuition charge + record it into the Students ledger. */
