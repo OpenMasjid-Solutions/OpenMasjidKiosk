@@ -237,8 +237,8 @@ private fun AmountStep(
         if (campaign.monthlyEnabled && campaign.readerCapable && readerConnected) {
             Spacer(Modifier.height(16.dp))
             SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
-                SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("One-time") }
-                SegmentedButton(selected = giving.monthly, onClick = { onSetMonthly(true) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Monthly") }
+                SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("One-time", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                SegmentedButton(selected = giving.monthly, onClick = { onSetMonthly(true) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Monthly", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
         }
         Spacer(Modifier.height(20.dp))
@@ -869,8 +869,8 @@ private fun TuitionInvoicesStep(
             Spacer(Modifier.height(16.dp))
             if (owes) {
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
-                    SegmentedButton(selected = t.payFull, onClick = { onPayFull(true) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Full balance") }
-                    SegmentedButton(selected = !t.payFull, onClick = { onPayFull(false) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Choose what to pay") }
+                    SegmentedButton(selected = t.payFull, onClick = { onPayFull(true) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Full balance", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    SegmentedButton(selected = !t.payFull, onClick = { onPayFull(false) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Choose what to pay", maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             }
             Spacer(Modifier.height(14.dp))

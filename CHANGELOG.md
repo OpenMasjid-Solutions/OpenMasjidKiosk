@@ -3,6 +3,14 @@
 
 # Changelog
 
+## 0.9.33
+- **Fixed the "Unlock" button on the PIN pad**, which was splitting across two lines ("Unlo / ck")
+  since the type got bigger in 0.9.30. Delete and Unlock now share the keypad's own width beside the
+  "0" key, and neither label can ever break mid-word again.
+- The **One-time / Monthly** and **Full balance / Choose what to pay** switches are held to one line
+  for the same reason. Same wording as before.
+- **(Requires updating the tablet app.)**
+
 ## 0.9.32
 - **Keys react like a phone's.** Press a key on the kiosk keyboard and it lights up in your accent
   colour and lifts a big copy of the letter **above your finger**, so you can see what you typed even
