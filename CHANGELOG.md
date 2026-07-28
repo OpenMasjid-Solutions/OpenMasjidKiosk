@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.9.32
+- **Keys react like a phone's.** Press a key on the kiosk keyboard and it lights up in your accent
+  colour and lifts a big copy of the letter **above your finger**, so you can see what you typed even
+  though your hand is covering the key. Space, shift, backspace and Done highlight too (no bubble —
+  they're wide enough to read around a finger).
+- **Student ID stays in capitals.** The ID keypad is now locked to capitals, so the keys show `YUS1234`
+  as you type it instead of lower-case letters that quietly changed on the way into the box.
+- **(Requires updating the tablet app.)**
+
 ## 0.9.31
 - **Parents can pay tuition ahead at the kiosk.** If a family wants to hand over a term — or the whole
   year — before it's billed, the kiosk now takes it. Where the balance screen used to be a dead end for

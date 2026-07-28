@@ -726,6 +726,10 @@ private fun TuitionLookupStep(
                 onKey = { ch -> onStudentCode(t.studentCode + ch) },
                 onBackspace = { onStudentCode(t.studentCode.dropLast(1)) },
                 onDone = { editing = false; onIdentify() },
+                // A Student ID is always capitals (YUS1234). The field already upper-cases whatever
+                // arrives; locking the keyboard means the keys SHOW the capitals being typed instead of
+                // lower-case letters that quietly change on the way into the box.
+                capsLocked = true,
             )
         }
     }
