@@ -156,6 +156,7 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                             onTuitionConfirmStudent = vm::tuitionConfirmStudent,
                             onTuitionRejectStudent = vm::tuitionRejectStudent,
                             onTuitionPayFull = vm::setTuitionPayFull,
+                            onTuitionToggleUnit = vm::toggleTuitionUnit,
                             onTuitionToggleInvoice = vm::toggleTuitionInvoice,
                             onTuitionPay = vm::payTuition,
                             onTuitionPayAmount = vm::payTuitionAmount,

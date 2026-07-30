@@ -48,8 +48,13 @@ function stubBroker(reply: unknown): { calls: Captured[]; restore: () => void } 
 
 function session(
   balanceCents: number,
-  invoices: { id: string; balanceCents: number; studentId?: string }[],
-  opts: { allowAdvance?: boolean; minAmountCents?: number; creditCents?: number } = {},
+  invoices: { id: string; balanceCents: number; studentId?: string; items?: { id: string; balanceCents: number }[] }[],
+  opts: {
+    allowAdvance?: boolean;
+    minAmountCents?: number;
+    creditCents?: number;
+    students?: { studentId: string; name: string; balanceCents: number; creditCents: number }[];
+  } = {},
 ) {
   return createTuitionSession({
     campaignId: 'cmp_1',
@@ -62,7 +67,8 @@ function session(
     creditCents: opts.creditCents ?? 0,
     allowAdvance: opts.allowAdvance ?? true,
     minAmountCents: opts.minAmountCents ?? 100,
-    invoices: invoices.map((i) => ({ studentId: 'stu_1', ...i })),
+    students: opts.students ?? [{ studentId: 'stu_1', name: 'Yusuf I', balanceCents, creditCents: opts.creditCents ?? 0 }],
+    invoices: invoices.map((i) => ({ studentId: 'stu_1', items: [], ...i })),
   });
 }
 
@@ -130,11 +136,14 @@ test('lookup posts { v: 2, studentCode } — no name, no pin (the 0.39.0 break)'
     // — as a name for the tablet, and as the internal id the pay step splits the charge with.
     assert.equal(r.family.openInvoices[0].studentName, 'Maryam');
     assert.equal(r.family.openInvoices[0].studentId, 'stu_2');
-    // Internal student ids never reach the tablet — only display fields do.
+    // The internal id is kept HERE (the route needs it to build the session's per-child sections) but
+    // is stripped before the response — the tablet only ever gets a positional key.
     assert.deepEqual(r.family.students, [
-      { firstName: 'Yusuf', lastInitial: 'I', balanceCents: 20000, creditCents: 0 },
-      { firstName: 'Maryam', lastInitial: 'I', balanceCents: 15000, creditCents: 0 },
+      { studentId: 'stu_1', firstName: 'Yusuf', lastInitial: 'I', balanceCents: 20000, creditCents: 0 },
+      { studentId: 'stu_2', firstName: 'Maryam', lastInitial: 'I', balanceCents: 15000, creditCents: 0 },
     ]);
+    // No `items` from a pre-0.43.0 provider → the bill stays one line, exactly as before.
+    assert.deepEqual(r.family.openInvoices[0].items, []);
   } finally {
     broker.restore();
   }
@@ -276,9 +285,230 @@ test('a per-child split rides on record-payment and announces v: 2 (the field on
   }
 });
 
+// ── 0.43.0 (§11.0b): itemised bills — the lines a bill is made of, and paying just one ──
+test('the ticked LINES ride on record-payment as `lines`, alone, at v: 2', async () => {
+  const rec = stubBroker({ v: 2, recorded: true, paymentId: 'pay_71', duplicate: false });
+  try {
+    await recordStudentPayment({
+      idempotencyKey: 'pi_3PabcDEF',
+      familyId: 'fam_x1',
+      amountCents: 5000,
+      currency: 'USD',
+      occurredAt: '2026-07-15T18:03:22Z',
+      externalRef: { stripePaymentIntentId: 'pi_3PabcDEF' },
+      lines: [{ itemId: 'iti_2', amountCents: 5000 }],
+      // Both of these are superseded by `lines` and must NOT reach the wire — the provider prefers
+      // lines, and two breakdowns that could disagree is exactly the ambiguity the contract forbids.
+      students: [{ studentId: 'stu_1', amountCents: 5000 }],
+      allocations: [{ invoiceId: 'inv_9', amountCents: 5000 }],
+    });
+    assert.equal(rec.calls[0].body.v, 2);
+    assert.deepEqual(rec.calls[0].body.lines, [{ itemId: 'iti_2', amountCents: 5000 }]);
+    assert.equal(rec.calls[0].body.students, undefined);
+    assert.equal(rec.calls[0].body.allocations, undefined);
+  } finally {
+    rec.restore();
+  }
+});
+
+test('lookup reads a bill\'s items — kind, a SIGNED amount for a credit line, and a payable balance', async () => {
+  const broker = stubBroker({
+    v: 2,
+    found: true,
+    matchedStudent: { id: 'stu_1', balanceCents: 22000 },
+    family: {
+      id: 'fam_x1',
+      label: 'Ismail family',
+      students: [{ studentId: 'stu_1', firstName: 'Yusuf', lastInitial: 'I', balanceCents: 22000, creditCents: 0 }],
+      balanceCents: 22000,
+      currency: 'usd',
+      openInvoices: [
+        {
+          id: 'inv_9',
+          studentId: 'stu_1',
+          label: 'Tuition — Feb 2027',
+          dueDate: '2027-02-01',
+          balanceCents: 22000,
+          // £200 tuition + £50 book fee − a £30 bursary = the £220 bill. The bursary's value is
+          // deducted from the lines ABOVE it, so the tuition line reads £170 and the credit reads 0.
+          items: [
+            { id: 'iti_1', label: 'Monthly tuition', kind: 'tuition', amountCents: 20000, balanceCents: 17000 },
+            { id: 'iti_2', label: 'Book fee', kind: 'charge', amountCents: 5000, balanceCents: 5000 },
+            { id: 'iti_3', label: 'Sibling bursary', kind: 'credit', amountCents: -3000, balanceCents: 0 },
+          ],
+        },
+      ],
+    },
+  });
+  try {
+    const r = await studentsLookup('YUS1234');
+    assert.equal(r.status, 'found');
+    if (r.status !== 'found') return;
+    const items = r.family.openInvoices[0].items;
+    assert.equal(items.length, 3);
+    assert.deepEqual(items[1], { id: 'iti_2', label: 'Book fee', kind: 'charge', amountCents: 5000, balanceCents: 5000 });
+    // A credit line keeps its NEGATIVE amount (clamping it to zero would render "Bursary £0") while
+    // reporting nothing payable — its value is already off the lines above it.
+    assert.equal(items[2].amountCents, -3000);
+    assert.equal(items[2].balanceCents, 0);
+    // The contract's arithmetic guarantee, which everything downstream leans on.
+    assert.equal(items.reduce((n, i) => n + i.balanceCents, 0), r.family.openInvoices[0].balanceCents);
+  } finally {
+    broker.restore();
+  }
+});
+
+test('lookup DROPS items that don\'t add up to the bill (a list that doesn\'t reconcile is worse than none)', async () => {
+  const broker = stubBroker({
+    v: 2,
+    found: true,
+    matchedStudent: { id: 'stu_1', balanceCents: 25000 },
+    family: {
+      id: 'fam_x1',
+      label: 'Ismail family',
+      students: [{ studentId: 'stu_1', firstName: 'Yusuf', lastInitial: 'I', balanceCents: 25000, creditCents: 0 }],
+      balanceCents: 25000,
+      currency: 'usd',
+      openInvoices: [
+        {
+          id: 'inv_9',
+          studentId: 'stu_1',
+          label: 'Tuition — Feb 2027',
+          dueDate: '2027-02-01',
+          balanceCents: 25000,
+          // Only £200 of a £250 bill: a `lines[]` built from this would be a 422 from the provider.
+          items: [{ id: 'iti_1', label: 'Monthly tuition', kind: 'tuition', amountCents: 20000, balanceCents: 20000 }],
+        },
+      ],
+    },
+  });
+  try {
+    const r = await studentsLookup('YUS1234');
+    assert.equal(r.status === 'found' && r.family.openInvoices[0].items.length, 0);
+  } finally {
+    broker.restore();
+  }
+});
+
+/** A session whose one bill is itemised: £200 tuition + £50 book fee, and a settled £30 line. */
+function itemisedSession(opts: { minAmountCents?: number } = {}) {
+  return session(
+    25000,
+    [
+      {
+        id: 'inv_9',
+        balanceCents: 25000,
+        items: [
+          { id: 'iti_1', balanceCents: 20000 },
+          { id: 'iti_2', balanceCents: 5000 },
+          { id: 'iti_3', balanceCents: 0 }, // already settled — listed on screen, never payable
+        ],
+      },
+    ],
+    opts,
+  );
+}
+
+test('ticking ONE line pays exactly that line (the whole point of §11.0b)', () => {
+  const r = computeTuitionAmount(itemisedSession(), { kind: 'items', itemIds: ['iti_2'] });
+  assert.deepEqual(r, {
+    amountCents: 5000,
+    allocations: null,
+    students: null, // superseded — a line already says whose bill it is
+    lines: [{ itemId: 'iti_2', amountCents: 5000 }],
+  });
+});
+
+test('ticked lines sum to the charge exactly, and repeats don\'t double-charge a line', () => {
+  const r = computeTuitionAmount(itemisedSession(), { kind: 'items', itemIds: ['iti_1', 'iti_2', 'iti_1'] });
+  assert.ok(!('error' in r));
+  if ('error' in r) return;
+  assert.equal(r.amountCents, 25000);
+  assert.equal(r.lines?.reduce((n, l) => n + l.amountCents, 0), r.amountCents);
+  assert.equal(r.lines?.length, 2);
+});
+
+test('a made-up, settled or credit line is refused — never a charge that differs from what was ticked', () => {
+  assert.deepEqual(computeTuitionAmount(itemisedSession(), { kind: 'items', itemIds: ['iti_x'] }), { error: 'unknown-item' });
+  assert.deepEqual(computeTuitionAmount(itemisedSession(), { kind: 'items', itemIds: ['iti_3'] }), { error: 'unknown-item' });
+  assert.deepEqual(computeTuitionAmount(itemisedSession(), { kind: 'items', itemIds: [] }), { error: 'no-selection' });
+});
+
+test('the £1 floor applies to a ticked line too (a 60p line costs more in fees than it collects)', () => {
+  const s = session(60, [{ id: 'inv_9', balanceCents: 60, items: [{ id: 'iti_1', balanceCents: 60 }] }]);
+  assert.deepEqual(computeTuitionAmount(s, { kind: 'items', itemIds: ['iti_1'] }), { error: 'below-min' });
+});
+
+test('"pay this whole bill" is sent as its LINES when the bill is itemised (honoured, not a hint)', () => {
+  const r = computeTuitionAmount(itemisedSession(), { kind: 'invoices', invoiceIds: ['inv_9'] });
+  assert.deepEqual(r, {
+    amountCents: 25000,
+    allocations: null,
+    students: null,
+    lines: [
+      { itemId: 'iti_1', amountCents: 20000 },
+      { itemId: 'iti_2', amountCents: 5000 },
+    ],
+  });
+});
+
+test('a picked bill with NO items keeps the pre-0.43.0 shape — the two breakdowns are never mixed', () => {
+  // Mixing is a hard 422: `lines` must cover the whole charge, so a partly-itemised pick has to fall
+  // back to the invoice-level hint plus the per-child split for ALL of it.
+  const s = session(45000, [
+    { id: 'inv_9', balanceCents: 25000, items: [{ id: 'iti_1', balanceCents: 25000 }] },
+    { id: 'inv_8', balanceCents: 20000, studentId: 'stu_2' },
+  ]);
+  const r = computeTuitionAmount(s, { kind: 'invoices', invoiceIds: ['inv_9', 'inv_8'] });
+  assert.ok(!('error' in r));
+  if ('error' in r) return;
+  assert.equal(r.lines, null);
+  assert.equal(r.amountCents, 45000);
+  assert.equal(r.students?.reduce((n, x) => n + x.amountCents, 0), 45000);
+});
+
+// ── Per-child advances: "add money for Maryam" (the tablet names a child by session KEY) ──
+const TWO_KIDS = [
+  { studentId: 'stu_1', name: 'Yusuf I', balanceCents: 20000, creditCents: 0 },
+  { studentId: 'stu_2', name: 'Maryam I', balanceCents: 0, creditCents: 5000 },
+];
+
+test('a typed amount for a named child lands on THAT child\'s ledger, not the household\'s', () => {
+  const s = session(20000, [{ id: 'inv_9', balanceCents: 20000 }], { students: TWO_KIDS });
+  const r = computeTuitionAmount(s, { kind: 'amount', amountCents: 5000, studentKey: 's1' });
+  assert.deepEqual(r, {
+    amountCents: 5000,
+    allocations: null,
+    students: [{ studentId: 'stu_2', amountCents: 5000 }],
+    lines: null,
+    studentId: 'stu_2',
+  });
+});
+
+test('the advance ceiling is the CHOSEN child\'s balance, not the household\'s', () => {
+  // Maryam owes nothing while the household owes £200: paying £50 for her IS an advance, and needs the
+  // school to have said it takes money that way.
+  const off = session(20000, [{ id: 'inv_9', balanceCents: 20000 }], { students: TWO_KIDS, allowAdvance: false });
+  assert.deepEqual(computeTuitionAmount(off, { kind: 'amount', amountCents: 5000, studentKey: 's1' }), { error: 'advance-not-allowed' });
+  // …while paying part of what Yusuf actually owes never needed that permission.
+  assert.equal('amountCents' in computeTuitionAmount(off, { kind: 'amount', amountCents: 5000, studentKey: 's0' }), true);
+});
+
+test('a student key that isn\'t in the session is refused (the tablet can\'t name an arbitrary child)', () => {
+  const s = session(20000, [{ id: 'inv_9', balanceCents: 20000 }], { students: TWO_KIDS });
+  // A real internal id is refused too: the tablet is never given one, so it can never send one.
+  for (const key of ['s9', 'stu_2', 'sx', 's-1']) {
+    assert.deepEqual(computeTuitionAmount(s, { kind: 'amount', amountCents: 5000, studentKey: key }), { error: 'unknown-student' });
+  }
+  // A BLANK key means "no child named" (the unattributed section carries one), not a bad child — the
+  // charge falls back to the household path Students walks oldest-due-first.
+  const blank = computeTuitionAmount(s, { kind: 'amount', amountCents: 5000, studentKey: '' });
+  assert.deepEqual(blank, { amountCents: 5000, allocations: null, students: null, lines: null });
+});
+
 test('computeTuitionAmount "full" pays the whole balance, no allocations (Students auto-allocates)', () => {
   const s = session(35000, [{ id: 'inv_9', balanceCents: 15000 }, { id: 'inv_10', balanceCents: 20000 }]);
-  assert.deepEqual(computeTuitionAmount(s, { kind: 'full' }), { amountCents: 35000, allocations: null, students: null });
+  assert.deepEqual(computeTuitionAmount(s, { kind: 'full' }), { amountCents: 35000, allocations: null, students: null, lines: null });
 });
 
 test('computeTuitionAmount "full" with nothing due errors (never a zero charge)', () => {
@@ -291,6 +521,7 @@ test('computeTuitionAmount invoices sums the SERVER-side stored amounts (client 
     amountCents: 15000,
     allocations: [{ invoiceId: 'inv_9', amountCents: 15000 }],
     students: [{ studentId: 'stu_1', amountCents: 15000 }],
+    lines: null, // this session's bills carry no items (a pre-0.43.0 provider)
   });
 });
 
@@ -344,6 +575,7 @@ test('computeTuitionAmount dedups repeated invoice ids (no double-charging one i
     amountCents: 15000,
     allocations: [{ invoiceId: 'inv_9', amountCents: 15000 }],
     students: [{ studentId: 'stu_1', amountCents: 15000 }],
+    lines: null,
   });
 });
 
@@ -354,13 +586,14 @@ test('a typed amount pays part of a balance, with no breakdown (Students allocat
     amountCents: 10000,
     allocations: null,
     students: null,
+    lines: null,
   });
 });
 
 test('a typed amount may EXCEED the balance — the surplus becomes the child\'s credit', () => {
   const s = session(35000, [{ id: 'inv_9', balanceCents: 35000 }]);
   const r = computeTuitionAmount(s, { kind: 'amount', amountCents: 140000 });
-  assert.deepEqual(r, { amountCents: 140000, allocations: null, students: null });
+  assert.deepEqual(r, { amountCents: 140000, allocations: null, students: null, lines: null });
 });
 
 test('paying ahead with NOTHING due is allowed when the school advertised it', () => {
@@ -369,6 +602,7 @@ test('paying ahead with NOTHING due is allowed when the school advertised it', (
     amountCents: 50000,
     allocations: null,
     students: null,
+    lines: null,
   });
 });
 

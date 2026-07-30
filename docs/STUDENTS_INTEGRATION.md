@@ -13,8 +13,9 @@
 
 The contract is **`students/billing` v2**, defined verbatim in the Students repo:
 `OpenMasjidStudentManager/docs/FABRIC_BILLING_CONTRACT.md` (§11) — the source of truth for every
-request/response shape below. If it and this brief disagree, the contract wins. Responses carry
-`"v": 2`.
+request/response shape below, and copied into this repo as
+[`docs/FABRIC_BILLING_CONTRACT.md`](FABRIC_BILLING_CONTRACT.md). If it and this brief disagree, the
+contract wins. Responses carry `"v": 2`.
 
 **What changed at v2 (Students 0.39.0, §11.0) — and what did not:**
 
@@ -28,7 +29,20 @@ request/response shape below. If it and this brief disagree, the contract wins. 
   every open invoice says which child it belongs to.
 - **The money path is untouched.** `info`, `record-payment` and `check` are byte-identical between v1
   and v2; we deliberately still send them as `"v": 1` (the provider accepts both) so a recorded payment
-  never depends on this upgrade.
+  never depends on this upgrade. Only a charge carrying a v2-era breakdown (`students[]`, `lines[]`)
+  announces `"v": 2`.
+
+**Added since, additively — no version bump, and nothing breaks if a school is on an older Students:**
+
+- **0.41.0 (§11.0a) — paying ahead and credit.** `info.allowAdvance` + `info.minAmountCents`, and a
+  `creditCents` beside every `balanceCents` in `lookup`. A derived balance of `0` is ambiguous — square,
+  paid ahead, or "you can't pay here" — and these are what tell them apart.
+- **0.43.0 (§11.0b) — itemised bills.** Each `openInvoices[]` entry now carries `items[]`: the lines the
+  bill is made of (`{ id, label, kind, amountCents, balanceCents }`, `kind` = `tuition` | `charge` |
+  `credit`). A February bill is routinely £200 of tuition plus a £50 book fee, and a parent asking to
+  pay one of the two could not be served while a bill was one label and one number. `record-payment`
+  takes the matching `lines[]`. **Absent on an older Students, and then everything behaves exactly as
+  it did** — one label, one number, one tick.
 
 ---
 
@@ -44,12 +58,17 @@ A `tuition` tile runs **exactly this**, nothing more:
      unknown, withdrawn or locked ID).
 4. **Confirm the child:** “Is this **Yusuf I.**?” — *Yes, show the balance* / *No — try another ID*.
    **No balance is fetched or shown until they say yes.** This step is required by §11.2, not a nicety.
-5. **Confirmed** → kiosk server calls `lookup` with the same ID → show the **family label**, the
-   **current balance due**, and the **open invoices** (one row per month/term, each with its own
-   amount, due date and — when there are siblings — whose bill it is).
-6. **Pay:** two choices —
-   - **Pay the full balance** (the whole household `balanceCents`), or
-   - **Choose what to pay** — tick one or more invoices (e.g. one or two months) and pay just those.
+5. **Confirmed** → kiosk server calls `lookup` with the same ID → show the account **child by child**:
+   the family label and household total up top, then a section per sibling with **that child's** own
+   balance or credit and **that child's** bills. Each bill shows its own amount and due date, and where
+   the school itemises (0.43.0) the lines it is made of, under the month as a heading.
+6. **Pay:** the choices —
+   - **Pay the full balance** (the whole household `balanceCents`) — the default, one tap; or
+   - **Choose what to pay** — tick whole bills, or individual **lines** ("just the book fee"); or
+   - **Add money for a child** — type an amount towards one child, which is also the only way to pay
+     when nothing is due (a term up front). Offered only when `info.allowAdvance` says so.
+   With nothing due the screen still **says so first** — the balance, the credit, or "Nothing due" —
+   and the amount pad is something the parent chooses, never what they land on.
 7. **Present card on the Reader M2** (card-present PaymentIntent). On approval → we record it into
    Students and print/show a receipt that says **“payment”**, never “donation”. Done.
 
@@ -130,18 +149,33 @@ child?”, and only call `lookup` on a yes.
     "family": { "id": "fam_x1", "label": "Ismail family",
       "students": [{ "studentId": "stu_1", "studentCode": "YUS1234", "firstName": "Yusuf",
                      "lastInitial": "I", "balanceCents": 20000 }],
-      "balanceCents": 35000, "currency": "usd",
+      "balanceCents": 35000, "creditCents": 0, "currency": "usd",
       "openInvoices": [{ "id": "inv_9", "studentId": "stu_2", "label": "Tuition — Jul 2026",
-                         "dueDate": "2026-07-01", "balanceCents": 15000 }] } }
+                         "dueDate": "2026-07-01", "balanceCents": 15000,
+                         // 0.43.0: what the bill is MADE OF. sum(items[].balanceCents) === the bill.
+                         "items": [{ "id": "iti_1", "label": "Monthly tuition", "kind": "tuition",
+                                     "amountCents": 10000, "balanceCents": 10000 },
+                                   { "id": "iti_2", "label": "Book fee", "kind": "charge",
+                                     "amountCents": 5000, "balanceCents": 5000 }] }] } }
 // not found (identical shape + latency whatever mismatched):
 → { "v": 2, "found": false }
 ```
-Show the balance from `family.balanceCents`; render one selectable row per `openInvoices[]` (the
-“pick months” list), and label each row with the child it belongs to (`studentId` → that child's first
-name from `family.students[]`) when the family has more than one — bills are per student at v2, so two
-children produce two identically-labelled rows otherwise. **Never display more than the contract
-returns** — no full last names, DOB, or contact info. Hold `family.id` + `matchedStudent.id` (and the
-internal `studentId`s) on the kiosk server for the pay step; the tablet only gets display fields.
+**Group by child, don't flatten.** Bills are per student at v2, so a household list is two identically
+labelled "Tuition — Jul 2026" rows with no way to tell them apart, and a household total cannot say
+which child is in credit. The kiosk server therefore returns the invoices already grouped into a
+`family.students[]` section per child — name, that child's `balanceCents`/`creditCents`, and their own
+bills — and the tablet renders one section each.
+
+**Rendering the lines.** A bill with a single line stays a single row, exactly as before. With several,
+show the month as a heading and the lines beneath it; offer only the ones with a balance, show settled
+ones as done, and show a `credit` line (a bursary) as information — never as something payable. Treat
+`kind` as an **open set**: render an unknown kind as a plain line rather than dropping it, or the lines
+stop adding up to the bill.
+
+**Never display more than the contract returns** — no full last names, DOB, or contact info. Hold
+`family.id` + `matchedStudent.id` and the internal `studentId`s on the kiosk **server** for the pay
+step; the tablet gets display fields plus opaque handles (a session id, invoice/item ids, and a
+positional `key` per child, `s0`/`s1`/…) — never a school id.
 
 ### The charge (our job — Stripe Terminal / Reader M2, card-present)
 On the Stripe account the reader is registered to (see §4), create a **card-present** PaymentIntent for
@@ -175,24 +209,39 @@ breakdown we don't need — omit it and Students derives the split itself, oldes
   "payerNote": "paid at the front desk" }  // optional, ≤200 chars
 → { "v": 1, "recorded": true, "paymentId": "pay_71", "duplicate": false }
 ```
-- **Full balance** → omit `allocations` **and** `students` (Students auto-allocates oldest-due-first
-  across the family; surplus → that child's credit). That is exactly what "pay everything" means.
-- **Specific months** → one `allocations[]` entry per ticked invoice **and** a `students[]` breakdown
-  grouping those invoices by child, summing exactly to `amountCents`.
+**Exactly one breakdown, never two.** The provider prefers `lines` > `allocations` > `students`, so
+sending more than one is the wire saying two different things about the same money. What we send:
 
-  > **Send `students[]` — this is not optional in practice.** Students 0.39.0 derives the ledger split
-  > from `students[]`; when it is absent it walks the *whole family's* open invoices oldest-due-first.
-  > Its Fabric `record-payment` **parses `allocations[]` but does not use it** (`recordSplit` takes only
-  > the per-child shares). So with two children, ticking Maryam's July bill and sending allocations
-  > alone books the money against Yusuf's older bill instead — the charge and the household balance are
-  > right, the per-child ledger is not. We send both: `students[]` for the split that actually lands,
-  > `allocations[]` because the contract still documents it and a later Students may honour it again.
-  > **Flagged upstream:** §11.2 still presents `allocations[]` as honoured — contract and implementation
-  > disagree there, and the implementation is what runs.
+- **Full balance** → no breakdown at all (Students auto-allocates oldest-due-first across the family;
+  surplus → that child's credit). That is exactly what "pay everything" means.
+- **Ticked lines, or whole bills that are itemised** → `lines: [{ itemId, amountCents }]`, summing
+  exactly to `amountCents`, and **nothing else** (`"v": 2`).
+
+  > **`lines` is honoured, not merely accepted** (0.43.0): the choice is stored with the payment and
+  > re-applied whenever Students recomputes its allocations, so the book fee a parent deliberately paid
+  > still reads settled on next month's statement. It is also strict — every `itemId` must come from a
+  > lookup in the same session and belong to that family, or the call is a `422 invalid_allocation`.
+  > That is why a partial `lines[]` is never sent: our server only builds one when it covers the whole
+  > charge to the penny, and falls back to the shape below when it can't.
+
+- **Whole bills from a school that doesn't itemise** → `allocations[]` per ticked invoice **and** a
+  `students[]` breakdown grouping them by child, summing exactly to `amountCents` (`"v": 2`).
+
+  > **Why both.** `allocations[]` was in the contract from v1 but was parsed and **ignored** until
+  > 0.43.0 — a consumer asking for a particular bill got oldest-due-first with nothing to say so. It
+  > works from 0.43.0, normalised into the same line mechanism, but is a **hint**: what a named invoice
+  > can't absorb (the office took cash between our lookup and our record) is recorded as ordinary money
+  > on that child rather than rejected, because by then the card is captured. `students[]` is what an
+  > older Students actually splits by, so sending both keeps the per-child ledger right on every
+  > provider version.
+
+- **A typed amount for one child** ("add money for Maryam", or paying ahead) → a one-entry
+  `students[]`, so the surplus becomes **that child's** credit rather than being walked across the
+  household. `students_student_id` on the PaymentIntent names the same child.
 
   Within one child's share, Students applies oldest-due-first among *that child's* invoices, so ticking
-  their August bill while July is open pays July down first. The child and the amount are right; which
-  of their own months clears is Students' call.
+  their August bill while July is open pays July down first — unless `lines` named the line, which is
+  the whole point of it. The child and the amount are right either way.
 - Idempotent on `idempotencyKey` (= the PI id); a replay returns the original `paymentId` with
   `duplicate:true`.
 
@@ -267,12 +316,16 @@ charging the wrong account.
 - `manifest.yaml` declares `fabric.consumes: [students/billing]`; the broker call returns 200 (not
   `not_granted`) once the OS grants it.
 - The tuition tile renders the **Student ID** shell (one field, no PIN, no amount pad), confirms the
-  child's name via `identify`, then fetches the balance + per-month invoices via `lookup` and offers
-  **pay-all** and **pick-months**. Invoices are labelled with the child when there are siblings.
-- A card-present approval calls `record-payment` (for picked months: `allocations[]` **plus** the
-  per-child `students[]` split; both omitted for full balance), idempotent on the PI id; a dropped
-  confirmation is retried from a persistent outbox + `check`, with the split stored so a retry after a
-  restart still attributes the same way.
+  child's name via `identify`, then fetches the account via `lookup` and shows it **child by child** —
+  each sibling's own balance or credit and their own bills — offering **pay-all**, **pick what to pay**
+  (whole bills, or individual lines where the school itemises), and **add money for a child**.
+- With nothing due, the screen says so — the credit, or "Nothing due" — **before** offering an amount
+  pad. The pad is never the landing screen.
+- A card-present approval calls `record-payment` with **exactly one** breakdown — `lines[]` for a
+  ticked/itemised charge, `allocations[]` + `students[]` for a non-itemised one, a one-entry
+  `students[]` for a per-child typed amount, none for a full balance — idempotent on the PI id; a
+  dropped confirmation is retried from a persistent outbox + `check`, with the breakdown stored so a
+  retry after a restart still attributes the same way.
 - The tuition tile charges the reader’s account, which is the **school’s tuition Stripe account** (§4);
   a mismatch warns the admin.
 - Receipt says **“payment”**; tuition is excluded from donation totals + year-end letters.

@@ -24,7 +24,7 @@ import { Store, grossUpForFees, type Device, type DonationRecord, type EmailRece
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus } from './fabric';
 import { renderReceipt, type ReceiptContext } from './email';
-import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
+import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { LoginLimiter } from './rateLimit';
 import { toCsv } from './csv';
 import {
@@ -1263,6 +1263,9 @@ async function main(): Promise<void> {
       // The per-child split of a "choose what to pay" charge (v2). Students derives its own when this
       // is absent, which is right for a pay-full charge and wrong for picked invoices.
       students: row.students ?? undefined,
+      // The exact ticked bill lines (0.43.0). Supersedes both of the above — students.ts drops them
+      // when this is set, so the wire never carries two answers to "what did they pay for?".
+      lines: row.lines ?? undefined,
     });
     if (res.status === 'recorded') store.setTuitionRecordStatus(piId, 'recorded', res.paymentId);
     else if (res.status === 'rejected') store.setTuitionRecordStatus(piId, 'skipped');
@@ -1364,10 +1367,58 @@ async function main(): Promise<void> {
       creditCents: r.family.creditCents,
       allowAdvance: policy.allowAdvance,
       minAmountCents: policy.minAmountCents,
+      // The children, in the SAME order the response lists them — the tablet addresses one by its
+      // position (`s0`, `s1`) so "add £50 for Maryam" can name her ledger without the device ever
+      // holding the school's internal ids.
+      students: r.family.students.map((s) => ({
+        studentId: s.studentId,
+        name: [s.firstName, s.lastInitial].filter(Boolean).join(' '),
+        balanceCents: s.balanceCents,
+        creditCents: s.creditCents,
+      })),
       // studentId is held server-side only — it is what lets the pay step tell Students whose bill
-      // each picked invoice is (contract v2), and it never goes to the tablet.
-      invoices: r.family.openInvoices.map((i) => ({ id: i.id, balanceCents: i.balanceCents, studentId: i.studentId })),
+      // each picked invoice is (contract v2). `items` is what a ticked bill LINE resolves against
+      // (0.43.0); empty on an older Students, which falls the pay step back to whole invoices.
+      invoices: r.family.openInvoices.map((i) => ({
+        id: i.id,
+        balanceCents: i.balanceCents,
+        studentId: i.studentId,
+        items: i.items.map((it) => ({ id: it.id, balanceCents: it.balanceCents })),
+      })),
     });
+    // The tablet renders the account CHILD BY CHILD (each with their own balance, credit and bills), so
+    // group the invoices here rather than shipping one flat list for the device to untangle.
+    const wireInvoice = (i: (typeof r.family.openInvoices)[number]) => ({
+      id: i.id,
+      label: i.label,
+      dueDate: i.dueDate,
+      balanceCents: i.balanceCents,
+      studentName: i.studentName,
+      // 0.43.0 (§11.0b): what this bill is MADE OF, so a parent can pay the book fee without the
+      // month's tuition. Empty on an older Students → the bill stays one line, exactly as before.
+      items: i.items.map((it) => ({ id: it.id, label: it.label, kind: it.kind, amountCents: it.amountCents, balanceCents: it.balanceCents })),
+    });
+    const byStudent = new Map<string, ReturnType<typeof wireInvoice>[]>();
+    for (const i of r.family.openInvoices) {
+      const list = byStudent.get(i.studentId) ?? [];
+      list.push(wireInvoice(i));
+      byStudent.set(i.studentId, list);
+    }
+    const known = new Set(r.family.students.map((s) => s.studentId));
+    const sections = r.family.students.map((s, idx) => ({
+      key: studentKey(idx), // the handle the pay step maps back to a real studentId
+      name: [s.firstName, s.lastInitial].filter(Boolean).join(' '),
+      // The pre-sections shape, still spelled out: an older APK reads these two off this same array.
+      firstName: s.firstName,
+      lastInitial: s.lastInitial,
+      balanceCents: s.balanceCents,
+      creditCents: s.creditCents,
+      invoices: byStudent.get(s.studentId) ?? [],
+    }));
+    // Defensive: a bill for a child missing from the sibling list would otherwise vanish from a screen
+    // that only renders sections. Show it under an unnamed section — still payable, just unattributed.
+    const orphans = r.family.openInvoices.filter((i) => !known.has(i.studentId)).map(wireInvoice);
+    if (orphans.length) sections.push({ key: '', name: '', firstName: '', lastInitial: '', balanceCents: 0, creditCents: 0, invoices: orphans });
     return {
       data: {
         found: true,
@@ -1377,21 +1428,18 @@ async function main(): Promise<void> {
         minAmountMinor: policy.minAmountCents,
         family: {
           label: r.family.label,
-          students: r.family.students, // firstName + lastInitial (+ their own balance/credit) — per contract
+          // Per-child sections: name, that child's own balance/credit, and their bills. `key` is the
+          // opaque handle for "pay towards this child"; the internal studentId never leaves the server.
+          students: sections,
           balanceCents: r.family.balanceCents,
           // 0.41.0: money already paid ahead. A zero balance means "square" or "paid ahead", and the
           // parent should see which — once an advance settles its invoice this is the only signal left.
           creditCents: r.family.creditCents,
           currency: r.family.currency,
-          // id (for selection) + label + dueDate + balanceCents + whose bill it is as a NAME. The
-          // internal studentId stays on the server (it's in the session, for the pay step).
-          openInvoices: r.family.openInvoices.map((i) => ({
-            id: i.id,
-            label: i.label,
-            dueDate: i.dueDate,
-            balanceCents: i.balanceCents,
-            studentName: i.studentName,
-          })),
+          // The same bills as one flat list. Kept because a kiosk in the field may still be running an
+          // APK that predates the per-child sections, and a tablet update is a separate errand from a
+          // server update — that build reads this and keeps working unchanged.
+          openInvoices: r.family.openInvoices.map(wireInvoice),
         },
       },
     };
@@ -1404,9 +1452,17 @@ async function main(): Promise<void> {
     selection: z.discriminatedUnion('kind', [
       z.object({ kind: z.literal('full') }),
       z.object({ kind: z.literal('invoices'), invoiceIds: z.array(z.string().max(128)).min(1).max(60) }),
+      // Ticked bill LINES (0.43.0 §11.0b) — "just the book fee". Ids come from the lookup and are
+      // resolved against the held session, same as invoice ids.
+      z.object({ kind: z.literal('items'), itemIds: z.array(z.string().max(128)).min(1).max(200) }),
       // A typed amount — a part payment, or money paid ahead when nothing is due (§11.0a). Bounds are
       // re-derived from the SESSION in computeTuitionAmount; this only keeps junk out of the maths.
-      z.object({ kind: z.literal('amount'), amountMinor: z.number().int().positive().max(MAX_TUITION_CENTS) }),
+      // `studentKey` is the opaque per-session handle for WHICH child the money is for.
+      z.object({
+        kind: z.literal('amount'),
+        amountMinor: z.number().int().positive().max(MAX_TUITION_CENTS),
+        studentKey: z.string().max(8).optional(),
+      }),
     ]),
     idempotencyKey: z.string().trim().min(8).max(255).optional(),
   });
@@ -1424,7 +1480,7 @@ async function main(): Promise<void> {
     const sel = parsed.data.selection;
     const amt = computeTuitionAmount(
       session,
-      sel.kind === 'amount' ? { kind: 'amount', amountCents: sel.amountMinor } : sel,
+      sel.kind === 'amount' ? { kind: 'amount', amountCents: sel.amountMinor, studentKey: sel.studentKey } : sel,
     );
     if ('error' in amt) {
       // Say which rule stopped it — a floor or a school that doesn't take money ahead is something the
@@ -1438,7 +1494,9 @@ async function main(): Promise<void> {
               ? 'This school isn’t taking payments in advance right now.'
               : amt.error === 'nothing-due'
                 ? 'There’s nothing due to pay.'
-                : 'Please choose what to pay.';
+                : amt.error === 'unknown-item' || amt.error === 'unknown-invoice' || amt.error === 'unknown-student'
+                  ? 'That’s out of date — please look up the balance again.'
+                  : 'Please choose what to pay.';
       return reply.code(400).send({ error: message });
     }
     // Tuition is card-present on the reader's (primary) account — which MUST be the school's account so
@@ -1456,7 +1514,10 @@ async function main(): Promise<void> {
       campaignId: campaign.id,
       stripeAccountId: acct.id,
     };
-    if (session.studentId) metadata.students_student_id = session.studentId;
+    // The child this charge is for: the one the parent picked on the "add money for…" pad when there
+    // was one, else the student whose ID was typed.
+    const chargeStudentId = amt.studentId || session.studentId;
+    if (chargeStudentId) metadata.students_student_id = chargeStudentId;
     const piInput = {
       amountMinor: amt.amountCents,
       currency,
@@ -1473,12 +1534,13 @@ async function main(): Promise<void> {
         campaignId: campaign.id,
         stripeAccountId: acct.id,
         familyId: session.familyId,
-        studentId: session.studentId,
+        studentId: chargeStudentId,
         familyLabel: session.familyLabel,
         amountMinor: amt.amountCents,
         currency,
         allocations: amt.allocations,
         students: amt.students, // per-child split (v2); null for a pay-full charge
+        lines: amt.lines, // the ticked bill lines (0.43.0); supersedes both of the above
       });
       return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, chargeMinor: amt.amountCents, currency } };
     } catch (err) {

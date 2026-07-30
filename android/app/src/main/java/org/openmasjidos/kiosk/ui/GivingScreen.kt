@@ -113,9 +113,10 @@ fun GivingScreen(
     onTuitionConfirmStudent: () -> Unit = {},
     onTuitionRejectStudent: () -> Unit = {},
     onTuitionPayFull: (Boolean) -> Unit = {},
+    onTuitionToggleUnit: (String) -> Unit = {},
     onTuitionToggleInvoice: (String) -> Unit = {},
     onTuitionPay: () -> Unit = {},
-    onTuitionPayAmount: (Long) -> Unit = {},
+    onTuitionPayAmount: (Long, String) -> Unit = { _, _ -> },
     loadImage: suspend (String) -> ImageBitmap? = { null },
     modifier: Modifier = Modifier,
 ) {
@@ -133,7 +134,7 @@ fun GivingScreen(
         isTuition && giving.step == GivingStep.TuitionConfirm ->
             TuitionConfirmStep(giving.tuition, style, onTuitionConfirmStudent, onTuitionRejectStudent, modifier)
         isTuition && giving.step == GivingStep.TuitionInvoices ->
-            TuitionInvoicesStep(giving.tuition, style, onTuitionPayFull, onTuitionToggleInvoice, onTuitionPay, onTuitionPayAmount, onCancel, modifier)
+            TuitionInvoicesStep(giving.tuition, style, onTuitionPayFull, onTuitionToggleUnit, onTuitionToggleInvoice, onTuitionPay, onTuitionPayAmount, onCancel, modifier)
         giving.step == GivingStep.Amount || giving.step == GivingStep.Idle ->
             AmountStep(giving, campaign, currency, style, readerConnected, config?.footerText ?: "OpenMasjid Solutions", onSetMonthly, onChooseAmount, loadImage, modifier)
         // Details has its own full-screen scrollable layout (it hosts the in-app keyboard), so it is
@@ -790,42 +791,51 @@ private fun TuitionConfirmStep(
     }
 }
 
-/** The family's account + open invoices: pay the full balance, pick specific months, or type an
- *  amount — including when nothing is due, which is how a family pays a term up front (0.41.0).
+/** The family's account, CHILD BY CHILD: each one's balance or credit and their own bills, which can
+ *  be paid whole, line by line ("just the book fee" — contract 0.43.0 §11.0b), or by typing an amount
+ *  towards that child — including when nothing is due, which is how a family pays a term up front.
  *
- *  A zero balance is ambiguous on its own, so the account line reads from BOTH figures: what's owed,
- *  what has already been paid ahead, or "nothing due". Whichever it is, paying stays available when
- *  the school allows it. */
+ *  A zero balance is ambiguous on its own, so every account line reads from BOTH figures: what's owed,
+ *  what has already been paid ahead, or "nothing due". With one bill per child, one flat list couldn't
+ *  say which child was which — two siblings produce two identical "Tuition — Feb 2027" rows. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TuitionInvoicesStep(
     tuition: TuitionState?,
     style: SceneStyle,
     onPayFull: (Boolean) -> Unit,
+    onToggleUnit: (String) -> Unit,
     onToggleInvoice: (String) -> Unit,
     onPay: () -> Unit,
-    onPayAmount: (Long) -> Unit,
+    onPayAmount: (Long, String) -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val t = tuition ?: TuitionState()
     val currency = t.currency.ifBlank { "USD" }
     val owes = t.balanceMinor > 0
-    // Nothing owed and the school takes money ahead → the amount pad IS this screen; there is no
-    // balance to pay "in full" and no month to tick.
-    var padOpen by remember(t.session) { mutableStateOf(!owes && t.allowAdvance) }
-    if (padOpen) {
+    val kids = t.students
+    // One child needs no headings — the family line above already names the account. Several do.
+    val perChild = kids.size > 1
+    // The pad is NEVER where this screen opens, not even with nothing due. A parent came to see the
+    // account; a number pad in their face reads as a demand for money they may not owe. Say what the
+    // account is first, and let them ask to pay. Non-null = open, and it holds the child's session key
+    // ("" = the household).
+    var padFor by remember(t.session) { mutableStateOf<String?>(null) }
+    val padKey = padFor
+    if (padKey != null) {
+        val kid = kids.firstOrNull { it.key == padKey && padKey.isNotBlank() }
         TuitionAmountPad(
             t = t,
             style = style,
-            onConfirm = onPayAmount,
-            // With a balance the pad is a detour off the balance screen; with none it is the screen,
-            // so "back" leaves the tuition flow entirely.
-            onBack = { if (owes) padOpen = false else onCancel() },
+            forName = kid?.name.orEmpty(),
+            balanceMinor = kid?.balanceMinor ?: t.balanceMinor,
+            onConfirm = { minor -> onPayAmount(minor, padKey) },
+            onBack = { padFor = null },
         )
         return
     }
-    val payAmount = if (t.payFull) t.balanceMinor else t.invoices.filter { t.selected.contains(it.id) }.sumOf { it.balanceMinor }
+    val payAmount = if (t.payFull) t.balanceMinor else t.selected.sumOf { t.unitAmount(it) }
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -836,36 +846,7 @@ private fun TuitionInvoicesStep(
         ) {
             Text(t.familyLabel.ifBlank { "Your account" }, style = MaterialTheme.typography.headlineSmall, color = style.onScene, textAlign = TextAlign.Center)
             Spacer(Modifier.height(4.dp))
-            // What the account actually says. Balance and credit are never both non-zero.
-            when {
-                owes -> Text(
-                    "Balance due ${formatMoney(t.balanceMinor, currency)}",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = style.accent,
-                    fontWeight = FontWeight.Bold,
-                )
-                t.creditMinor > 0 -> {
-                    Text(
-                        "${formatMoney(t.creditMinor, currency)} paid ahead",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = SuccessDark,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "It comes off the next bill automatically.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = style.onSceneMuted,
-                        textAlign = TextAlign.Center,
-                    )
-                }
-                else -> Text(
-                    "Nothing due",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = style.onScene,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+            TuitionAccountLine(t.balanceMinor, t.creditMinor, currency, style, big = true)
             Spacer(Modifier.height(16.dp))
             if (owes) {
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
@@ -874,45 +855,72 @@ private fun TuitionInvoicesStep(
                 }
             }
             Spacer(Modifier.height(14.dp))
-            if (t.invoices.isEmpty()) {
+            if (kids.isEmpty() && t.invoices.isEmpty()) {
                 Text(
                     if (t.allowAdvance) "You can still pay towards the next bill." else "Nothing is currently due — thank you.",
                     color = style.onSceneMuted,
                     style = MaterialTheme.typography.bodyLarge,
                     textAlign = TextAlign.Center,
                 )
-            } else {
-                t.invoices.forEach { inv ->
-                    val ticked = !t.payFull && t.selected.contains(inv.id)
-                    Surface(
-                        onClick = { onToggleInvoice(inv.id) },
-                        shape = RoundedCornerShape(12.dp),
-                        color = style.tile,
-                        contentColor = style.tileInk,
-                        border = BorderStroke(if (ticked) 2.dp else 1.dp, if (ticked) style.accent else style.tileInk.copy(alpha = 0.45f)),
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+            }
+            kids.forEach { kid ->
+                if (perChild) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            kid.name.ifBlank { "Other" },
+                            style = MaterialTheme.typography.titleLarge,
+                            color = style.onScene,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.size(10.dp))
+                        TuitionAccountLine(kid.balanceMinor, kid.creditMinor, currency, style, big = false, compact = true)
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+                if (kid.invoices.isEmpty()) {
+                    Text(
+                        if (kid.creditMinor > 0) "Nothing due — this credit comes off the next bill." else "Nothing due.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = style.onSceneMuted,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    )
+                } else {
+                    kid.invoices.forEach { inv ->
+                        TuitionBillCard(
+                            inv = inv,
+                            t = t,
+                            style = style,
+                            currency = currency,
+                            // Under "Full balance" the bills are a statement, not a checklist.
+                            choosing = !t.payFull,
+                            // The per-child heading already says whose this is.
+                            showStudentName = !perChild,
+                            onToggleUnit = onToggleUnit,
+                            onToggleInvoice = onToggleInvoice,
+                        )
+                    }
+                }
+                // Money for THIS child. With one ledger per child, "add £50" has to say for whom —
+                // and a family where one child is clear and another owes is the ordinary case.
+                if (perChild && t.allowAdvance && kid.key.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedButton(
+                        onClick = { padFor = kid.key },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().height(64.dp),
                     ) {
-                        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(inv.label.ifBlank { "Tuition" }, style = MaterialTheme.typography.titleMedium, color = style.tileInk)
-                                // With one bill per child (contract v2), two children can have the same
-                                // month's label — say whose this is so the right one gets ticked.
-                                val sub = listOfNotNull(
-                                    inv.studentName.takeIf { it.isNotBlank() },
-                                    inv.dueDate.takeIf { it.isNotBlank() }?.let { "Due $it" },
-                                ).joinToString(" · ")
-                                if (sub.isNotBlank()) {
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(sub, style = MaterialTheme.typography.bodySmall, color = style.tileInk.copy(alpha = 0.78f))
-                                }
-                            }
-                            Spacer(Modifier.size(10.dp))
-                            Text(formatMoney(inv.balanceMinor, currency), style = MaterialTheme.typography.titleMedium, color = style.tileInk, fontWeight = FontWeight.Bold)
-                            if (!t.payFull) {
-                                Spacer(Modifier.size(10.dp))
-                                Text(if (ticked) "✓" else "○", style = MaterialTheme.typography.titleLarge, color = if (ticked) style.accent else style.onSceneMuted)
-                            }
-                        }
+                        Text(
+                            "Add money for ${kid.name.substringBefore(' ').ifBlank { "this child" }}",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = style.onScene,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }
@@ -931,13 +939,13 @@ private fun TuitionInvoicesStep(
                 modifier = Modifier.fillMaxWidth().height(78.dp),
             ) { Text(if (payAmount > 0) "Pay ${formatMoney(payAmount, currency)}" else "Choose what to pay", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         }
-        // Paying a different amount — part of a balance, or ahead of any bill. The only way to pay
-        // when nothing is due, and the school has to have said it takes money that way.
-        if (t.allowAdvance) {
+        // Paying a different amount — part of a balance, or ahead of any bill. With several children
+        // this lives per child above instead, because the money has to land on one child's ledger.
+        if (t.allowAdvance && !perChild) {
             if (owes) Spacer(Modifier.height(10.dp))
             val payAheadPrimary = !owes
             Button(
-                onClick = { padOpen = true },
+                onClick = { padFor = kids.firstOrNull()?.key.orEmpty() },
                 shape = RoundedCornerShape(16.dp),
                 colors = if (payAheadPrimary) {
                     ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent)
@@ -958,29 +966,245 @@ private fun TuitionInvoicesStep(
     }
 }
 
+/** What an account actually says, in one line. Balance and credit are never both non-zero, and a bare
+ *  "0" can't tell "square" from "paid the year already" — once an advance settles its invoice, the
+ *  credit is the only signal left. */
+@Composable
+private fun TuitionAccountLine(
+    balanceMinor: Long,
+    creditMinor: Long,
+    currency: String,
+    style: SceneStyle,
+    big: Boolean,
+    compact: Boolean = false,
+) {
+    val text = MaterialTheme.typography.let { if (big) it.headlineMedium else it.titleMedium }
+    when {
+        balanceMinor > 0 -> Text(
+            if (compact) formatMoney(balanceMinor, currency) else "Balance due ${formatMoney(balanceMinor, currency)}",
+            style = text,
+            color = style.accent,
+            fontWeight = FontWeight.Bold,
+        )
+        creditMinor > 0 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                "${formatMoney(creditMinor, currency)} paid ahead",
+                style = text,
+                color = SuccessDark,
+                fontWeight = FontWeight.Bold,
+            )
+            if (!compact) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "It comes off the next bill automatically.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = style.onSceneMuted,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+        else -> Text("Nothing due", style = text, color = style.onSceneMuted, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** One bill. A bill with a single line is one row, exactly as it always was; a bill made of several
+ *  (0.43.0 §11.0b) becomes a small statement — the month as the heading, then what it is made of, with
+ *  only the lines that still have a balance offered as things to pay. Settled lines stay listed and
+ *  marked done, and a credit line (a bursary) is shown as information, never as something payable. */
+@Composable
+private fun TuitionBillCard(
+    inv: TuitionInvoiceUi,
+    t: TuitionState,
+    style: SceneStyle,
+    currency: String,
+    choosing: Boolean,
+    showStudentName: Boolean,
+    onToggleUnit: (String) -> Unit,
+    onToggleInvoice: (String) -> Unit,
+) {
+    val sub = listOfNotNull(
+        inv.studentName.takeIf { showStudentName && it.isNotBlank() },
+        inv.dueDate.takeIf { it.isNotBlank() }?.let { "Due $it" },
+    ).joinToString(" · ")
+    // Lines only when EVERY bill on the screen has them — a half-itemised selection can't be expressed
+    // on the wire, so the choice is made once for the whole account, not per bill.
+    val units = t.unitsOf(inv)
+    val lines = if (t.itemised) inv.items else emptyList()
+    // One line is not a list. Render it as the single row it has always been — the tick target is the
+    // line itself where there is one, so even this simple case is paid the precise way.
+    if (lines.size <= 1) {
+        val unit = units.firstOrNull() ?: inv.id
+        val ticked = choosing && t.selected.contains(unit)
+        TuitionRow(
+            label = inv.label.ifBlank { "Tuition" },
+            sub = sub,
+            amount = formatMoney(inv.balanceMinor, currency),
+            style = style,
+            ticked = ticked,
+            tickable = choosing,
+            onClick = { onToggleUnit(unit) },
+        )
+        return
+    }
+    val allOn = choosing && units.isNotEmpty() && units.all { t.selected.contains(it) }
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = style.tile,
+        contentColor = style.tileInk,
+        border = BorderStroke(if (allOn) 2.dp else 1.dp, if (allOn) style.accent else style.tileInk.copy(alpha = 0.45f)),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
+            // The bill's own heading. Tapping it takes (or leaves) the whole month in one go, so
+            // "pay everything on this bill" never costs a tap per line.
+            Surface(
+                onClick = { onToggleInvoice(inv.id) },
+                enabled = choosing,
+                color = Color.Transparent,
+                contentColor = style.tileInk,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(inv.label.ifBlank { "Tuition" }, style = MaterialTheme.typography.titleMedium, color = style.tileInk, fontWeight = FontWeight.Bold)
+                        if (sub.isNotBlank()) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(sub, style = MaterialTheme.typography.bodySmall, color = style.tileInk.copy(alpha = 0.78f))
+                        }
+                    }
+                    Spacer(Modifier.size(10.dp))
+                    Text(formatMoney(inv.balanceMinor, currency), style = MaterialTheme.typography.titleMedium, color = style.tileInk, fontWeight = FontWeight.Bold)
+                    if (choosing) {
+                        Spacer(Modifier.size(10.dp))
+                        Text(if (allOn) "✓" else "○", style = MaterialTheme.typography.titleLarge, color = if (allOn) style.accent else style.tileInk.copy(alpha = 0.6f))
+                    }
+                }
+            }
+            lines.forEach { item ->
+                Spacer(Modifier.height(6.dp))
+                val ticked = choosing && t.selected.contains(item.id)
+                val note = when {
+                    item.isCredit -> "Already applied"
+                    !item.payable -> "Paid"
+                    else -> ""
+                }
+                Surface(
+                    onClick = { onToggleUnit(item.id) },
+                    enabled = choosing && item.payable,
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (ticked) style.accent.copy(alpha = 0.16f) else Color.Transparent,
+                    contentColor = style.tileInk,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                item.label.ifBlank { "Tuition" },
+                                style = MaterialTheme.typography.bodyLarge,
+                                // A line that can't be paid is stated, not offered.
+                                color = if (item.payable) style.tileInk else style.tileInk.copy(alpha = 0.6f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (note.isNotBlank()) {
+                                Spacer(Modifier.height(2.dp))
+                                Text(note, style = MaterialTheme.typography.bodySmall, color = style.tileInk.copy(alpha = 0.6f))
+                            }
+                        }
+                        Spacer(Modifier.size(10.dp))
+                        Text(
+                            // The line's own price, which for a bursary is the money coming OFF.
+                            formatSignedMoney(if (item.payable) item.balanceMinor else item.amountMinor, currency),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (item.payable) style.tileInk else style.tileInk.copy(alpha = 0.6f),
+                            fontWeight = FontWeight.Bold,
+                        )
+                        if (choosing) {
+                            Spacer(Modifier.size(10.dp))
+                            Text(
+                                if (!item.payable) " " else if (ticked) "✓" else "○",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = if (ticked) style.accent else style.tileInk.copy(alpha = 0.6f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A single tappable bill row — the pre-0.43.0 shape, still exactly right for a one-line bill. */
+@Composable
+private fun TuitionRow(
+    label: String,
+    sub: String,
+    amount: String,
+    style: SceneStyle,
+    ticked: Boolean,
+    tickable: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        enabled = tickable,
+        shape = RoundedCornerShape(12.dp),
+        color = style.tile,
+        contentColor = style.tileInk,
+        border = BorderStroke(if (ticked) 2.dp else 1.dp, if (ticked) style.accent else style.tileInk.copy(alpha = 0.45f)),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.titleMedium, color = style.tileInk)
+                if (sub.isNotBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(sub, style = MaterialTheme.typography.bodySmall, color = style.tileInk.copy(alpha = 0.78f))
+                }
+            }
+            Spacer(Modifier.size(10.dp))
+            Text(amount, style = MaterialTheme.typography.titleMedium, color = style.tileInk, fontWeight = FontWeight.Bold)
+            if (tickable) {
+                Spacer(Modifier.size(10.dp))
+                Text(if (ticked) "✓" else "○", style = MaterialTheme.typography.titleLarge, color = if (ticked) style.accent else style.tileInk.copy(alpha = 0.6f))
+            }
+        }
+    }
+}
+
 /** A number pad for a typed tuition amount — a part payment, or money paid ahead. Floored at the
- *  school's minimum (the server re-checks it), and capped so a slipped finger can't charge a fortune. */
+ *  school's minimum (the server re-checks it), and capped so a slipped finger can't charge a fortune.
+ *  [forName] is the child it is for, when the parent picked one; [balanceMinor] is that child's own
+ *  balance, so the wording matches whose money this is. */
 @Composable
 private fun TuitionAmountPad(
     t: TuitionState,
     style: SceneStyle,
+    forName: String,
+    balanceMinor: Long,
     onConfirm: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
     val currency = t.currency.ifBlank { "USD" }
     val factor = factorFor(currency)
-    var digits by remember(t.session) { mutableStateOf("") }
+    var digits by remember(t.session, forName) { mutableStateOf("") }
     val major = digits.toLongOrNull() ?: 0L
     val minor = major * factor
     val min = t.minAmountMinor
     val valid = minor >= min && minor <= TUITION_MAX_MINOR
+    val first = forName.substringBefore(' ').takeIf { it.isNotBlank() }
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
-            if (t.balanceMinor > 0) "How much would you like to pay?" else "Pay towards the next bill",
+            when {
+                balanceMinor > 0 && first != null -> "How much towards $first's balance?"
+                balanceMinor > 0 -> "How much would you like to pay?"
+                first != null -> "Pay towards $first's next bill"
+                else -> "Pay towards the next bill"
+            },
             style = MaterialTheme.typography.headlineSmall,
             color = style.onScene,
             textAlign = TextAlign.Center,
@@ -1206,6 +1430,11 @@ private fun symbolFor(currency: String) = when (currency.uppercase()) {
     "SAR" -> "SAR "
     else -> ""
 }
+
+/** A SIGNED amount, for the one place a negative can appear: a credit line on a bill (a bursary, a
+ *  correction). The minus belongs in front of the symbol — "−£30", not "£-30". */
+private fun formatSignedMoney(minor: Long, currency: String): String =
+    if (minor < 0) "−${formatMoney(-minor, currency)}" else formatMoney(minor, currency)
 
 /** Format integer minor units as a human amount (e.g. 2500 USD → "$25"). */
 fun formatMoney(minor: Long, currency: String): String {

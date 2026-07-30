@@ -3,6 +3,25 @@
 
 # Changelog
 
+## 0.9.34
+- **The tuition screen is now laid out child by child.** A family with three children used to get one
+  condensed list where every row said "Tuition — Feb 2027" and nothing said who owed what. Each child
+  now has their own section: their name, their own **balance due**, **credit** or **"Nothing due"**, and
+  their own bills underneath.
+- **Add money for one child.** Where a family has more than one child, "pay a different amount" is now
+  a button per child — **"Add money for Maryam"** — so the money lands on that child's account. Paying
+  ahead for one child while another still owes now works properly, and the smallest payment is still £1/$1.
+- **Nothing due no longer opens a keypad.** A parent who owes nothing was previously dropped straight
+  onto a number pad, which reads as being asked for money. The kiosk now says what the account is first
+  — the credit on it, or simply "Nothing due" — and offers to take a payment only if they want to.
+- **Pay one thing off a bill.** A February bill is often £200 of tuition **plus** a £50 book fee, and a
+  parent asking to pay just the book fee couldn't be served. With **OpenMasjid Students 0.43.0** the
+  kiosk lists what a bill is made of and lets them tick the lines they want — and the school's ledger
+  settles exactly those lines, not the oldest bill instead. Lines already paid are shown as done, and a
+  bursary or discount is shown for information. "Full balance" is still the default, still one tap.
+  On an older Students nothing changes: a bill stays one line with one tick.
+- **(Requires updating the tablet app.)**
+
 ## 0.9.33
 - **Fixed the "Unlock" button on the PIN pad**, which was splitting across two lines ("Unlo / ck")
   since the type got bigger in 0.9.30. Delete and Unlock now share the keypad's own width beside the

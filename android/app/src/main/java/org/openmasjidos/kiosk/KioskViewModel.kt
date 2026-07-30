@@ -29,6 +29,7 @@ import org.openmasjidos.kiosk.local.PairingRecord
 import org.openmasjidos.kiosk.kiosk.DeviceStatus
 import org.openmasjidos.kiosk.net.HeartbeatOutcome
 import org.openmasjidos.kiosk.net.PairResult
+import org.openmasjidos.kiosk.net.TuitionPay
 import org.openmasjidos.kiosk.readers.PaymentController
 import org.openmasjidos.kiosk.readers.ReaderConn
 import org.openmasjidos.kiosk.readers.ReaderManager
@@ -67,9 +68,52 @@ data class ManualEntry(
 /** Outcome the UI reports back after presenting the manual card form. */
 enum class ManualResult { Completed, Canceled, Failed }
 
+/** One LINE of a bill (contract 0.43.0): "Monthly tuition £200", "Book fee £50", "Bursary −£30".
+ *  [payable] is the only thing the tick logic cares about — a settled line and a credit line are both
+ *  shown (a part-paid bill should say what is already dealt with) but neither can be chosen. */
+data class TuitionItemUi(
+    val id: String,
+    val label: String,
+    val kind: String,
+    val amountMinor: Long,
+    val balanceMinor: Long,
+) {
+    val payable: Boolean get() = balanceMinor > 0
+    val isCredit: Boolean get() = kind == "credit" || amountMinor < 0
+}
+
 /** An open invoice a parent can pay (display + the opaque id used for selection). [studentName] is
- *  whose bill it is — blank for an only child (contract v2: one bill per student). */
-data class TuitionInvoiceUi(val id: String, val label: String, val dueDate: String, val balanceMinor: Long, val studentName: String = "")
+ *  whose bill it is — blank for an only child (contract v2: one bill per student). [items] is what the
+ *  bill is made of; empty against a Students older than 0.43.0, and then the bill is one tickable row
+ *  exactly as before. */
+data class TuitionInvoiceUi(
+    val id: String,
+    val label: String,
+    val dueDate: String,
+    val balanceMinor: Long,
+    val studentName: String = "",
+    val items: List<TuitionItemUi> = emptyList(),
+) {
+    /** The lines a parent can actually choose. */
+    val payableItems: List<TuitionItemUi> get() = items.filter { it.payable }
+
+    /** What ticking THIS bill selects: its lines when it has them, else the bill itself. One or the
+     *  other — a charge that mixes the two can't be expressed on the wire (the provider takes `lines`
+     *  or `allocations`, and a partial `lines[]` is a hard rejection). */
+    val unitIds: List<String> get() = if (items.isEmpty()) listOf(id) else payableItems.map { it.id }
+}
+
+/** One CHILD's part of the account: their name, their own balance and credit, and their own bills.
+ *  [key] is the opaque per-session handle for "pay towards this child" — the school's internal id
+ *  never reaches the tablet. Blank on the (defensive) unattributed section, which therefore offers no
+ *  per-child button. */
+data class TuitionStudentUi(
+    val key: String,
+    val name: String,
+    val balanceMinor: Long,
+    val creditMinor: Long,
+    val invoices: List<TuitionInvoiceUi> = emptyList(),
+)
 
 /** State of the tuition (students/billing) shell — the Student ID entry, the "is this your child?"
  *  confirmation, then the family's balance + invoices to pay. Only set when the active campaign is a
@@ -94,14 +138,36 @@ data class TuitionState(
      *  zero balance can't be told apart from "you're paid up ahead". */
     val creditMinor: Long = 0L,
     val currency: String = "",
-    val invoices: List<TuitionInvoiceUi> = emptyList(),
+    /** The account CHILD BY CHILD. One flat list of bills was unreadable the moment a family had two
+     *  children with the same month's label, and it could not say who was in credit. */
+    val students: List<TuitionStudentUi> = emptyList(),
     val payFull: Boolean = true,
-    val selected: Set<String> = emptySet(), // ticked invoice ids when !payFull
+    /** Ticked units when !payFull — bill LINE ids where the provider gave us lines, else invoice ids
+     *  (see [TuitionInvoiceUi.unitIds]). */
+    val selected: Set<String> = emptySet(),
     /** The school takes money when nothing is due (pay a term up front). Drives the amount pad. */
     val allowAdvance: Boolean = false,
     /** Floor for a typed amount — the school's, never below the kiosk's own £1/$1 minimum. */
     val minAmountMinor: Long = 100L,
-)
+) {
+    /** Every open bill across the family, for the totals and the pay-selection maths. */
+    val invoices: List<TuitionInvoiceUi> get() = students.flatMap { it.invoices }
+
+    /** True when EVERY open bill came with lines. The two selections can't be mixed in one charge (the
+     *  provider takes `lines` or `allocations`, and a `lines[]` covering only part of the charge is a
+     *  hard rejection), so this decides which one the WHOLE screen uses — rendering included. */
+    val itemised: Boolean get() = invoices.isNotEmpty() && invoices.all { it.items.isNotEmpty() }
+
+    /** What ticking this bill selects, honouring that whole-screen choice: its lines only when every
+     *  bill has them, else the bill itself. */
+    fun unitsOf(inv: TuitionInvoiceUi): List<String> = if (itemised) inv.unitIds else listOf(inv.id)
+
+    /** What a ticked unit id is worth, whichever kind of unit it is. */
+    fun unitAmount(id: String): Long =
+        invoices.firstOrNull { it.id == id }?.balanceMinor
+            ?: invoices.firstNotNullOfOrNull { inv -> inv.items.firstOrNull { it.id == id } }?.balanceMinor
+            ?: 0L
+}
 
 /** State of an in-progress donation. Amounts are integer MINOR units (validated server-side).
  *  The resting state is [GivingStep.Amount] — the kiosk idles on the giving screen (no attract).
@@ -895,7 +961,24 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                                 allowAdvance = fam.allowAdvance,
                                 minAmountMinor = fam.minAmountMinor,
                                 currency = fam.currency,
-                                invoices = fam.invoices.map { i -> TuitionInvoiceUi(i.id, i.label, i.dueDate, i.balanceMinor, i.studentName) },
+                                students = fam.students.map { s ->
+                                    TuitionStudentUi(
+                                        key = s.key,
+                                        name = s.name,
+                                        balanceMinor = s.balanceMinor,
+                                        creditMinor = s.creditMinor,
+                                        invoices = s.invoices.map { i ->
+                                            TuitionInvoiceUi(
+                                                i.id,
+                                                i.label,
+                                                i.dueDate,
+                                                i.balanceMinor,
+                                                i.studentName,
+                                                i.items.map { line -> TuitionItemUi(line.id, line.label, line.kind, line.amountMinor, line.balanceMinor) },
+                                            )
+                                        },
+                                    )
+                                },
                                 payFull = true,
                                 selected = emptySet(),
                             ),
@@ -912,21 +995,36 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         updateTuition { it.copy(payFull = full, error = null) }
     }
 
-    fun toggleTuitionInvoice(id: String) {
+    /** Tick or untick one unit of the bill — a LINE where the school itemises its bills, else the whole
+     *  bill (contract 0.43.0 §11.0b). */
+    fun toggleTuitionUnit(id: String) {
         onUserActivity()
         updateTuition { st -> st.copy(payFull = false, error = null, selected = if (st.selected.contains(id)) st.selected - id else st.selected + id) }
     }
 
-    /** Pay tuition on the reader: the whole balance, the picked invoices, or — when [amountMinor] is
-     *  given — a typed amount, which may be a part payment or money paid AHEAD of any bill (0.41.0).
-     *  Mirrors the donation reader flow, but the amount is recomputed server-side from the held
-     *  session, and it records a "payment" into the Students ledger — never a kiosk donation. */
-    fun payTuition() = payTuitionInternal(null)
+    /** Tick or untick a whole bill at once — every payable line of it, so a parent who wants the lot
+     *  doesn't have to tap each line. */
+    fun toggleTuitionInvoice(id: String) {
+        onUserActivity()
+        updateTuition { st ->
+            val inv = st.invoices.firstOrNull { it.id == id } ?: return@updateTuition st
+            val units = st.unitsOf(inv)
+            val allOn = units.isNotEmpty() && units.all { st.selected.contains(it) }
+            st.copy(payFull = false, error = null, selected = if (allOn) st.selected - units.toSet() else st.selected + units.toSet())
+        }
+    }
 
-    /** Pay a TYPED amount — a part payment, or money paid ahead when nothing is due. */
-    fun payTuitionAmount(amountMinor: Long) = payTuitionInternal(amountMinor)
+    /** Pay tuition on the reader: the whole balance, the ticked bills/lines, or — when [amountMinor] is
+     *  given — a typed amount, which may be a part payment or money paid AHEAD of any bill (0.41.0),
+     *  for one named child. Mirrors the donation reader flow, but the amount is recomputed server-side
+     *  from the held session, and it records a "payment" into the Students ledger — never a donation. */
+    fun payTuition() = payTuitionInternal(null, "")
 
-    private fun payTuitionInternal(amountMinor: Long?) {
+    /** Pay a TYPED amount — a part payment, or money paid ahead when nothing is due. [studentKey] names
+     *  the child whose ledger it belongs to (blank = the household, walked oldest-due-first). */
+    fun payTuitionAmount(amountMinor: Long, studentKey: String = "") = payTuitionInternal(amountMinor, studentKey)
+
+    private fun payTuitionInternal(amountMinor: Long?, studentKey: String) {
         val t = local.value.giving.tuition ?: return
         val readerConnected = ui.value.reader.conn == ReaderConn.Connected
         if (!readerConnected) {
@@ -934,7 +1032,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val payFull = t.payFull
-        val ids = t.selected.toList()
+        // Only ids that are still real: a selection made before a refresh must never survive into a
+        // charge as a made-up id (the server would refuse it anyway, after the parent had committed).
+        val ids = t.selected.filter { t.unitAmount(it) > 0 }
         if (amountMinor == null && !payFull && ids.isEmpty()) {
             updateTuition { it.copy(error = "Choose at least one item to pay, or pay the full balance.") }
             return
@@ -945,13 +1045,21 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             updateTuition { it.copy(error = "That's below the smallest payment this school accepts.") }
             return
         }
+        val pay = when {
+            amountMinor != null -> TuitionPay.Amount(amountMinor, studentKey)
+            payFull -> TuitionPay.Full
+            // Lines where the school itemises its bills, whole bills where it doesn't. Never both in
+            // one charge — the provider takes one breakdown or the other.
+            t.itemised -> TuitionPay.Items(ids)
+            else -> TuitionPay.Invoices(ids)
+        }
         // Show the amount immediately on the Card/Processing/Thanks screens (no "$0" flash before the
         // PI round-trip). This is a DISPLAY estimate from the looked-up balances; the server recomputes
         // the authoritative charge from the held session and serverChargeMinor overrides it below.
         val displayMinor = when {
             amountMinor != null -> amountMinor
             payFull -> t.balanceMinor
-            else -> t.invoices.filter { ids.contains(it.id) }.sumOf { it.balanceMinor }
+            else -> ids.sumOf { t.unitAmount(it) }
         }
         updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null, amountMinor = displayMinor) }
         givingJob?.cancel()
@@ -959,7 +1067,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val idem = UUID.randomUUID().toString()
             repo.log("info", "tuition_started", if (amountMinor != null) "typedAmount" else "payFull=$payFull items=${ids.size}")
             val pi = try {
-                repo.createTuitionPaymentIntent(t.session, payFull, ids, amountMinor, idem)
+                repo.createTuitionPaymentIntent(t.session, pay, idem)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
