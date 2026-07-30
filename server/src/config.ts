@@ -33,6 +33,21 @@ function readVersion(): string {
   return '0.1.0';
 }
 
+/** Where the shipped CHANGELOG.md lives — the source for the admin panel's "What's new".
+ *  It is copied next to the runtime in the image (/app/CHANGELOG.md); in dev it sits at the
+ *  repo root, two levels above the compiled server. Serving the file that shipped WITH this
+ *  image (rather than fetching GitHub) is the point: it always describes the version running. */
+function findChangelog(): string {
+  const fromEnv = env('CHANGELOG_PATH');
+  if (fromEnv) return fromEnv;
+  const candidates = [
+    path.join(process.cwd(), 'CHANGELOG.md'), // the image: WORKDIR /app
+    path.resolve(__dirname, '..', '..', 'CHANGELOG.md'), // dev: server/dist → repo root
+    path.resolve(process.cwd(), '..', 'CHANGELOG.md'), // dev: cwd = server/
+  ];
+  return candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
+}
+
 export const config = {
   port: intEnv('PORT', 8080),
   /** Bind all interfaces so the LAN (and Docker port mapping) can reach us. */
@@ -43,6 +58,8 @@ export const config = {
    *  at /app/public/download/openmasjidkiosk.apk; absent in local dev (then /new shows a
    *  friendly "coming after the first build" note). */
   apkPath: env('APK_PATH', path.resolve(__dirname, '..', 'public', 'download', 'openmasjidkiosk.apk')),
+  /** The release notes this build shipped with (admin panel → "What's new"). */
+  changelogPath: findChangelog(),
   version: readVersion(),
 
   /** OpenMasjidOS Fabric (the platform↔app SSO + appearance + Stripe + notifications

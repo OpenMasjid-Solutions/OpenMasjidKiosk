@@ -246,6 +246,24 @@ async function main(): Promise<void> {
     return { data: { ok: true } };
   });
 
+  // ── "What's new": the release notes THIS build shipped with ─────────────────
+  // Read from the CHANGELOG.md copied into the image, not fetched from GitHub — an admin
+  // panel that describes a release the container isn't running is worse than none, and a
+  // masjid server has no business making an outbound call to render a menu. Admin-gated
+  // (so it stays off the tunnel with the rest of /api/admin) and capped, since it is a
+  // file that grows by a section every release.
+  const CHANGELOG_MAX = 256 * 1024;
+  app.get('/api/admin/changelog', { preHandler: requireAdmin }, async () => {
+    let markdown = '';
+    try {
+      markdown = fs.readFileSync(config.changelogPath, 'utf8').slice(0, CHANGELOG_MAX);
+    } catch {
+      // Not fatal: an image built without it just shows "no release notes".
+      log.debug('changelog not readable');
+    }
+    return { data: { version: config.version, markdown } };
+  });
+
   // ── Fabric notifications: diagnose + send a test alert ──────────────────────
   app.post('/api/admin/notify-test', { preHandler: requireAdmin }, async () => {
     const base = config.omosBaseUrl;

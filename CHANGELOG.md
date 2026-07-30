@@ -3,6 +3,15 @@
 
 # Changelog
 
+## 0.9.35
+- **"What's new" in the account menu.** The admin panel can now tell you what changed. Open the
+  account menu at the top right and there's a **What's new** entry with the release notes, newest
+  first, and the version you're running marked. It reads the notes that shipped inside this build,
+  so it always describes the app in front of you — nothing is fetched from the internet.
+- **A gold dot when there's something to read.** When OpenMasjidOS updates the kiosk app, the account
+  button gets a small gold dot until you've opened the notes. It's per browser, and it never appears
+  on a fresh install.
+
 ## 0.9.34
 - **The tuition screen is now laid out child by child.** A family with three children used to get one
   condensed list where every row said "Tuition — Feb 2027" and nothing said who owed what. Each child

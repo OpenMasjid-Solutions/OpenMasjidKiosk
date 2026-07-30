@@ -56,6 +56,10 @@ RUN npm ci --omit=dev
 COPY --from=server /server/dist ./dist
 COPY --from=web /web/dist ./public
 
+# The release notes this image shipped with — the admin panel's "What's new" reads this
+# file, so the notes always describe the version actually running (no call to GitHub).
+COPY CHANGELOG.md ./CHANGELOG.md
+
 # Bundle the Android kiosk APK, served by /new. CI drops the signed APK into ./apk/
 # before this build; locally the folder holds only a .gitkeep (build still succeeds).
 COPY apk/ ./public/download/

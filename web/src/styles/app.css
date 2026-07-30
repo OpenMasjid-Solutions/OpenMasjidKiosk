@@ -225,6 +225,34 @@ h1, h2, h3, p, ul { margin: 0; }
 .menu-item svg { color: var(--color-ink-muted); flex-shrink: 0; }
 .menu-foot { padding: 0.55rem 0.7rem 0.25rem; margin-block-start: 0.3rem; border-block-start: 1px solid var(--color-border); font-size: 0.8rem; color: var(--color-ink-faint); }
 
+/* "What's new" — a quiet dot on the account button when the app has been updated since the
+   release notes were last opened. Gold, not red: it's news, not a problem. */
+.profile-btn { position: relative; }
+.profile-dot {
+  position: absolute; inset-block-start: 0.15rem; inset-inline-end: 0.15rem;
+  width: 0.55rem; height: 0.55rem; border-radius: 50%;
+  background: var(--color-gold); box-shadow: 0 0 0 2px var(--color-surface-raised);
+}
+.menu-dot {
+  margin-inline-start: auto; width: 0.45rem; height: 0.45rem; border-radius: 50%;
+  background: var(--color-gold); flex-shrink: 0;
+}
+
+/* ── What's new (release notes modal) ────────────────────────────────────────── */
+.wn-release { padding-block: 0.7rem; border-block-end: 1px solid var(--color-border); }
+.wn-release:last-child { border-block-end: 0; }
+.wn-version {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin: 0 0 0.4rem; font-size: 1.05rem; font-weight: 700; color: var(--color-ink);
+}
+.wn-list { margin: 0; padding-inline-start: 1.1rem; display: flex; flex-direction: column; gap: 0.45rem; }
+.wn-list li { font-size: 0.92rem; line-height: 1.6; color: var(--color-ink-muted); }
+.wn-list strong { color: var(--color-ink); font-weight: 650; }
+.wn-list code {
+  font-size: 0.86em; padding: 0.05rem 0.3rem; border-radius: 5px;
+  background: var(--glass-bg-inset); color: var(--color-ink);
+}
+
 /* ── Bottom dock (primary navigation — matches OpenMasjidOS/Donations) ──────── */
 .dock-wrap {
   position: fixed; inset-block-end: 1rem; inset-inline: 0; z-index: 40;

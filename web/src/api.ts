@@ -33,6 +33,13 @@ export interface Session {
   sso: { enabled: boolean; reachable: boolean; username?: string };
 }
 
+/** The release notes shipped inside this image — raw CHANGELOG.md plus the version running,
+ *  so "What's new" always describes the build in front of you. */
+export interface Changelog {
+  version: string;
+  markdown: string;
+}
+
 export interface NotifyTestResult {
   baseUrlSet: boolean;
   hasSecret: boolean;
@@ -56,6 +63,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const getAppInfo = () => request<AppInfo>('/api/app');
 export const getSession = () => request<Session>('/api/session');
+export const getChangelog = () => request<Changelog>('/api/admin/changelog');
 
 export const setupAdmin = (password: string, name?: string) =>
   request<{ ok: true }>('/api/setup', { method: 'POST', body: JSON.stringify({ password, name }) });
