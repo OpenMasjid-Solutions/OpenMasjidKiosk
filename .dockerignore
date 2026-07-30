@@ -10,3 +10,7 @@ docs
 screenshots
 android
 **/*.md
+# …except the release notes, which SHIP in the image: the admin panel's "What's new" reads
+# /app/CHANGELOG.md so the notes always describe the version running. It is copied in the
+# last runtime step, so editing it only invalidates that one cheap layer.
+!CHANGELOG.md

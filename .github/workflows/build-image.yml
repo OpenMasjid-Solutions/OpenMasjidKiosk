@@ -22,8 +22,14 @@ on:
     # Changes that don't affect the image — skip the (slow) multi-arch build.
     # docker-compose.yml is NOT in the image build context, so re-pinning the @sha256
     # digest there must not trigger a rebuild that would move the tag off that digest.
+    # CHANGELOG.md is deliberately NOT ignored: it ships in the image (the admin panel's
+    # "What's new" reads it), so an image that skipped it would describe the wrong release.
+    # `paths-ignore` has no re-include syntax, hence the explicit list rather than '**/*.md'.
     paths-ignore:
-      - '**/*.md'
+      - 'README.md'
+      - '**/README.md'
+      - 'CONTRIBUTING.md'
+      - 'CLAUDE.md'
       - 'docs/**'
       - 'screenshots/**'
       - 'LICENSE'
