@@ -3,6 +3,25 @@
 
 # Changelog
 
+## 0.9.36
+- **Fixed: a child's bills couldn't be paid when a sibling was in credit.** If one child was paid
+  ahead and another owed, the school's household total nets the two out — so a family with £340 of
+  credit on one child and £160 owed on another showed "£180 paid ahead", listed the £160 of unpaid
+  bills, and offered no way to pay any of them. The kiosk now works from what the **bills** come to
+  rather than that netted total: "Balance due £160" at the top, the bills tickable, and a "Pay £160"
+  button. Any credit on the family is still shown, underneath, where it can't be mistaken for having
+  nothing to pay.
+- **A "Leave" button on the balance screen.** It used to be a small text link at the very bottom of
+  the screen, and with nothing payable it was the only control there at all.
+- **The balance screen now closes itself.** A family's names, bills and arrears can no longer sit on a
+  wall-mounted tablet indefinitely: the screen returns to the Student ID prompt after three minutes
+  regardless of whether anyone is touching it, on top of the existing 45-second inactivity reset.
+- **The countdown ring tells the truth again.** Once you moved past the first screen it was drawing a
+  stale, already-finished timer, so the one signal that the kiosk is about to reset was wrong.
+- Paying part of what's owed is no longer mistaken for paying ahead when a sibling's credit nets the
+  family to zero, and the Fees tab keeps the school's name in its heading after a timeout.
+- **(Requires updating the tablet app.)**
+
 ## 0.9.35
 - **"What's new" in the account menu.** The admin panel can now tell you what changed. Open the
   account menu at the top right and there's a **What's new** entry with the release notes, newest

@@ -153,6 +153,15 @@ data class TuitionState(
     /** Every open bill across the family, for the totals and the pay-selection maths. */
     val invoices: List<TuitionInvoiceUi> get() = students.flatMap { it.invoices }
 
+    /** What is actually PAYABLE — the open bills added up.
+     *
+     *  NOT [balanceMinor]. The household figure is a NET: one child's credit cancels another's bill
+     *  in it, so a family with Yusuf £340 ahead and Yunus £160 behind reports a £0 balance and £180
+     *  of credit while £160 is genuinely owed. Gating the pay controls on the balance left the
+     *  parent staring at three of Yunus's bills with no way to pay any of them. Credit belongs to
+     *  the child holding it and never pays a sibling's bill, so the bills are the honest total. */
+    val dueMinor: Long get() = invoices.sumOf { it.balanceMinor }.takeIf { it > 0 } ?: balanceMinor
+
     /** True when EVERY open bill came with lines. The two selections can't be mixed in one charge (the
      *  provider takes `lines` or `allocations`, and a `lines[]` covering only part of the charge is a
      *  hard rejection), so this decides which one the WHOLE screen uses — rendering included. */
@@ -379,7 +388,16 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         // Arm/cancel the idle-abandon timer at every step transition (so a donor who fills in details
         // then walks away doesn't leave their name/email on screen — see rescheduleIdleReset).
         viewModelScope.launch {
-            local.map { it.giving.step }.distinctUntilChanged().collect { rescheduleIdleReset() }
+            local.map { it.giving.step }.distinctUntilChanged().collect {
+                rescheduleIdleReset()
+                // …and re-evaluate the return-to-main timer, which self-cancels off the amount screen.
+                // Without this it was only ever re-evaluated BY onUserActivity while already on that
+                // screen, so stepping into a donation left `autoReturnStartedMs` set at its old value.
+                // The countdown ring prefers that marker over the idle one, so every later step drew a
+                // ring frozen at whatever was left of a timer that had already stopped mattering — the
+                // one piece of feedback telling a parent the kiosk is about to reset, showing a lie.
+                rescheduleAutoReturn()
+            }
         }
     }
 
@@ -456,6 +474,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     private var autoReturnJob: Job? = null
     private var idleResetJob: Job? = null
+    /** The touch-proof ceiling on the tuition balance screen — see [armTuitionHardReset]. */
+    private var tuitionHardResetJob: Job? = null
 
     /** The active campaign (the selected tab, or the main campaign). */
     private fun activeCampaign(): Campaign? {
@@ -530,9 +550,20 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Return the giving flow to the resting amount screen (after cancel / thank-you / error). */
+    /** Return the giving flow to the resting amount screen (after cancel / thank-you / error).
+     *
+     *  A tuition tile keeps its SHELL — the school's name, tagline and availability — because that is
+     *  the tile's heading, fetched once when the campaign mounts and never re-fetched (the mount is
+     *  keyed on the campaign id, which doesn't change). Wiping it left the Fees tab headed with the
+     *  bare campaign title after every timeout. Everything about the FAMILY goes. */
     private fun resetGiving() {
-        updateGiving { GivingState() }
+        tuitionHardResetJob?.cancel()
+        val shell = local.value.giving.tuition
+        updateGiving {
+            GivingState(
+                tuition = shell?.let { TuitionState(schoolName = it.schoolName, tagline = it.tagline, available = it.available) },
+            )
+        }
         rescheduleAutoReturn()
     }
 
@@ -985,8 +1016,26 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     }
                     rescheduleIdleReset()
+                    armTuitionHardReset()
                 }
             }
+        }
+    }
+
+    /** A HARD ceiling on how long a named family's balance may sit on the wall.
+     *
+     *  The 45-second idle timer is extended by every touch, which is right for a donation in progress
+     *  — nobody should be yanked away mid-flow. It is wrong for a balance screen: a parent who is
+     *  stuck, or reading, or just resting a hand on the tablet keeps their children's names, bills and
+     *  arrears on a foyer screen indefinitely, and that is the one thing this screen must not do.
+     *  So this deadline is NOT reset by activity. It never interrupts a payment: by the time the card
+     *  is being collected the step has moved past the balance screen and the check below no-ops. */
+    private fun armTuitionHardReset() {
+        tuitionHardResetJob?.cancel()
+        tuitionHardResetJob = viewModelScope.launch {
+            delay(TUITION_MAX_ON_SCREEN_MS)
+            val s = local.value.giving.step
+            if (s == GivingStep.TuitionConfirm || s == GivingStep.TuitionInvoices) cancelGiving()
         }
     }
 
@@ -1058,7 +1107,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         // the authoritative charge from the held session and serverChargeMinor overrides it below.
         val displayMinor = when {
             amountMinor != null -> amountMinor
-            payFull -> t.balanceMinor
+            // The open bills, not the netted household balance — see TuitionState.dueMinor.
+            payFull -> t.dueMinor
             else -> ids.sumOf { t.unitAmount(it) }
         }
         updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null, amountMinor = displayMinor) }
@@ -1291,6 +1341,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         const val IDLE_ABANDON_MS = 45_000L
         // While the keyed-card WebView is open the donor's taps don't reach us, so give a long window.
         const val MANUAL_IDLE_MS = 120_000L
+        // The longest a named family's balance may stay on the wall, touches or not. Generous enough
+        // to read three bills and use the amount pad; short enough that a screen full of a family's
+        // arrears can't be left up by someone who wandered off with a finger on the glass.
+        const val TUITION_MAX_ON_SCREEN_MS = 180_000L
         // Deliberately hard to trigger by accident: 10 rapid taps in the hidden corner within the
         // window below. Bumped from 7 → 10 to further lock the kiosk down.
         const val SECRET_TAPS = 10

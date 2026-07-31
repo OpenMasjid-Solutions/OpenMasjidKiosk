@@ -496,6 +496,18 @@ function studentByKey(session: TuitionSession, key: string): { studentId: string
   return session.students[Number(m[1])] ?? null;
 }
 
+/** What is actually PAYABLE: the open bills added up.
+ *
+ *  Deliberately not `session.balanceCents`. The household figure Students reports is a NET — one
+ *  child's credit cancels another's bill in it — so a family with a child £340 ahead and a child
+ *  £160 behind reports a £0 balance while £160 is owed. Credit is per child and never pays a
+ *  sibling's bill, so the sum of the open bills is the honest answer to "how much can I pay?".
+ *  Falls back to the household balance only when there are no invoices to add up. */
+export function dueCents(session: TuitionSession): number {
+  const fromBills = session.invoices.reduce((n, i) => n + i.balanceCents, 0);
+  return fromBills > 0 ? fromBills : session.balanceCents;
+}
+
 const sessions = new Map<string, TuitionSession>();
 const SESSION_TTL_MS = 15 * 60_000;
 const SESSION_MAX = 2000;
@@ -561,9 +573,18 @@ export type AmountResult =
  *  contract still documents it and a later Students may honour it again. */
 export function computeTuitionAmount(session: TuitionSession, selection: TuitionSelection): AmountResult {
   if (selection.kind === 'full') {
-    if (session.balanceCents <= 0) return { error: 'nothing-due' };
-    if (session.balanceCents < session.minAmountCents) return { error: 'below-min' };
-    return { amountCents: session.balanceCents, allocations: null, students: null, lines: null };
+    // What "pay everything" charges is what the open BILLS come to — NOT the household's balance.
+    // Those differ the moment one child is in credit: a family where Yusuf is £340 ahead and Yunus
+    // owes £160 reports a household balance of £0 and £180 of credit, because Students derives the
+    // household figure by netting. £160 is still genuinely owed and payable — credit belongs to the
+    // child holding it and never pays a sibling's bill — so charging the net would offer the parent
+    // nothing to pay while three of Yunus's bills sat on the screen.
+    const due = dueCents(session);
+    if (due <= 0) return { error: 'nothing-due' };
+    if (due < session.minAmountCents) return { error: 'below-min' };
+    // No breakdown: Students walks the family's open invoices oldest-due-first, which lands every
+    // penny of this on the child who actually owes it — exactly what "pay everything due" means.
+    return { amountCents: due, allocations: null, students: null, lines: null };
   }
   if (selection.kind === 'amount') {
     // A TYPED amount — the advance/part-payment path (§11.0a). No line breakdown is possible (there is
@@ -582,8 +603,9 @@ export function computeTuitionAmount(session: TuitionSession, selection: Tuition
     // Paying ahead is only offered when the school advertised it; paying part of a real balance is
     // always fine, so an amount within what's owed needs no such permission. The ceiling is the chosen
     // child's balance when there is one — £50 for a child who owes nothing is an advance even in a
-    // household that owes £200.
-    const ceiling = kid ? kid.balanceCents : session.balanceCents;
+    // household that owes £200 — and otherwise what the open bills come to, never the netted
+    // household balance (see [dueCents]: that reads £0 whenever a sibling is in credit).
+    const ceiling = kid ? kid.balanceCents : dueCents(session);
     if (amountCents > ceiling && !session.allowAdvance) return { error: 'advance-not-allowed' };
     return kid
       ? { amountCents, allocations: null, students: [{ studentId: kid.studentId, amountCents }], lines: null, studentId: kid.studentId }

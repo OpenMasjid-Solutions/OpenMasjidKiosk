@@ -813,7 +813,9 @@ private fun TuitionInvoicesStep(
 ) {
     val t = tuition ?: TuitionState()
     val currency = t.currency.ifBlank { "USD" }
-    val owes = t.balanceMinor > 0
+    // What can be paid is what the BILLS come to, never the household balance: that figure is netted,
+    // so one child being in credit hides another child's real, payable bills behind a £0 total.
+    val owes = t.dueMinor > 0
     val kids = t.students
     // One child needs no headings — the family line above already names the account. Several do.
     val perChild = kids.size > 1
@@ -835,7 +837,7 @@ private fun TuitionInvoicesStep(
         )
         return
     }
-    val payAmount = if (t.payFull) t.balanceMinor else t.selected.sumOf { t.unitAmount(it) }
+    val payAmount = if (t.payFull) t.dueMinor else t.selected.sumOf { t.unitAmount(it) }
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -846,7 +848,10 @@ private fun TuitionInvoicesStep(
         ) {
             Text(t.familyLabel.ifBlank { "Your account" }, style = MaterialTheme.typography.headlineSmall, color = style.onScene, textAlign = TextAlign.Center)
             Spacer(Modifier.height(4.dp))
-            TuitionAccountLine(t.balanceMinor, t.creditMinor, currency, style, big = true)
+            // The headline is what's DUE. Credit is shown too when there is any, but it never
+            // replaces a real balance — "£180 paid ahead" above three unpaid bills is a lie of
+            // omission, and it is exactly what the netted household figure produces.
+            TuitionAccountLine(t.dueMinor, t.creditMinor, currency, style, big = true)
             Spacer(Modifier.height(16.dp))
             if (owes) {
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
@@ -864,6 +869,9 @@ private fun TuitionInvoicesStep(
                 )
             }
             kids.forEach { kid ->
+                // A child's own bills, which (unlike the household) are never netted against a
+                // sibling — so this is both what they owe and what a payment for them can clear.
+                val kidDue = kid.invoices.sumOf { it.balanceMinor }.takeIf { it > 0 } ?: kid.balanceMinor
                 if (perChild) {
                     Spacer(Modifier.height(10.dp))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -877,7 +885,7 @@ private fun TuitionInvoicesStep(
                             modifier = Modifier.weight(1f),
                         )
                         Spacer(Modifier.size(10.dp))
-                        TuitionAccountLine(kid.balanceMinor, kid.creditMinor, currency, style, big = false, compact = true)
+                        TuitionAccountLine(kidDue, kid.creditMinor, currency, style, big = false, compact = true)
                     }
                     Spacer(Modifier.height(6.dp))
                 }
@@ -914,8 +922,11 @@ private fun TuitionInvoicesStep(
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth().height(64.dp),
                     ) {
+                        val first = kid.name.substringBefore(' ').ifBlank { "this child" }
                         Text(
-                            "Add money for ${kid.name.substringBefore(' ').ifBlank { "this child" }}",
+                            // "Add money" is the right words for a child who is square; for one who
+                            // owes, it's a part payment against a bill they can see above.
+                            if (kidDue > 0) "Pay another amount for $first" else "Add money for $first",
                             style = MaterialTheme.typography.titleMedium,
                             color = style.onScene,
                             maxLines = 1,
@@ -961,17 +972,31 @@ private fun TuitionInvoicesStep(
                 )
             }
         }
-        Spacer(Modifier.height(6.dp))
-        TextButton(onClick = onCancel) { Text("Cancel", color = style.onSceneMuted) }
+        // A real way out, always. This screen shows a named family's balance, so leaving it must not
+        // depend on there being something to pay — with a child in credit there was no Pay button and
+        // no advance button, and the only exit was a faint text link at the bottom of a tall screen.
+        // It is also the button a parent needs when they have finished and don't want the next person
+        // reading their account (the idle timer clears it either way, but not for 45 seconds).
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(
+            onClick = onCancel,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth().height(64.dp),
+        ) { Text("Leave", style = MaterialTheme.typography.titleMedium, color = style.onScene) }
     }
 }
 
-/** What an account actually says, in one line. Balance and credit are never both non-zero, and a bare
- *  "0" can't tell "square" from "paid the year already" — once an advance settles its invoice, the
- *  credit is the only signal left. */
+/** What an account actually says, in one line: what's owed, what's already paid ahead, or nothing
+ *  due. A bare "0" can't tell "square" from "paid the year already" — once an advance settles its
+ *  invoice the credit is the only signal left.
+ *
+ *  Due and credit CAN both be non-zero here even though Students never reports both on one ledger,
+ *  because a household total nets its children against each other: one child £340 ahead and another
+ *  £160 behind is £160 due AND £180 of credit. Both get said — leading with the credit alone reads
+ *  as "nothing to pay" over a screen full of unpaid bills. */
 @Composable
 private fun TuitionAccountLine(
-    balanceMinor: Long,
+    dueMinor: Long,
     creditMinor: Long,
     currency: String,
     style: SceneStyle,
@@ -979,14 +1004,28 @@ private fun TuitionAccountLine(
     compact: Boolean = false,
 ) {
     val text = MaterialTheme.typography.let { if (big) it.headlineMedium else it.titleMedium }
-    when {
-        balanceMinor > 0 -> Text(
-            if (compact) formatMoney(balanceMinor, currency) else "Balance due ${formatMoney(balanceMinor, currency)}",
-            style = text,
-            color = style.accent,
-            fontWeight = FontWeight.Bold,
-        )
-        creditMinor > 0 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    if (dueMinor > 0) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                if (compact) formatMoney(dueMinor, currency) else "Balance due ${formatMoney(dueMinor, currency)}",
+                style = text,
+                color = style.accent,
+                fontWeight = FontWeight.Bold,
+            )
+            if (creditMinor > 0 && !compact) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "${formatMoney(creditMinor, currency)} is already paid ahead on this family — it comes off future bills.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = style.onSceneMuted,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+        return
+    }
+    if (creditMinor > 0) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 "${formatMoney(creditMinor, currency)} paid ahead",
                 style = text,
@@ -1003,8 +1042,9 @@ private fun TuitionAccountLine(
                 )
             }
         }
-        else -> Text("Nothing due", style = text, color = style.onSceneMuted, fontWeight = FontWeight.Bold)
+        return
     }
+    Text("Nothing due", style = text, color = style.onSceneMuted, fontWeight = FontWeight.Bold)
 }
 
 /** One bill. A bill with a single line is one row, exactly as it always was; a bill made of several

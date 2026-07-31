@@ -24,7 +24,7 @@ import { Store, grossUpForFees, type Device, type DonationRecord, type EmailRece
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus } from './fabric';
 import { renderReceipt, type ReceiptContext } from './email';
-import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
+import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { LoginLimiter } from './rateLimit';
 import { toCsv } from './csv';
 import {
@@ -1450,6 +1450,11 @@ async function main(): Promise<void> {
           // opaque handle for "pay towards this child"; the internal studentId never leaves the server.
           students: sections,
           balanceCents: r.family.balanceCents,
+          // What is actually PAYABLE — the open bills added up. It differs from `balanceCents` the
+          // moment a sibling is in credit, because the household figure Students reports is a NET:
+          // a family with one child £340 ahead and another £160 behind reports a £0 balance. This is
+          // the number the pay button spends, and the server re-derives it at pay time.
+          dueCents: dueCents(session),
           // 0.41.0: money already paid ahead. A zero balance means "square" or "paid ahead", and the
           // parent should see which — once an advance settles its invoice this is the only signal left.
           creditCents: r.family.creditCents,

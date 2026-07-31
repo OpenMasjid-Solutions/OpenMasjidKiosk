@@ -515,6 +515,61 @@ test('computeTuitionAmount "full" with nothing due errors (never a zero charge)'
   assert.deepEqual(computeTuitionAmount(session(0, []), { kind: 'full' }), { error: 'nothing-due' });
 });
 
+// Reported from a tablet: a family where one child was £340 in credit and another owed £160 showed
+// three unpaid bills and NO way to pay any of them. Students nets the household figure, so it read
+// balance 0 / credit 180 — and every pay control keyed off that balance.
+test('"full" pays the open BILLS, not the household balance netted down by a sibling\'s credit', () => {
+  const netted = session(
+    0, // household balance: Yusuf's credit has cancelled Yunus's bills out of it
+    [
+      { id: 'inv_jul', balanceCents: 2000, studentId: 'stu_2' },
+      { id: 'inv_jan', balanceCents: 12000, studentId: 'stu_2' },
+      { id: 'inv_jul26', balanceCents: 2000, studentId: 'stu_2' },
+    ],
+    {
+      creditCents: 18000,
+      students: [
+        { studentId: 'stu_1', name: 'Yusuf M', balanceCents: 0, creditCents: 34000 },
+        { studentId: 'stu_2', name: 'Yunus M', balanceCents: 16000, creditCents: 0 },
+      ],
+    },
+  );
+  assert.deepEqual(computeTuitionAmount(netted, { kind: 'full' }), {
+    amountCents: 16000, // what Yunus actually owes — NOT the £0 household net
+    allocations: null,
+    students: null,
+    lines: null,
+  });
+});
+
+test('a part payment isn\'t mistaken for an advance when a sibling\'s credit nets the household to zero', () => {
+  // allowAdvance off: paying £50 towards Yunus's real £160 of bills must still be allowed. Measuring
+  // against the netted household balance (0) would call every penny of it "paying ahead".
+  const netted = session(0, [{ id: 'inv_jan', balanceCents: 16000, studentId: 'stu_2' }], {
+    allowAdvance: false,
+    creditCents: 18000,
+    students: [
+      { studentId: 'stu_1', name: 'Yusuf M', balanceCents: 0, creditCents: 34000 },
+      { studentId: 'stu_2', name: 'Yunus M', balanceCents: 16000, creditCents: 0 },
+    ],
+  });
+  assert.equal('amountCents' in computeTuitionAmount(netted, { kind: 'amount', amountCents: 5000 }), true);
+  // …and the per-child route still measures against THAT child: Yusuf owes nothing, so money for him
+  // is an advance and stays refused.
+  assert.deepEqual(computeTuitionAmount(netted, { kind: 'amount', amountCents: 5000, studentKey: 's0' }), { error: 'advance-not-allowed' });
+});
+
+test('"full" still uses the household balance when there are no bills to add up (unchanged path)', () => {
+  // A balance with no itemised invoices behind it (an older provider, or a lookup that returned
+  // none) must keep working exactly as before rather than reading as nothing due.
+  assert.deepEqual(computeTuitionAmount(session(35000, []), { kind: 'full' }), {
+    amountCents: 35000,
+    allocations: null,
+    students: null,
+    lines: null,
+  });
+});
+
 test('computeTuitionAmount invoices sums the SERVER-side stored amounts (client sends only ids)', () => {
   const s = session(35000, [{ id: 'inv_9', balanceCents: 15000 }, { id: 'inv_10', balanceCents: 20000 }]);
   assert.deepEqual(computeTuitionAmount(s, { kind: 'invoices', invoiceIds: ['inv_9'] }), {
