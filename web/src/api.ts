@@ -40,6 +40,50 @@ export interface Changelog {
   markdown: string;
 }
 
+/** A recurring plan (a monthly donation). Read LIVE from Stripe on every request — there are no
+ *  webhooks here, so anything we cached would be a guess, and this is the screen an admin uses to
+ *  cancel someone's standing order. `campaignTitle` is blank for plans created before the kiosk
+ *  started recording which campaign they belonged to. */
+export interface Plan {
+  id: string;
+  accountId: string;
+  donorName: string;
+  donorEmail: string;
+  amountMinor: number;
+  currency: string;
+  interval: string;
+  intervalCount: number;
+  campaignId: string;
+  campaignTitle: string;
+  /** Everything collected on this plan so far. */
+  totalMinor: number;
+  /** True when the first (card-present) payment isn't included above — see the server's `plans` table. */
+  totalPartial: boolean;
+  startedAt: string;
+  lastChargeAt: string;
+  nextChargeAt: string;
+  cardBrand: string;
+  cardLast4: string;
+  status: string;
+  paused: boolean;
+  cancelAt: string;
+  cancelAtPeriodEnd: boolean;
+  deviceId: string;
+}
+
+/** One renewal attempt on a plan. */
+export interface PlanInvoice {
+  id: string;
+  date: string;
+  amountMinor: number;
+  currency: string;
+  status: string;
+  paid: boolean;
+  attempts: number;
+  failureReason: string;
+  hostedUrl: string;
+}
+
 export interface NotifyTestResult {
   baseUrlSet: boolean;
   hasSecret: boolean;
@@ -64,6 +108,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const getAppInfo = () => request<AppInfo>('/api/app');
 export const getSession = () => request<Session>('/api/session');
 export const getChangelog = () => request<Changelog>('/api/admin/changelog');
+
+// ── Recurring plans ──────────────────────────────────────────────────────────
+export const getPlans = () => request<{ plans: Plan[]; unavailable: string }>('/api/admin/plans');
+export const getPlan = (id: string) => request<{ plan: Plan; invoices: PlanInvoice[] }>(`/api/admin/plans/${encodeURIComponent(id)}`);
+export const cancelPlan = (id: string, immediately: boolean) =>
+  request<{ plan: Plan }>(`/api/admin/plans/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: JSON.stringify({ immediately }) });
+export const pausePlan = (id: string, paused: boolean) =>
+  request<{ plan: Plan }>(`/api/admin/plans/${encodeURIComponent(id)}/pause`, { method: 'POST', body: JSON.stringify({ paused }) });
+export const schedulePlan = (id: string, body: { endAt?: string | null; charges?: number | null }) =>
+  request<{ plan: Plan }>(`/api/admin/plans/${encodeURIComponent(id)}/schedule`, { method: 'POST', body: JSON.stringify(body) });
 
 export const setupAdmin = (password: string, name?: string) =>
   request<{ ok: true }>('/api/setup', { method: 'POST', body: JSON.stringify({ password, name }) });

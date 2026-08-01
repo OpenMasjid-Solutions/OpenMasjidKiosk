@@ -285,6 +285,24 @@ export interface TuitionOutboxRow {
   occurredAt: string;
 }
 
+/** The local half of a recurring plan — only what Stripe can't tell us about it (see the `plans`
+ *  table comment). Everything that CHANGES about a plan is read live from Stripe. */
+export interface PlanRecord {
+  subscriptionId: string;
+  customerId: string;
+  stripeAccountId: string;
+  campaignId: string;
+  campaignTitle: string;
+  deviceId: string;
+  /** Month one — the card-present charge on the reader, which is never an invoice. */
+  firstPaymentIntentId: string;
+  firstAmountMinor: number;
+  currency: string;
+  donorName: string;
+  donorEmail: string;
+  createdAt: string;
+}
+
 /** A paired kiosk (tablet). `token_hash` (not the token) is stored. */
 export interface Device {
   id: string;
@@ -466,6 +484,33 @@ export class Store {
         occurred_at TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS idx_tuition_outbox ON tuition_outbox(pay_status, record_status);
+
+      -- Recurring plans (monthly donations). Stripe is the SOURCE OF TRUTH for a plan's status,
+      -- next charge, card and renewals — we hold no copy of any of that, and the Recurring screen
+      -- reads it live. This table exists only for the three things Stripe cannot tell us:
+      --   1. WHICH CAMPAIGN the donor was giving to. Nothing on a Stripe subscription knows about
+      --      our campaigns unless we put it there, and metadata we set today can't be backfilled
+      --      onto plans created before this feature existed.
+      --   2. THE FIRST PAYMENT. Month one is the card-present charge taken on the reader — a
+      --      PaymentIntent, not an invoice — so "total collected on this plan" is short by that
+      --      amount if you only add up invoices.
+      --   3. WHICH ACCOUNT the subscription lives on, since a campaign may use its own.
+      -- A plan with no row here still shows; it just can't name its campaign and says its total is
+      -- partial rather than quietly under-reporting.
+      CREATE TABLE IF NOT EXISTS plans (
+        subscription_id TEXT PRIMARY KEY,
+        customer_id TEXT NOT NULL DEFAULT '',
+        stripe_account_id TEXT NOT NULL DEFAULT '',
+        campaign_id TEXT NOT NULL DEFAULT '',
+        campaign_title TEXT NOT NULL DEFAULT '',
+        device_id TEXT NOT NULL DEFAULT '',
+        first_payment_intent_id TEXT NOT NULL DEFAULT '',
+        first_amount_minor INTEGER NOT NULL DEFAULT 0,
+        currency TEXT NOT NULL DEFAULT '',
+        donor_name TEXT NOT NULL DEFAULT '',
+        donor_email TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+      );
     `);
     // Migrate older donation rows (pre-campaigns) to carry the new columns. This MUST run before any
     // index on those columns — an existing `donations` table isn't recreated by CREATE TABLE IF NOT
@@ -1055,6 +1100,81 @@ export class Store {
   getPiAccount(pi: string): string {
     const r = this.db.prepare('SELECT account FROM pi_accounts WHERE pi = ?').get(pi) as { account?: string } | undefined;
     return r?.account ?? '';
+  }
+
+  // ── Recurring plans: the local half of a monthly donation ───────────────────
+  /** Remember a plan the moment its Subscription is created. Insert-only: Stripe owns everything
+   *  that can change, so a replay must never overwrite the campaign or the first payment we
+   *  recorded the first time round. */
+  recordPlan(d: {
+    subscriptionId: string;
+    customerId?: string;
+    stripeAccountId?: string;
+    campaignId?: string;
+    campaignTitle?: string;
+    deviceId?: string;
+    firstPaymentIntentId?: string;
+    firstAmountMinor?: number;
+    currency?: string;
+    donorName?: string;
+    donorEmail?: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO plans (subscription_id, customer_id, stripe_account_id, campaign_id, campaign_title,
+           device_id, first_payment_intent_id, first_amount_minor, currency, donor_name, donor_email, created_at)
+         VALUES (@subscriptionId, @customerId, @stripeAccountId, @campaignId, @campaignTitle, @deviceId,
+           @firstPaymentIntentId, @firstAmountMinor, @currency, @donorName, @donorEmail, @createdAt)
+         ON CONFLICT(subscription_id) DO NOTHING`,
+      )
+      .run({
+        subscriptionId: d.subscriptionId,
+        customerId: d.customerId || '',
+        stripeAccountId: d.stripeAccountId || '',
+        campaignId: d.campaignId || '',
+        campaignTitle: d.campaignTitle || '',
+        deviceId: d.deviceId || '',
+        firstPaymentIntentId: d.firstPaymentIntentId || '',
+        firstAmountMinor: Math.max(0, Math.round(d.firstAmountMinor ?? 0)),
+        currency: (d.currency || '').toUpperCase(),
+        donorName: d.donorName || '',
+        donorEmail: d.donorEmail || '',
+        createdAt: new Date().toISOString(),
+      });
+  }
+
+  getPlanRecord(subscriptionId: string): PlanRecord | null {
+    const r = this.db.prepare('SELECT * FROM plans WHERE subscription_id = ?').get(subscriptionId) as Record<string, unknown> | undefined;
+    return r ? this.rowToPlan(r) : null;
+  }
+
+  listPlanRecords(): PlanRecord[] {
+    const rows = this.db.prepare('SELECT * FROM plans ORDER BY created_at DESC').all() as Record<string, unknown>[];
+    return rows.map((r) => this.rowToPlan(r));
+  }
+
+  /** Every Stripe account we know a plan lives on — so the Recurring screen can look beyond the
+   *  primary account when a campaign was taking money into its own. */
+  listPlanAccountIds(): string[] {
+    const rows = this.db.prepare("SELECT DISTINCT stripe_account_id AS a FROM plans WHERE stripe_account_id <> ''").all() as { a: string }[];
+    return rows.map((r) => r.a);
+  }
+
+  private rowToPlan(r: Record<string, unknown>): PlanRecord {
+    return {
+      subscriptionId: String(r.subscription_id),
+      customerId: String(r.customer_id ?? ''),
+      stripeAccountId: String(r.stripe_account_id ?? ''),
+      campaignId: String(r.campaign_id ?? ''),
+      campaignTitle: String(r.campaign_title ?? ''),
+      deviceId: String(r.device_id ?? ''),
+      firstPaymentIntentId: String(r.first_payment_intent_id ?? ''),
+      firstAmountMinor: Number(r.first_amount_minor ?? 0),
+      currency: String(r.currency ?? ''),
+      donorName: String(r.donor_name ?? ''),
+      donorEmail: String(r.donor_email ?? ''),
+      createdAt: String(r.created_at),
+    };
   }
 
   // ── Donations (recorded ONLY after the server verifies the PI with Stripe) ──────

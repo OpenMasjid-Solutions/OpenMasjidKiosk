@@ -3,6 +3,26 @@
 
 # Changelog
 
+## 0.10.0
+- **New: a Recurring page for monthly donations.** Until now a monthly gift set up at a kiosk
+  disappeared into Stripe and you had to go to the Stripe dashboard to see or change it. There's now
+  a **Recurring** section in the panel listing every plan: the donor's name and email, the amount and
+  how often, which campaign it came from, **how much that plan has raised in total**, when it started,
+  the last and next charge, the card and last four digits, and the status in plain words — "Active",
+  "Paused", "Payment failed", "Ended".
+- **Open a plan to manage it.** Pause it (nothing is collected while paused, and nothing piles up to
+  land on the donor when you resume), cancel it — at the end of the period the donor has paid for, or
+  immediately behind a confirmation — or give it an end date, or tell it to stop after a set number of
+  further payments.
+- **Invoice history per plan**: every renewal with its date, amount, status, how many attempts Stripe
+  made, and the reason a payment failed when it did, so you can tell a donor their card expired
+  instead of guessing.
+- Everything is read **live from Stripe** each time you open the page, so it can't show you a plan
+  that was cancelled elsewhere or a status that's out of date.
+- Plans created before this release still appear, but can't say which campaign they belonged to, and
+  their totals leave out the first payment taken on the reader (that one is in Donations). Both are
+  marked on screen rather than quietly guessed at.
+
 ## 0.9.36
 - **Fixed: a child's bills couldn't be paid when a sibling was in credit.** If one child was paid
   ahead and another owed, the school's household total nets the two out — so a family with £340 of

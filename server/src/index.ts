@@ -31,10 +31,17 @@ import {
   completeCardPresentPaymentIntent,
   createCardPaymentIntent,
   createCardPresentPaymentIntent,
+  cancelPlan,
   createConnectionToken,
   createLocation,
   createMonthlySubscription,
   listLocations,
+  listPlanInvoices,
+  listPlans,
+  pausePlan,
+  retrievePlan,
+  schedulePlanEnd,
+  type StripePlan,
   looksLikePublishable,
   looksLikeSecret,
   publicStripeStatus,
@@ -773,6 +780,183 @@ async function main(): Promise<void> {
     return { data: { donations: store.listDonations(), totals: store.donationTotals(), currency: store.getCurrency() } };
   });
 
+  // ── Recurring plans (monthly donations) ─────────────────────────────────────
+  // STRIPE IS THE SOURCE OF TRUTH. There are no webhooks here (LAN-only, §4), so we hold no copy of
+  // a plan's status, next charge or renewals and read them live instead — a cached status on a screen
+  // an admin uses to cancel someone's standing order would be worse than no screen. The local `plans`
+  // table supplies only what Stripe cannot know: the campaign, the account, and month one (which was
+  // card-present, so it is not an invoice).
+
+  const SUB_ID_RE = /^sub_[A-Za-z0-9_]+$/;
+
+  /** Every Stripe account a plan could live on: the primary, any campaign's own, and any we have
+   *  recorded. Deduped by resolved account id — '' and 'local' can be the very same keys. */
+  const planAccounts = async (): Promise<ResolvedAccount[]> => {
+    const wanted = new Set<string>(['']);
+    for (const c of store.listCampaigns()) if (c.stripeAccountId) wanted.add(c.stripeAccountId);
+    for (const a of store.listPlanAccountIds()) wanted.add(a);
+    const out: ResolvedAccount[] = [];
+    const seen = new Set<string>();
+    for (const id of wanted) {
+      const acct = await resolveAccountById(id).catch(() => null);
+      if (!acct || seen.has(acct.id)) continue;
+      seen.add(acct.id);
+      out.push(acct);
+    }
+    return out;
+  };
+
+  /** Join Stripe's live view of a plan to the local record. */
+  const toPlan = (sp: StripePlan, accountId: string) => {
+    const rec = store.getPlanRecord(sp.id);
+    // Month one never appears in `invoices.list` — it was a card-present PaymentIntent on the reader.
+    // Without the local record we cannot know it, so the total is flagged short rather than quietly
+    // under-reported: "this plan has raised £X" being wrong by a month is the kind of number an
+    // admin repeats to a committee.
+    const first = rec?.firstAmountMinor ?? 0;
+    return {
+      ...sp,
+      accountId,
+      // The local row first, then what we stamped on the subscription itself — that copy is the one
+      // that survives restoring the data volume from a backup older than the plan.
+      campaignId: rec?.campaignId || sp.campaignId || '',
+      campaignTitle: rec?.campaignTitle || sp.campaignTitle || '',
+      totalMinor: sp.totalMinor + first,
+      totalPartial: first <= 0,
+      donorName: sp.donorName || rec?.donorName || '',
+      donorEmail: sp.donorEmail || rec?.donorEmail || '',
+      deviceId: sp.deviceId || rec?.deviceId || '',
+    };
+  };
+
+  /** Find the account a subscription lives on and run something against it. Prefers the recorded
+   *  account (one API call); otherwise asks each account in turn, because acting on the wrong one
+   *  would at best 404 and at worst touch a same-id object elsewhere. */
+  const withPlan = async <T,>(
+    id: string,
+    fn: (keys: StripeKeys, accountId: string) => Promise<T>,
+  ): Promise<{ ok: true; value: T } | { ok: false; reason: 'not-found' | 'no-account' }> => {
+    const accounts = await planAccounts();
+    if (!accounts.length) return { ok: false, reason: 'no-account' };
+    const recorded = store.getPlanRecord(id)?.stripeAccountId ?? '';
+    const ordered = recorded ? [...accounts].sort((a, b) => (a.id === recorded ? -1 : b.id === recorded ? 1 : 0)) : accounts;
+    for (const acct of ordered) {
+      const found = await retrievePlan(acct.keys.secretKey, id).catch(() => null);
+      if (!found) continue;
+      return { ok: true, value: await fn(acct.keys, acct.id) };
+    }
+    return { ok: false, reason: 'not-found' };
+  };
+
+  app.get('/api/admin/plans', { preHandler: requireAdmin }, async () => {
+    const accounts = await planAccounts();
+    if (!accounts.length) return { data: { plans: [], unavailable: 'Payments aren’t set up yet.' } };
+    const byId = new Map<string, ReturnType<typeof toPlan>>();
+    let failures = 0;
+    let truncated = false;
+    let totalsCapped = false;
+    for (const acct of accounts) {
+      try {
+        const res = await listPlans(acct.keys.secretKey);
+        truncated = truncated || res.truncated;
+        totalsCapped = totalsCapped || res.totalsCapped;
+        for (const sp of res.plans) {
+          if (!byId.has(sp.id)) byId.set(sp.id, toPlan(sp, acct.id));
+        }
+      } catch (e) {
+        failures++;
+        log.warn(`plans list failed for one account: ${e instanceof Error ? e.message : 'error'}`);
+      }
+    }
+    // A capped invoice scan means every total on this screen is a floor. Mark them all partial so
+    // the list uses the footnote it already has, rather than showing a confident number that is
+    // quietly short — opening a plan re-totals it exactly.
+    const plans = [...byId.values()]
+      .map((p) => (totalsCapped ? { ...p, totalPartial: true } : p))
+      .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+    // Say so when a whole account couldn't be read, or when the scan filled up — an admin looking at
+    // a short list needs to know it's short, not assume those donors cancelled.
+    const unavailable =
+      failures && !plans.length
+        ? 'Couldn’t reach Stripe just now — please try again.'
+        : failures
+          ? 'Some plans couldn’t be loaded — this list may be incomplete.'
+          : truncated
+            ? 'This Stripe account has more subscriptions than we can scan at once, so this list may be incomplete.'
+            : '';
+    return { data: { plans, unavailable } };
+  });
+
+  app.get('/api/admin/plans/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!SUB_ID_RE.test(id)) return reply.code(400).send({ error: 'That plan wasn’t valid.' });
+    const r = await withPlan(id, async (keys, accountId) => {
+      const sp = await retrievePlan(keys.secretKey, id);
+      if (!sp) return null;
+      return { plan: toPlan(sp, accountId), invoices: await listPlanInvoices(keys.secretKey, id) };
+    });
+    if (!r.ok || !r.value) return reply.code(404).send({ error: 'That plan couldn’t be found in Stripe.' });
+    return { data: r.value };
+  });
+
+  /** The three write actions. Each re-reads the plan from Stripe afterwards and returns it, so the
+   *  screen shows what Stripe actually did rather than what we asked for. */
+  const planAction = async (
+    req: import('fastify').FastifyRequest,
+    reply: import('fastify').FastifyReply,
+    act: (keys: StripeKeys, id: string) => Promise<unknown>,
+  ) => {
+    const id = (req.params as { id: string }).id;
+    if (!SUB_ID_RE.test(id)) return reply.code(400).send({ error: 'That plan wasn’t valid.' });
+    try {
+      const r = await withPlan(id, async (keys, accountId) => {
+        await act(keys, id);
+        const sp = await retrievePlan(keys.secretKey, id);
+        return sp ? toPlan(sp, accountId) : null;
+      });
+      if (!r.ok || !r.value) return reply.code(404).send({ error: 'That plan couldn’t be found in Stripe.' });
+      return { data: { plan: r.value } };
+    } catch (e) {
+      const why = e instanceof Error ? e.message : 'error';
+      log.warn(`plan action failed: ${why}`);
+      return reply.code(502).send({ error: 'Stripe wouldn’t accept that change. Please try again, or check the Stripe dashboard.' });
+    }
+  };
+
+  const CancelBody = z.object({ immediately: z.boolean().optional() });
+  app.post('/api/admin/plans/:id/cancel', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = CancelBody.safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
+    return planAction(req, reply, (keys, id) => cancelPlan(keys.secretKey, id, body.data.immediately === true));
+  });
+
+  const PauseBody = z.object({ paused: z.boolean() });
+  app.post('/api/admin/plans/:id/pause', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = PauseBody.safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
+    return planAction(req, reply, (keys, id) => pausePlan(keys.secretKey, id, body.data.paused));
+  });
+
+  // End on a date, or after a fixed number of further charges. Both empty clears the schedule.
+  const ScheduleBody = z.object({
+    endAt: z.string().max(40).nullish(),
+    charges: z.number().int().min(1).max(600).nullish(),
+  });
+  app.post('/api/admin/plans/:id/schedule', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = ScheduleBody.safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
+    const { endAt, charges } = body.data;
+    if (endAt && charges) return reply.code(400).send({ error: 'Choose an end date or a number of payments, not both.' });
+    let endSec: number | null = null;
+    if (endAt) {
+      const t = Date.parse(endAt);
+      if (Number.isNaN(t)) return reply.code(400).send({ error: 'That date wasn’t valid.' });
+      if (t <= Date.now()) return reply.code(400).send({ error: 'Pick a date in the future.' });
+      endSec = Math.floor(t / 1000);
+    }
+    return planAction(req, reply, (keys, id) => schedulePlanEnd(keys.secretKey, id, { endAt: endSec, charges: charges ?? null }));
+  });
+
   // CSV export — behind admin auth (it exposes donor PII). Every cell is escaped against CSV formula
   // injection (donor name/email are attacker-controllable). Amounts are in major units for humans.
   // Exports the FULL history (limit -1 = no SQLite limit), not just the on-screen page.
@@ -1193,10 +1377,30 @@ async function main(): Promise<void> {
             email: meta.donorEmail || undefined,
             productName: `Monthly donation — ${campaignLabel}`,
             deviceId: d.id,
+            campaignId: meta.campaignId || '',
+            campaignTitle: meta.campaign || '',
             anchorSec: result.createdSec, // deterministic across retries (idempotency-safe)
             idempotencyKey: id,
           });
           monthly = { requested: true, created: sub.created };
+          // Remember the half of this plan Stripe will never know: the campaign, the account it
+          // lives on, and THIS charge — month one is card-present, so it is not an invoice and
+          // adding up invoices alone under-reports what the plan has raised.
+          if (sub.subscriptionId) {
+            store.recordPlan({
+              subscriptionId: sub.subscriptionId,
+              customerId: sub.customerId,
+              stripeAccountId: acct.id,
+              campaignId: meta.campaignId || '',
+              campaignTitle: meta.campaign || '',
+              deviceId: d.id,
+              firstPaymentIntentId: id,
+              firstAmountMinor: result.amountMinor,
+              currency: result.currency,
+              donorName: meta.donorName || '',
+              donorEmail: meta.donorEmail || '',
+            });
+          }
         } catch (e) {
           log.warn('monthly subscription failed: ' + (e instanceof Error ? e.message : String(e)));
         }
