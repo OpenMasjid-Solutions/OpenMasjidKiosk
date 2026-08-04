@@ -19,6 +19,17 @@ import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import org.openmasjidos.kiosk.ManualResult
 
+/** The only hosts the card form's MAIN frame may sit on: our own locally-served page, and Stripe.
+ *  Everything else — a link, a redirect, anything at all — is refused rather than followed. */
+private fun isAllowedMainFrame(url: Uri): Boolean {
+    if (!"https".equals(url.scheme, ignoreCase = true)) return false
+    val host = url.host?.lowercase() ?: return false
+    return host == "appassets.androidplatform.net" ||
+        host == "stripe.com" ||
+        host.endsWith(".stripe.com") ||
+        host.endsWith(".stripe.network")
+}
+
 /**
  * Keyed / typed card entry via Stripe.js Card Element (card fields only — NOT the Payment Element,
  * which surfaces Link / bank debits) in an in-app WebView. The page is served LOCALLY over
@@ -58,6 +69,24 @@ fun ManualCardWebView(
                 webViewClient = object : WebViewClientCompat() {
                     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                         loader.shouldInterceptRequest(request.url)
+
+                    /**
+                     * Keep this WebView a card form, never a browser.
+                     *
+                     * It is full-screen, donor-facing and inside a locked kiosk, so a top-level
+                     * navigation to anywhere else would hand a passer-by the web. kioskpay.html
+                     * never makes one today — this is what stops a future edit, a Stripe.js change
+                     * or a compromised js.stripe.com from turning it into an escape route.
+                     *
+                     * SUB-FRAMES ARE DELIBERATELY NOT RESTRICTED. 3-D Secure legitimately loads the
+                     * donor's own bank in an iframe, and those hosts are unknowable in advance —
+                     * filtering them would break real payments for exactly the cards that need
+                     * authenticating. Only the MAIN frame is pinned to our page and Stripe.
+                     */
+                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                        if (!request.isForMainFrame) return false // 3DS iframes etc. — let them load
+                        return !isAllowedMainFrame(request.url)
+                    }
                 }
                 addJavascriptInterface(
                     object {
