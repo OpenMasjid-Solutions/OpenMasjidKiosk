@@ -1321,9 +1321,18 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     /** Exponential backoff after repeated wrong PINs; no lockout for the first few attempts. */
+    /** Exponential backoff after a wrong PIN, capped.
+     *
+     *  `steps` is clamped BEFORE the shift, which matters: `attempts` grows without bound, and
+     *  `Long shl` compiles to the JVM's `lshl` — that masks the distance to its low 6 bits and
+     *  wraps on overflow rather than saturating. Unclamped, `5L shl 61` overflows NEGATIVE (so
+     *  `coerceAtMost` picks the negative and the lockout lands in the past) and `5L shl 64` wraps
+     *  back to 5 seconds, restarting the whole ramp. Clamping at 6 changes nothing an admin or a
+     *  donor can observe — `5 shl 6` is 320, already past the 300s cap — it just stops the ramp
+     *  from resetting itself every 64 attempts. */
     private fun backoffUntil(attempts: Int): Long {
         if (attempts < FREE_ATTEMPTS) return 0L
-        val steps = attempts - FREE_ATTEMPTS
+        val steps = (attempts - FREE_ATTEMPTS).coerceAtMost(BACKOFF_MAX_STEPS)
         val seconds = (BACKOFF_BASE_SECONDS shl steps).coerceAtMost(MAX_BACKOFF_SECONDS)
         return System.currentTimeMillis() + seconds * 1000L
     }
@@ -1352,5 +1361,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         const val FREE_ATTEMPTS = 3
         const val BACKOFF_BASE_SECONDS = 5L
         const val MAX_BACKOFF_SECONDS = 300L
+        // 5 << 6 == 320s, already past the cap — so this is where the ramp stops mattering. Kept as
+        // a named bound because its job is to keep the shift distance small (see backoffUntil).
+        const val BACKOFF_MAX_STEPS = 6
     }
 }

@@ -303,6 +303,19 @@ export interface PlanRecord {
   createdAt: string;
 }
 
+/** One line of the admin audit trail (see the `admin_audit` table comment). */
+export interface AuditEntry {
+  ts: string;
+  action: string;
+  target: string;
+  detail: string;
+  actor: string;
+  source: string;
+}
+
+/** How many audit rows to keep. Generous on purpose — this is financial history, not log noise. */
+const AUDIT_KEEP = 20_000;
+
 /** A paired kiosk (tablet). `token_hash` (not the token) is stored. */
 export interface Device {
   id: string;
@@ -497,6 +510,27 @@ export class Store {
       --   3. WHICH ACCOUNT the subscription lives on, since a campaign may use its own.
       -- A plan with no row here still shows; it just can't name its campaign and says its total is
       -- partial rather than quietly under-reporting.
+      -- Admin audit trail. Append-only, and deliberately narrow: the actions recorded here are the
+      -- ones that reach out and change something outside this app — ending or altering a real
+      -- donor's standing order, cutting a kiosk off, rotating the exit PIN. Everything else the
+      -- admin panel does is a settings edit that the settings themselves already show.
+      --
+      -- WHY: a masjid's admin login is shared in practice (the standalone fallback is one password,
+      -- and SSO sessions mint the same cookie), and Stripe's own dashboard only ever says "cancelled
+      -- by API key" — the same key for every admin. Without this there is no way to answer "who
+      -- cancelled Fatima's monthly gift, and when?". Best-effort: a failure to write an audit row
+      -- must never fail the action it describes.
+      CREATE TABLE IF NOT EXISTS admin_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        action TEXT NOT NULL,            -- plan.cancel | plan.pause | plan.schedule | device.revoke | pin.set …
+        target TEXT NOT NULL DEFAULT '', -- the subscription / device id the action was aimed at
+        detail TEXT NOT NULL DEFAULT '', -- human-readable "what", never a secret
+        actor TEXT NOT NULL DEFAULT '',  -- who, as far as we can tell (SSO username, or 'local admin')
+        source TEXT NOT NULL DEFAULT ''  -- the peer address the request came from
+      );
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_ts ON admin_audit(id DESC);
+
       CREATE TABLE IF NOT EXISTS plans (
         subscription_id TEXT PRIMARY KEY,
         customer_id TEXT NOT NULL DEFAULT '',
@@ -1175,6 +1209,46 @@ export class Store {
       donorEmail: String(r.donor_email ?? ''),
       createdAt: String(r.created_at),
     };
+  }
+
+  // ── Admin audit trail (append-only; see the table comment) ──────────────────
+  /** Record an admin action that changed something outside this app. NEVER throws: an audit row
+   *  that can't be written must not take a donor's cancellation down with it — we would rather
+   *  perform the action and lose the note than refuse the action. Trimmed and capped so a long
+   *  history can't grow the database without bound. */
+  recordAudit(entry: { action: string; target?: string; detail?: string; actor?: string; source?: string }): void {
+    try {
+      this.db
+        .prepare('INSERT INTO admin_audit (ts, action, target, detail, actor, source) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(
+          new Date().toISOString(),
+          String(entry.action).slice(0, 60),
+          String(entry.target ?? '').slice(0, 200),
+          String(entry.detail ?? '').slice(0, 500),
+          String(entry.actor ?? '').slice(0, 120),
+          String(entry.source ?? '').slice(0, 60),
+        );
+      // Keep the newest AUDIT_KEEP rows. Financial history is worth more than log noise, so this
+      // is generous — at a realistic rate it is many years of admin actions.
+      this.db.prepare('DELETE FROM admin_audit WHERE id <= (SELECT MAX(id) FROM admin_audit) - ?').run(AUDIT_KEEP);
+    } catch (e) {
+      log.warn(`audit write failed: ${e instanceof Error ? e.message : 'error'}`);
+    }
+  }
+
+  /** The audit trail, newest first. */
+  listAudit(limit = 200): AuditEntry[] {
+    const n = Math.min(Math.max(1, Math.round(limit)), 1000);
+    return (
+      this.db.prepare('SELECT ts, action, target, detail, actor, source FROM admin_audit ORDER BY id DESC LIMIT ?').all(n) as Record<string, unknown>[]
+    ).map((r) => ({
+      ts: String(r.ts),
+      action: String(r.action),
+      target: String(r.target ?? ''),
+      detail: String(r.detail ?? ''),
+      actor: String(r.actor ?? ''),
+      source: String(r.source ?? ''),
+    }));
   }
 
   // ── Donations (recorded ONLY after the server verifies the PI with Stripe) ──────

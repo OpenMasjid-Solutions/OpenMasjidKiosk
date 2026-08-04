@@ -35,6 +35,10 @@ object ScryptPin {
     private const val PREFIX = "scrypt"
     private val B64_FLAGS = Base64.NO_WRAP or Base64.URL_SAFE
 
+    /** scrypt's working set is ~128 * N * r bytes; this caps it at 64 MiB, the same ceiling the
+     *  server uses when it hashes a PIN. The real parameters (N=2^14, r=8) sit at a quarter of it. */
+    private const val SCRYPT_MAX_N_TIMES_R = 64L * 1024 * 1024 / 128
+
     /**
      * @return true iff [pin] matches [hashString]. Any parse/format error returns false — we never
      *   throw into the unlock path, and an unparseable hash must not unlock the kiosk.
@@ -49,6 +53,12 @@ object ScryptPin {
         val salt = decode(parts[4]) ?: return false
         val expected = decode(parts[5]) ?: return false
         if (n < 2 || r < 1 || p < 1 || salt.isEmpty() || expected.isEmpty()) return false
+        // Bound the COST as well as the floor. scrypt needs roughly 128 * N * r bytes, and an
+        // absurd N would have the tablet try to allocate gigabytes at the PIN pad — an
+        // OutOfMemoryError, which is an Error and so would sail past the `catch (Exception)`
+        // below and crash a locked kiosk. The ceiling mirrors the server's own maxmem for PIN
+        // hashes (64 MiB), which is four times what it actually uses (N=2^14, r=8 → 16 MiB).
+        if (n.toLong() * r.toLong() > SCRYPT_MAX_N_TIMES_R) return false
 
         return try {
             val actual = SCrypt.generate(

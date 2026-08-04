@@ -25,7 +25,8 @@ import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePair
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus } from './fabric';
 import { renderReceipt, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
-import { LoginLimiter } from './rateLimit';
+import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
+import { blockedOverTunnel } from './tunnel';
 import { toCsv } from './csv';
 import {
   completeCardPresentPaymentIntent,
@@ -103,6 +104,20 @@ async function main(): Promise<void> {
   fs.mkdirSync(uploadsDir, { recursive: true });
   await app.register(fastifyStatic, { root: uploadsDir, prefix: '/uploads/', decorateReply: false, index: false });
 
+  // ── Baseline security headers ────────────────────────────────────────────────
+  // `nosniff` is the one that earns its keep: /uploads/* serves admin-uploaded files, and although
+  // the upload route allow-lists the MIME type and assigns its own random name and extension,
+  // nosniff is what stops a browser reinterpreting a "PNG" whose bytes begin with markup.
+  //
+  // NO framing header here on purpose. X-Frame-Options / frame-ancestors would close the
+  // clickjacking gap, but I could not confirm whether OpenMasjidOS ever renders an installed app
+  // inside an iframe, and a framing denial that breaks the dashboard would be worse than the gap it
+  // closes. See docs/audit/ACTION_REQUIRED.md.
+  app.addHook('onSend', async (_req, reply) => {
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('referrer-policy', 'no-referrer');
+  });
+
   // ── Gently upgrade insecure browser hits to HTTPS ────────────────────────────
   // The platform terminates TLS and serves us over HTTPS on a dedicated port (setting
   // x-forwarded-proto=https), but it doesn't tell the container that port. So we LEARN our
@@ -134,10 +149,14 @@ async function main(): Promise<void> {
   // uploaded images at /uploads — the setup page needs them). Every OTHER /api route — admin, login,
   // session, setup, logout, and /api/fabric — stays LAN-only, so the admin panel and its auth are
   // never reachable from the internet even when a remote kiosk is adopted.
+  //
+  // The rule itself lives in ./tunnel because it has to canonicalise the path the way the ROUTER
+  // resolves it, not the way it arrived: Fastify percent-decodes path segments before matching, so
+  // the previous inline `startsWith('/api/')` on the raw url was walked past by encoding one letter
+  // ('/%61pi/login' reached the real password login over the tunnel). See tunnel.test.ts.
   app.addHook('onRequest', async (req, reply) => {
     if ((req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel !== true) return;
-    const p = (req.raw.url ?? '/').split('?')[0];
-    if (p.startsWith('/api/') && !(p === '/api/app' || p.startsWith('/api/public/') || p.startsWith('/api/kiosk/'))) {
+    if (blockedOverTunnel(req.raw.url ?? '/')) {
       return reply.code(404).send({ error: 'Not found.' });
     }
   });
@@ -145,6 +164,27 @@ async function main(): Promise<void> {
   /** A request is authenticated if it carries a valid local session cookie — minted by
    *  first-run setup, password login, or a confirmed OpenMasjidOS SSO check. */
   const isAuthed = (cookie: string | undefined): boolean => verifyToken(store.secret, cookie, 'admin');
+
+  /** Note an admin action that reaches OUTSIDE this app — ending or altering a donor's standing
+   *  order, cutting a kiosk off, rotating the exit PIN. Best-effort by construction (store.recordAudit
+   *  never throws), so it can be called on the success path without risking the action itself.
+   *
+   *  `actor` is as good as we can honestly make it: our session cookie carries no identity (it is an
+   *  assertion that SOMEONE signed in), so when the platform can name the signed-in user we record
+   *  that, and otherwise we say plainly that we don't know rather than inventing a name. */
+  const audit = async (
+    req: import('fastify').FastifyRequest,
+    action: string,
+    target: string,
+    detail: string,
+  ): Promise<void> => {
+    let actor = 'admin (local password)';
+    if (ssoConfigured()) {
+      const who = await probePlatform(req.headers.cookie).catch(() => null);
+      actor = who?.username ? `${who.username} (OpenMasjidOS)` : 'admin (signed in, name unknown)';
+    }
+    store.recordAudit({ action, target, detail, actor, source: req.socket.remoteAddress ?? '' });
+  };
   const requireAdmin = async (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
     if (!isAuthed(req.cookies[COOKIE])) return reply.code(401).send({ error: 'Please sign in.' });
   };
@@ -501,7 +541,12 @@ async function main(): Promise<void> {
   });
 
   // ── Devices: pairing, fleet management, kiosk PIN ───────────────────────────
-  const pairLimiter = new LoginLimiter(); // brute-force guard for 6-digit pairing codes
+  const pairLimiter = new LoginLimiter(); // per-peer brute-force guard for 6-digit pairing codes
+  // …and a budget shared across every peer. The per-peer limiter hands out 5 free guesses each, so
+  // an attacker with many source addresses (a /64 of IPv6 is one host's worth on a LAN) multiplies
+  // its way through the million-code space while no single bucket ever trips. 50 wrong codes in ten
+  // minutes across the whole network is already far beyond a volunteer mistyping one.
+  const pairBudget = new GlobalAttemptBudget(50, 10 * 60_000);
   // Tuition Student-ID lookups (identify + lookup SHARE this bucket, as they do at Students): a fixed
   // rolling window per peer (20 / 60s), capped regardless of success or failure — a valid lookup must
   // NOT refill the brute-force budget (a shared-IP attacker with one good ID could otherwise reset the
@@ -575,7 +620,10 @@ async function main(): Promise<void> {
   });
 
   app.delete('/api/admin/devices/:id', { preHandler: requireAdmin }, async (req) => {
-    store.revokeDevice((req.params as { id: string }).id);
+    const id = (req.params as { id: string }).id;
+    const name = store.getDevice(id)?.name ?? '';
+    store.revokeDevice(id);
+    await audit(req, 'device.revoke', id, name ? `kiosk "${name}" removed — its token no longer works` : 'kiosk removed');
     return { data: { ok: true } };
   });
 
@@ -603,10 +651,13 @@ async function main(): Promise<void> {
     const pin = parsed.data.pin.trim();
     if (pin === '') {
       store.setPinHash('');
+      // The PIN itself is never recorded, here or anywhere — only that it changed.
+      await audit(req, 'pin.clear', '', 'kiosk exit PIN removed — the maintenance screen is no longer PIN-gated');
       return { data: { set: false } };
     }
     if (!/^\d{4,8}$/.test(pin)) return reply.code(400).send({ error: 'The PIN must be 4 to 8 digits.' });
     store.setPinHash(hashPin(pin));
+    await audit(req, 'pin.set', '', 'kiosk exit PIN changed — takes effect on each kiosk’s next heartbeat');
     return { data: { set: true } };
   });
 
@@ -927,14 +978,23 @@ async function main(): Promise<void> {
   app.post('/api/admin/plans/:id/cancel', { preHandler: requireAdmin }, async (req, reply) => {
     const body = CancelBody.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
-    return planAction(req, reply, (keys, id) => cancelPlan(keys.secretKey, id, body.data.immediately === true));
+    const now = body.data.immediately === true;
+    return planAction(req, reply, async (keys, id) => {
+      const r = await cancelPlan(keys.secretKey, id, now);
+      await audit(req, 'plan.cancel', id, now ? 'ended immediately' : 'ends at the end of the paid period');
+      return r;
+    });
   });
 
   const PauseBody = z.object({ paused: z.boolean() });
   app.post('/api/admin/plans/:id/pause', { preHandler: requireAdmin }, async (req, reply) => {
     const body = PauseBody.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
-    return planAction(req, reply, (keys, id) => pausePlan(keys.secretKey, id, body.data.paused));
+    return planAction(req, reply, async (keys, id) => {
+      const r = await pausePlan(keys.secretKey, id, body.data.paused);
+      await audit(req, 'plan.pause', id, body.data.paused ? 'paused — nothing collected until resumed' : 'resumed');
+      return r;
+    });
   });
 
   // End on a date, or after a fixed number of further charges. Both empty clears the schedule.
@@ -954,7 +1014,19 @@ async function main(): Promise<void> {
       if (t <= Date.now()) return reply.code(400).send({ error: 'Pick a date in the future.' });
       endSec = Math.floor(t / 1000);
     }
-    return planAction(req, reply, (keys, id) => schedulePlanEnd(keys.secretKey, id, { endAt: endSec, charges: charges ?? null }));
+    return planAction(req, reply, async (keys, id) => {
+      const r = await schedulePlanEnd(keys.secretKey, id, { endAt: endSec, charges: charges ?? null });
+      const what = endSec ? `ends on ${new Date(endSec * 1000).toISOString().slice(0, 10)}` : charges ? `stops after ${charges} more charge(s)` : 'end date cleared — carries on';
+      await audit(req, 'plan.schedule', id, what);
+      return r;
+    });
+  });
+
+  // The audit trail itself. Read-only by construction — there is no route that edits or deletes a
+  // row, which is the point of keeping one.
+  app.get('/api/admin/audit', { preHandler: requireAdmin }, async (req) => {
+    const q = (req.query ?? {}) as { limit?: string };
+    return { data: { entries: store.listAudit(Number(q.limit) || 200) } };
   });
 
   // CSV export — behind admin auth (it exposes donor PII). Every cell is escaped against CSV formula
@@ -1009,7 +1081,7 @@ async function main(): Promise<void> {
   const PairBody = z.object({ code: z.string().max(12), name: z.string().max(80).optional(), platform: z.string().max(40).optional() });
   app.post('/api/kiosk/pair', async (req, reply) => {
     const peer = req.socket.remoteAddress ?? 'unknown';
-    const wait = pairLimiter.retryAfterMs(peer);
+    const wait = Math.max(pairLimiter.retryAfterMs(peer), pairBudget.retryAfterMs());
     if (wait > 0) return reply.code(429).send({ error: `Too many attempts. Try again in ${Math.ceil(wait / 1000)}s.` });
     // Remote (over-the-tunnel) pairing is opt-in: refuse it unless the admin turned on "Allow
     // remote adoption". LAN pairing (no tunnel prefix, so omosViaTunnel is unset) is always allowed.
@@ -1021,6 +1093,7 @@ async function main(): Promise<void> {
     const code = parsed.data.code.trim();
     if (!store.consumePairingCode(code)) {
       pairLimiter.fail(peer);
+      pairBudget.fail(); // a wrong code costs the shared budget too, whoever sent it
       return reply.code(400).send({ error: 'That pairing code is invalid or has expired. Generate a fresh one in Admin → Devices.' });
     }
     pairLimiter.succeed(peer);
