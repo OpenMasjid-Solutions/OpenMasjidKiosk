@@ -3,6 +3,29 @@
 
 # Changelog
 
+## 0.10.1
+- **Security: the admin panel could be reached from the internet by a remote kiosk's address.** If
+  you had turned on Remote access in OpenMasjidOS *and* "Allow remote adoption" here, the rule that
+  keeps the admin side of this app on your local network could be stepped around by writing part of
+  the web address in a different but equivalent way. Your admin password still had to be entered, so
+  nobody could see donations, donors or plans without it — but the sign-in page itself was reachable
+  from outside, and it should never have been. It is now closed, and there is a test that keeps it
+  closed. **If you use remote adoption, change your kiosk admin password.** If you have never turned
+  it on, you were never affected.
+- **New: an activity record for the things that reach outside the app.** Cancelling, pausing or
+  rescheduling someone's monthly donation, removing a kiosk, or changing the exit PIN are now written
+  down with what happened and when. Stripe only ever records "cancelled by this masjid", so if two
+  people share the admin login there was previously no way to tell who stopped a donor's standing
+  order.
+- **Card reader and card form security tightened.** The typed-card screen can no longer be navigated
+  away from to anything but Stripe, so a locked kiosk can't be turned into a web browser. Card
+  authentication with your donor's bank still works exactly as before.
+- Pairing a tablet is now protected against guessing from many devices at once, not just from one.
+- Updated the web-serving library to close four published vulnerabilities, and cleared every other
+  known advisory in both parts of the app. Nothing about how the kiosk looks or behaves changes.
+- Housekeeping: a memory leak in the sign-in throttle, stricter browser security headers, and every
+  build step pinned to an exact verified version so the app you install is the app we built.
+
 ## 0.10.0
 - **New: a Recurring page for monthly donations.** Until now a monthly gift set up at a kiosk
   disappeared into Stripe and you had to go to the Stripe dashboard to see or change it. There's now
