@@ -56,3 +56,65 @@ test('pairing code is 6 digits; device token is 256-bit hex', () => {
   assert.match(makePairingCode(), /^\d{6}$/);
   assert.match(makeDeviceToken(), /^[a-f0-9]{64}$/);
 });
+
+
+// ── Rate limiting (KIOSK-006, KIOSK-009) ─────────────────────────────────────
+import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
+
+test('the per-peer limiter gives a few free attempts, then backs off', () => {
+  const l = new LoginLimiter();
+  // Backoff starts once fails EXCEEDS the free allowance, so the 6th attempt is the last free one.
+  for (let i = 0; i < 6; i++) {
+    assert.equal(l.retryAfterMs('10.0.0.1'), 0, `attempt ${i + 1} should be free`);
+    l.fail('10.0.0.1');
+  }
+  assert.ok(l.retryAfterMs('10.0.0.1') > 0, 'the 7th attempt must be throttled');
+  assert.equal(l.retryAfterMs('10.0.0.2'), 0, 'a different peer is unaffected');
+  l.succeed('10.0.0.1');
+  assert.equal(l.retryAfterMs('10.0.0.1'), 0, 'a success clears the counter');
+});
+
+test('the per-peer limiter evicts lapsed entries instead of keeping them forever', () => {
+  // The old sweep required `fails <= MAX_FREE`, which could only ever match entries that had never
+  // been throttled (those always have next === 0) — so precisely the entries taking up room, the
+  // throttled ones, were kept for the life of the process.
+  const l = new LoginLimiter();
+  const internals = l as unknown as { map: Map<string, { fails: number; next: number }> };
+  // Seed 6000 THROTTLED entries whose backoff has already lapsed. Under the old condition every
+  // one of these was un-evictable.
+  const lapsed = Date.now() - 1;
+  for (let i = 0; i < 6000; i++) internals.map.set(`peer-${i}`, { fails: 9, next: lapsed });
+  assert.equal(internals.map.size, 6000);
+  l.fail('trigger'); // any failure runs the sweep
+  assert.ok(internals.map.size < 100, `expected the lapsed entries to be swept, still holding ${internals.map.size}`);
+});
+
+test('a peer still inside its backoff is NOT swept away', () => {
+  // The sweep must not hand an active attacker their free attempts back early.
+  const l = new LoginLimiter();
+  const internals = l as unknown as { map: Map<string, { fails: number; next: number }> };
+  for (let i = 0; i < 6000; i++) internals.map.set(`old-${i}`, { fails: 9, next: Date.now() - 1 });
+  internals.map.set('attacker', { fails: 9, next: Date.now() + 60_000 });
+  l.fail('trigger');
+  assert.ok(l.retryAfterMs('attacker') > 0, 'the attacker must still be throttled after a sweep');
+});
+
+test('the global budget caps total failures however many peers there are', () => {
+  // A per-peer limiter alone gives every source address its own free attempts; this is what stops
+  // an attacker with a thousand addresses walking the 6-digit pairing space.
+  const b = new GlobalAttemptBudget(50, 10 * 60_000);
+  const t0 = 1_000_000;
+  for (let i = 0; i < 50; i++) {
+    assert.equal(b.retryAfterMs(t0), 0, `failure ${i + 1} should still be inside the budget`);
+    b.fail(t0);
+  }
+  assert.ok(b.retryAfterMs(t0) > 0, 'the 51st failure must be refused, whoever it comes from');
+  assert.equal(b.retryAfterMs(t0 + 10 * 60_000 + 1), 0, 'and it refills once the window passes');
+});
+
+test('the global budget only ever spends on FAILURES', () => {
+  // A masjid pairing twenty tablets in a row must not throttle itself — only wrong codes call fail().
+  const b = new GlobalAttemptBudget(50, 10 * 60_000);
+  const t0 = 2_000_000;
+  for (let i = 0; i < 200; i++) assert.equal(b.retryAfterMs(t0), 0);
+});
