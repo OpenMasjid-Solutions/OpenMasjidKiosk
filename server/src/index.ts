@@ -104,6 +104,20 @@ async function main(): Promise<void> {
   fs.mkdirSync(uploadsDir, { recursive: true });
   await app.register(fastifyStatic, { root: uploadsDir, prefix: '/uploads/', decorateReply: false, index: false });
 
+  // ── Baseline security headers ────────────────────────────────────────────────
+  // `nosniff` is the one that earns its keep: /uploads/* serves admin-uploaded files, and although
+  // the upload route allow-lists the MIME type and assigns its own random name and extension,
+  // nosniff is what stops a browser reinterpreting a "PNG" whose bytes begin with markup.
+  //
+  // NO framing header here on purpose. X-Frame-Options / frame-ancestors would close the
+  // clickjacking gap, but I could not confirm whether OpenMasjidOS ever renders an installed app
+  // inside an iframe, and a framing denial that breaks the dashboard would be worse than the gap it
+  // closes. See docs/audit/ACTION_REQUIRED.md.
+  app.addHook('onSend', async (_req, reply) => {
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('referrer-policy', 'no-referrer');
+  });
+
   // ── Gently upgrade insecure browser hits to HTTPS ────────────────────────────
   // The platform terminates TLS and serves us over HTTPS on a dedicated port (setting
   // x-forwarded-proto=https), but it doesn't tell the container that port. So we LEARN our
