@@ -26,6 +26,7 @@ import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricS
 import { renderReceipt, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { LoginLimiter } from './rateLimit';
+import { blockedOverTunnel } from './tunnel';
 import { toCsv } from './csv';
 import {
   completeCardPresentPaymentIntent,
@@ -134,10 +135,14 @@ async function main(): Promise<void> {
   // uploaded images at /uploads — the setup page needs them). Every OTHER /api route — admin, login,
   // session, setup, logout, and /api/fabric — stays LAN-only, so the admin panel and its auth are
   // never reachable from the internet even when a remote kiosk is adopted.
+  //
+  // The rule itself lives in ./tunnel because it has to canonicalise the path the way the ROUTER
+  // resolves it, not the way it arrived: Fastify percent-decodes path segments before matching, so
+  // the previous inline `startsWith('/api/')` on the raw url was walked past by encoding one letter
+  // ('/%61pi/login' reached the real password login over the tunnel). See tunnel.test.ts.
   app.addHook('onRequest', async (req, reply) => {
     if ((req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel !== true) return;
-    const p = (req.raw.url ?? '/').split('?')[0];
-    if (p.startsWith('/api/') && !(p === '/api/app' || p.startsWith('/api/public/') || p.startsWith('/api/kiosk/'))) {
+    if (blockedOverTunnel(req.raw.url ?? '/')) {
       return reply.code(404).send({ error: 'Not found.' });
     }
   });
