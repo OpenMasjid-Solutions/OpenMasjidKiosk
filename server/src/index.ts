@@ -25,7 +25,7 @@ import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePair
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus } from './fabric';
 import { renderReceipt, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
-import { LoginLimiter } from './rateLimit';
+import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
 import { blockedOverTunnel } from './tunnel';
 import { toCsv } from './csv';
 import {
@@ -527,7 +527,12 @@ async function main(): Promise<void> {
   });
 
   // ── Devices: pairing, fleet management, kiosk PIN ───────────────────────────
-  const pairLimiter = new LoginLimiter(); // brute-force guard for 6-digit pairing codes
+  const pairLimiter = new LoginLimiter(); // per-peer brute-force guard for 6-digit pairing codes
+  // …and a budget shared across every peer. The per-peer limiter hands out 5 free guesses each, so
+  // an attacker with many source addresses (a /64 of IPv6 is one host's worth on a LAN) multiplies
+  // its way through the million-code space while no single bucket ever trips. 50 wrong codes in ten
+  // minutes across the whole network is already far beyond a volunteer mistyping one.
+  const pairBudget = new GlobalAttemptBudget(50, 10 * 60_000);
   // Tuition Student-ID lookups (identify + lookup SHARE this bucket, as they do at Students): a fixed
   // rolling window per peer (20 / 60s), capped regardless of success or failure — a valid lookup must
   // NOT refill the brute-force budget (a shared-IP attacker with one good ID could otherwise reset the
@@ -1062,7 +1067,7 @@ async function main(): Promise<void> {
   const PairBody = z.object({ code: z.string().max(12), name: z.string().max(80).optional(), platform: z.string().max(40).optional() });
   app.post('/api/kiosk/pair', async (req, reply) => {
     const peer = req.socket.remoteAddress ?? 'unknown';
-    const wait = pairLimiter.retryAfterMs(peer);
+    const wait = Math.max(pairLimiter.retryAfterMs(peer), pairBudget.retryAfterMs());
     if (wait > 0) return reply.code(429).send({ error: `Too many attempts. Try again in ${Math.ceil(wait / 1000)}s.` });
     // Remote (over-the-tunnel) pairing is opt-in: refuse it unless the admin turned on "Allow
     // remote adoption". LAN pairing (no tunnel prefix, so omosViaTunnel is unset) is always allowed.
@@ -1074,6 +1079,7 @@ async function main(): Promise<void> {
     const code = parsed.data.code.trim();
     if (!store.consumePairingCode(code)) {
       pairLimiter.fail(peer);
+      pairBudget.fail(); // a wrong code costs the shared budget too, whoever sent it
       return reply.code(400).send({ error: 'That pairing code is invalid or has expired. Generate a fresh one in Admin → Devices.' });
     }
     pairLimiter.succeed(peer);
