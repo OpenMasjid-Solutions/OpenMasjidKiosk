@@ -150,6 +150,27 @@ async function main(): Promise<void> {
   /** A request is authenticated if it carries a valid local session cookie — minted by
    *  first-run setup, password login, or a confirmed OpenMasjidOS SSO check. */
   const isAuthed = (cookie: string | undefined): boolean => verifyToken(store.secret, cookie, 'admin');
+
+  /** Note an admin action that reaches OUTSIDE this app — ending or altering a donor's standing
+   *  order, cutting a kiosk off, rotating the exit PIN. Best-effort by construction (store.recordAudit
+   *  never throws), so it can be called on the success path without risking the action itself.
+   *
+   *  `actor` is as good as we can honestly make it: our session cookie carries no identity (it is an
+   *  assertion that SOMEONE signed in), so when the platform can name the signed-in user we record
+   *  that, and otherwise we say plainly that we don't know rather than inventing a name. */
+  const audit = async (
+    req: import('fastify').FastifyRequest,
+    action: string,
+    target: string,
+    detail: string,
+  ): Promise<void> => {
+    let actor = 'admin (local password)';
+    if (ssoConfigured()) {
+      const who = await probePlatform(req.headers.cookie).catch(() => null);
+      actor = who?.username ? `${who.username} (OpenMasjidOS)` : 'admin (signed in, name unknown)';
+    }
+    store.recordAudit({ action, target, detail, actor, source: req.socket.remoteAddress ?? '' });
+  };
   const requireAdmin = async (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
     if (!isAuthed(req.cookies[COOKIE])) return reply.code(401).send({ error: 'Please sign in.' });
   };
@@ -580,7 +601,10 @@ async function main(): Promise<void> {
   });
 
   app.delete('/api/admin/devices/:id', { preHandler: requireAdmin }, async (req) => {
-    store.revokeDevice((req.params as { id: string }).id);
+    const id = (req.params as { id: string }).id;
+    const name = store.getDevice(id)?.name ?? '';
+    store.revokeDevice(id);
+    await audit(req, 'device.revoke', id, name ? `kiosk "${name}" removed — its token no longer works` : 'kiosk removed');
     return { data: { ok: true } };
   });
 
@@ -608,10 +632,13 @@ async function main(): Promise<void> {
     const pin = parsed.data.pin.trim();
     if (pin === '') {
       store.setPinHash('');
+      // The PIN itself is never recorded, here or anywhere — only that it changed.
+      await audit(req, 'pin.clear', '', 'kiosk exit PIN removed — the maintenance screen is no longer PIN-gated');
       return { data: { set: false } };
     }
     if (!/^\d{4,8}$/.test(pin)) return reply.code(400).send({ error: 'The PIN must be 4 to 8 digits.' });
     store.setPinHash(hashPin(pin));
+    await audit(req, 'pin.set', '', 'kiosk exit PIN changed — takes effect on each kiosk’s next heartbeat');
     return { data: { set: true } };
   });
 
@@ -932,14 +959,23 @@ async function main(): Promise<void> {
   app.post('/api/admin/plans/:id/cancel', { preHandler: requireAdmin }, async (req, reply) => {
     const body = CancelBody.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
-    return planAction(req, reply, (keys, id) => cancelPlan(keys.secretKey, id, body.data.immediately === true));
+    const now = body.data.immediately === true;
+    return planAction(req, reply, async (keys, id) => {
+      const r = await cancelPlan(keys.secretKey, id, now);
+      await audit(req, 'plan.cancel', id, now ? 'ended immediately' : 'ends at the end of the paid period');
+      return r;
+    });
   });
 
   const PauseBody = z.object({ paused: z.boolean() });
   app.post('/api/admin/plans/:id/pause', { preHandler: requireAdmin }, async (req, reply) => {
     const body = PauseBody.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
-    return planAction(req, reply, (keys, id) => pausePlan(keys.secretKey, id, body.data.paused));
+    return planAction(req, reply, async (keys, id) => {
+      const r = await pausePlan(keys.secretKey, id, body.data.paused);
+      await audit(req, 'plan.pause', id, body.data.paused ? 'paused — nothing collected until resumed' : 'resumed');
+      return r;
+    });
   });
 
   // End on a date, or after a fixed number of further charges. Both empty clears the schedule.
@@ -959,7 +995,19 @@ async function main(): Promise<void> {
       if (t <= Date.now()) return reply.code(400).send({ error: 'Pick a date in the future.' });
       endSec = Math.floor(t / 1000);
     }
-    return planAction(req, reply, (keys, id) => schedulePlanEnd(keys.secretKey, id, { endAt: endSec, charges: charges ?? null }));
+    return planAction(req, reply, async (keys, id) => {
+      const r = await schedulePlanEnd(keys.secretKey, id, { endAt: endSec, charges: charges ?? null });
+      const what = endSec ? `ends on ${new Date(endSec * 1000).toISOString().slice(0, 10)}` : charges ? `stops after ${charges} more charge(s)` : 'end date cleared — carries on';
+      await audit(req, 'plan.schedule', id, what);
+      return r;
+    });
+  });
+
+  // The audit trail itself. Read-only by construction — there is no route that edits or deletes a
+  // row, which is the point of keeping one.
+  app.get('/api/admin/audit', { preHandler: requireAdmin }, async (req) => {
+    const q = (req.query ?? {}) as { limit?: string };
+    return { data: { entries: store.listAudit(Number(q.limit) || 200) } };
   });
 
   // CSV export — behind admin auth (it exposes donor PII). Every cell is escaped against CSV formula
