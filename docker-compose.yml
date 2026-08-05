@@ -11,10 +11,26 @@
 # a tablet from Devices. All state is saved to /data.
 services:
   app:
-    # Tag for humans + @sha256 digest for integrity (the digest is the real pin — a
-    # moved tag can't repoint it to a different image). Bump BOTH on every release.
-    # (digest filled in from the build-image.yml output after the first org build)
-    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.10.1@sha256:b06b7a4f576d331b441e2863e5187df621f55d0785bf4712c5ac350d806cd4f9
+    # ── DEV BRANCH: the development channel ──────────────────────────────────
+    # This is the `dev` branch, so this points at the MOVING :dev tag, which CI republishes on
+    # every push to dev. A masjid with Update Channel = dev gets the newest dev build, including
+    # the dev APK bundled inside it — that is the whole point of the channel.
+    #
+    # There is deliberately NO @sha256 pin here, and one must not be added: pinning a digest would
+    # freeze the dev channel on a single build and stop it tracking dev, while still looking
+    # perfectly healthy. This is the one place this repo gives up the pin §12 otherwise requires,
+    # and the trade is accepted only because the dev channel is opt-in and is not what a masjid
+    # runs in production. The catalog build warns about the missing pin — that warning is EXPECTED
+    # here (build-catalog.mjs treats it as a warning, not a failure).
+    #
+    # On `main` this line keeps its release tag + @sha256 digest. NEVER carry this dev line into
+    # main: a "merge to main" must restore the pinned form (CLAUDE.md → Branching policy). CI
+    # enforces both directions — build-image.yml's "Check the compose image matches the channel"
+    # step fails a release whose compose still says :dev, and fails a dev push that has a digest.
+    #
+    # To identify or roll back exactly what a dev box is running, use the immutable companion tag
+    # CI also publishes: ghcr.io/openmasjid-solutions/openmasjidkiosk:dev-<12-char commit sha>.
+    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:dev
     restart: unless-stopped
     environment:
       PORT: "8080"
