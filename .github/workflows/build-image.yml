@@ -186,8 +186,13 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Cache is scoped per CHANNEL (the OpenMasjidDisplay pattern). GitHub evicts the least
+          # recently used entries from a fixed per-repo budget, and this is the org's heaviest build
+          # — a busy day on dev would otherwise evict the layers a release restores from, making the
+          # release both slower and less reproducible. main and every v* tag still share one warm
+          # `stable` cache; dev keeps its own.
+          cache-from: type=gha,scope=${{ steps.meta.outputs.channel }}
+          cache-to: type=gha,mode=max,scope=${{ steps.meta.outputs.channel }}
 
       # On the stable channel the @sha256 digest is the real integrity pin — copy it into
       # docker-compose.yml. On dev there is nothing to pin: the channel tracks the moving tag, and
