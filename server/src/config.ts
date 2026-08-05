@@ -33,6 +33,35 @@ function readVersion(): string {
   return '0.1.0';
 }
 
+/**
+ * Append the update-channel suffix to a version string.
+ *
+ * A dev image is built with `APP_VERSION_SUFFIX=-dev` (Dockerfile ARG → ENV), and the kiosk APK
+ * bundled inside it is built with the SAME value as its Gradle `versionNameSuffix`. Both halves
+ * matter, and this is why:
+ *
+ * `latestAppVersion` (this value) is what the heartbeat tells a tablet, and the tablet decides an
+ * update is available by plain string inequality against its own versionName. Suffix only the APK
+ * and a dev tablet running 0.10.1-dev would compare itself against a server saying 0.10.1 —
+ * permanently "update available", including immediately after updating. Suffixing both keeps the
+ * comparison honest in all four combinations:
+ *
+ *   dev server + dev tablet        0.10.1-dev vs 0.10.1-dev   equal    → no update offered
+ *   stable server + stable tablet  0.10.1     vs 0.10.1       equal    → no update offered
+ *   dev server + stable tablet     0.10.1-dev vs 0.10.1       differ   → offered (correct)
+ *   stable server + dev tablet     0.10.1     vs 0.10.1-dev   differ   → offered (correct)
+ *
+ * Empty on the stable channel, so a release is byte-for-byte what it was before this existed.
+ * Pure and exported so the rule is unit-tested rather than asserted in a comment.
+ */
+export function applyVersionSuffix(base: string, suffix: string): string {
+  // Conservative charset: this ends up in a version string that is compared, displayed on the
+  // Devices page and shown on the tablet. Anything unexpected is dropped rather than rendered.
+  const s = (suffix ?? '').trim();
+  if (!s || !/^-[A-Za-z0-9][A-Za-z0-9.-]{0,19}$/.test(s)) return base;
+  return base.endsWith(s) ? base : `${base}${s}`;
+}
+
 /** Where the shipped CHANGELOG.md lives — the source for the admin panel's "What's new".
  *  It is copied next to the runtime in the image (/app/CHANGELOG.md); in dev it sits at the
  *  repo root, two levels above the compiled server. Serving the file that shipped WITH this
@@ -60,7 +89,10 @@ export const config = {
   apkPath: env('APK_PATH', path.resolve(__dirname, '..', 'public', 'download', 'openmasjidkiosk.apk')),
   /** The release notes this build shipped with (admin panel → "What's new"). */
   changelogPath: findChangelog(),
-  version: readVersion(),
+  /** This build's version, carrying the update-channel suffix when there is one ("0.10.1-dev" on
+   *  a dev image, "0.10.1" on a release). See [applyVersionSuffix] for why both this and the
+   *  bundled APK must carry it. */
+  version: applyVersionSuffix(readVersion(), env('APP_VERSION_SUFFIX')),
 
   /** OpenMasjidOS Fabric (the platform↔app SSO + appearance + Stripe + notifications
    *  layer). Injected by the platform at install; empty on a standalone install, where

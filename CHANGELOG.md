@@ -3,6 +3,26 @@
 
 # Changelog
 
+## 0.10.2
+- **Nothing changes on your kiosks in this release.** No new donor-facing features, no admin
+  changes, no tablet update needed. It is worth installing anyway for the build-safety fix below,
+  but there is no hurry.
+- **Fixed: a build without the app-signing key could have shipped an unusable app.** If the signing
+  secrets were ever missing, the pipeline fell back to a test-signed Android app and published it
+  anyway. Android refuses to install an update signed with a different key, so every tablet would
+  have shown "App not installed", and the only way out would have been uninstalling the app on each
+  one — losing its pairing and needing a physical re-pair. The build now refuses to publish anything
+  but a properly signed app, and says exactly why if it can't.
+- **New: a development channel, for testing before a release reaches masajid.** OpenMasjidOS now has
+  an Update Channel toggle; leaving it on **stable** is what a masjid should do and is unchanged.
+  Switching a test server to **dev** gets the newest development build, tablet app included, so a
+  change can be tried on real hardware before anyone else sees it. Dev builds label their version
+  with `-dev` so a test tablet can never be mistaken for a live one.
+- The README now describes the whole product rather than the first week of it, and documents two
+  known gaps found while writing it: branded receipt emails currently fall back to Stripe's own
+  receipt, and the stored "allow manual card entry" setting does nothing (typed entry is always
+  offered). Both are fixes for a future release.
+
 ## 0.10.1
 - **Security: the admin panel could be reached from the internet by a remote kiosk's address.** If
   you had turned on Remote access in OpenMasjidOS *and* "Allow remote adoption" here, the rule that

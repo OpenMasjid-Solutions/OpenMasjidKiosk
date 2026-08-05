@@ -10,6 +10,26 @@ name: Build image
 #   ghcr.io/openmasjid-solutions/openmasjidkiosk
 # which is what docker-compose.yml references.
 #
+# TWO CHANNELS (the org's Update Channel toggle in OpenMasjidOS — CLAUDE.md "Branching policy"):
+#
+#   main / v* tags  ->  :<manifest version>  +  :latest        the stable channel
+#   dev             ->  :dev  +  :dev-<12-char sha>            the development channel
+#
+# The two tag sets are disjoint, and that is the load-bearing part of this file. `dev` carries
+# main's manifest version for most of its life, so publishing :<version> from a dev push would
+# overwrite an ALREADY-RELEASED stable tag with unreviewed content, and every masjid that
+# reinstalled that app would pull a dev build under a released version number. Never add the
+# version tag or :latest to the dev tag list.
+#
+# `:dev` is a MOVING tag — that is the point of it, and the one place this repo knowingly gives up
+# the digest pin §12 otherwise requires. Every dev build therefore also gets an immutable
+# `:dev-<sha>` tag: `:dev` means "newest", `:dev-<sha>` says exactly which commit a box is running,
+# so a bad dev build stays diagnosable and rollback-able despite the moving tag.
+#
+# BOTH channels run the FULL pipeline — Gradle APK -> web -> server -> multi-arch image — so a dev
+# image ships a dev APK built from the dev branch, and an arm64-only regression is caught on the
+# channel that exists to catch it (masjid boxes are usually Raspberry Pis).
+#
 # After the FIRST successful run: make the GHCR package Public (org → Packages → package
 # settings) so masjid hosts can pull it without authentication. Then copy the printed
 # @sha256 digest into docker-compose.yml (the real integrity pin) and bump the manifest
@@ -17,7 +37,7 @@ name: Build image
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ['v*']
     # Changes that don't affect the image — skip the (slow) multi-arch build.
     # docker-compose.yml is NOT in the image build context, so re-pinning the @sha256
@@ -40,6 +60,17 @@ permissions:
   contents: read
   packages: write
 
+# :dev is a MOVING tag, so two overlapping dev builds race to own it — and the winner is whichever
+# finishes LAST, not whichever is newer. This build is slow (Gradle APK + two architectures), which
+# makes the overlap window wide, so a lagging older commit could repoint :dev backwards. Superseded
+# dev builds are cancelled so the tag follows the branch tip.
+#
+# Scoped to dev deliberately: a release build must never be cancelled. (Tag pushes are each their
+# own ref anyway, so they could not cancel one another regardless.)
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/dev' }}
+
 jobs:
   # Build (and sign, if secrets are set) the APK, exposed as the `kiosk-apk` artifact.
   apk:
@@ -52,14 +83,79 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Resolve image name + version
+      - name: Resolve image name, version + channel tags
         id: meta
         run: |
           ver=$(grep -E '^version:' manifest.yaml | head -1 | sed -E 's/^version:[[:space:]]*//' | tr -d "\"' \r")
           [ -n "$ver" ] || ver=latest
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          name=$(echo "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/$owner/$name"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-          echo "name=$(echo "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          # Which channel to publish is decided by the REF, not by the event, so a manual
+          # workflow_dispatch run on `dev` can never publish :latest from dev code.
+          if [ "$GITHUB_REF" = 'refs/heads/dev' ]; then channel=dev; else channel=stable; fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          # The version suffix the SERVER reports and the APK carries — they must match, because
+          # the tablet's "update available" check is a string comparison between the two.
+          if [ "$channel" = dev ]; then echo 'suffix=-dev' >> "$GITHUB_OUTPUT"; else echo 'suffix=' >> "$GITHUB_OUTPUT"; fi
+          # Multi-line output: nothing else may write to $GITHUB_OUTPUT between the delimiters,
+          # or it would be swallowed into the value — so `channel` is written above, and the tags
+          # are echoed straight into the block (no shell variable, so no YAML indentation can
+          # leak into a tag).
+          {
+            echo 'tags<<TAGS_EOF'
+            if [ "$channel" = dev ]; then
+              echo "$image:dev"
+              echo "$image:dev-${GITHUB_SHA::12}"
+            else
+              echo "$image:$ver"
+              echo "$image:latest"
+            fi
+            echo 'TAGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "publishing the $channel channel"
+
+      # docker-compose.yml is what the catalog serves to installers (it fetches the file from the
+      # ref its registry entry pins), so this file IS a shipped artifact and the channel invariant
+      # belongs here, before anything is published. Two symmetric mistakes are possible, and both
+      # are quiet — the app builds, boots and looks fine either way:
+      #
+      #   1. dev's moving :dev line reaches a release. Every masjid on the stable channel would then
+      #      install whatever happened to be on dev. Merging dev -> main without re-pinning is all
+      #      it takes, and the merge is exactly when someone is in a hurry.
+      #   2. a digest pin is left behind on dev. The dev channel would keep installing one frozen
+      #      old build while CI happily publishes a :dev image nobody consumes — dev testing
+      #      silently stops testing anything.
+      #
+      # A push to main is allowed to be unpinned for exactly one commit, because the release runbook
+      # pins the digest only AFTER the image has been built from main — so that case warns.
+      - name: Check the compose image matches the channel
+        run: |
+          img=$(grep -E '^[[:space:]]*image:' docker-compose.yml | head -1 | sed -E 's/^[[:space:]]*image:[[:space:]]*//' | tr -d "\"' \r")
+          echo "compose image: $img"
+          case "$GITHUB_REF" in
+            refs/heads/dev)
+              case "$img" in
+                *@sha256:*) echo "::error file=docker-compose.yml::the dev compose must not digest-pin — :dev is a moving tag, and pinning freezes the channel on one build while still looking healthy (got '$img')"; exit 1 ;;
+                *:dev) echo "ok — dev channel, moving tag" ;;
+                *) echo "::error file=docker-compose.yml::the dev branch must reference the moving :dev tag, got '$img'"; exit 1 ;;
+              esac ;;
+            refs/tags/v*)
+              case "$img" in
+                *:dev|*:dev@*) echo "::error file=docker-compose.yml::a release must never reference the moving :dev image. Re-pin to <version>@sha256:<digest> before tagging."; exit 1 ;;
+                *@sha256:*) echo "ok — release is digest-pinned" ;;
+                *) echo "::error file=docker-compose.yml::a release compose must digest-pin the image (@sha256:…), got '$img'. Did a dev merge land without re-pinning?"; exit 1 ;;
+              esac ;;
+            refs/heads/main)
+              case "$img" in
+                *:dev|*:dev@*) echo "::error file=docker-compose.yml::main must never reference the moving :dev image — that would point every stable install at a development build. Re-pin to <version>@sha256:<digest>."; exit 1 ;;
+                *@sha256:*) echo "ok — main is digest-pinned" ;;
+                *) echo "::warning file=docker-compose.yml::main's compose is not digest-pinned yet — pin the digest before tagging the release" ;;
+              esac ;;
+          esac
 
       # Pull the freshly built APK into the build context so the Dockerfile bundles it.
       - name: Fetch built APK
@@ -81,6 +177,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Tags come from the channel resolved above: version + :latest on main / v* tags, the moving
+      # :dev + immutable :dev-<sha> pair on the dev branch. Multi-arch is not optional on either
+      # channel — masajid run this on Raspberry Pis (arm64) as well as amd64 hosts, and the dev
+      # channel is precisely where a Pi-only regression should surface.
       - name: Build and push
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -88,17 +188,33 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:${{ steps.meta.outputs.version }}
-            ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          # Empty on the stable channel, so a release image is unchanged by this.
+          build-args: |
+            APP_VERSION_SUFFIX=${{ steps.meta.outputs.suffix }}
+          # Cache is scoped per CHANNEL (the OpenMasjidDisplay pattern). GitHub evicts the least
+          # recently used entries from a fixed per-repo budget, and this is the org's heaviest build
+          # — a busy day on dev would otherwise evict the layers a release restores from, making the
+          # release both slower and less reproducible. main and every v* tag still share one warm
+          # `stable` cache; dev keeps its own.
+          cache-from: type=gha,scope=${{ steps.meta.outputs.channel }}
+          cache-to: type=gha,mode=max,scope=${{ steps.meta.outputs.channel }}
 
-      # The @sha256 digest is the real integrity pin — copy it into docker-compose.yml.
-      - name: Digest to pin in docker-compose.yml
+      # On the stable channel the @sha256 digest is the real integrity pin — copy it into
+      # docker-compose.yml. On dev there is nothing to pin: the channel tracks the moving tag, and
+      # the immutable :dev-<sha> companion is how you identify or roll back a specific dev build.
+      - name: What was published
         run: |
-          echo "Pin this in docker-compose.yml:"
-          echo "  image: ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:${{ steps.meta.outputs.version }}@${{ steps.build.outputs.digest }}"
+          echo "channel: ${{ steps.meta.outputs.channel }}"
+          echo "digest:  ${{ steps.build.outputs.digest }}"
+          if [ "${{ steps.meta.outputs.channel }}" = stable ]; then
+            echo "Pin this in docker-compose.yml:"
+            echo "  image: ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:${{ steps.meta.outputs.version }}@${{ steps.build.outputs.digest }}"
+          else
+            echo "The moving :dev tag now points here. Nothing to pin — the dev channel tracks the tag."
+            echo "To identify or roll back this exact build, use the immutable companion tag:"
+            echo "  ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:dev-$(echo ${{ github.sha }} | cut -c1-12)"
+          fi
 
       # Tell the OpenMasjidAPPS catalog to rebuild so the App Store picks up this release.
       # Uses the shared CATALOG_PUSH_TOKEN (a token allowed to dispatch on the catalog repo,
