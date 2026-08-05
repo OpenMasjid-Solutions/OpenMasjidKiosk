@@ -98,6 +98,9 @@ jobs:
           # workflow_dispatch run on `dev` can never publish :latest from dev code.
           if [ "$GITHUB_REF" = 'refs/heads/dev' ]; then channel=dev; else channel=stable; fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          # The version suffix the SERVER reports and the APK carries — they must match, because
+          # the tablet's "update available" check is a string comparison between the two.
+          if [ "$channel" = dev ]; then echo 'suffix=-dev' >> "$GITHUB_OUTPUT"; else echo 'suffix=' >> "$GITHUB_OUTPUT"; fi
           # Multi-line output: nothing else may write to $GITHUB_OUTPUT between the delimiters,
           # or it would be swallowed into the value — so `channel` is written above, and the tags
           # are echoed straight into the block (no shell variable, so no YAML indentation can
@@ -186,6 +189,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          # Empty on the stable channel, so a release image is unchanged by this.
+          build-args: |
+            APP_VERSION_SUFFIX=${{ steps.meta.outputs.suffix }}
           # Cache is scoped per CHANNEL (the OpenMasjidDisplay pattern). GitHub evicts the least
           # recently used entries from a fixed per-repo budget, and this is the org's heaviest build
           # — a busy day on dev would otherwise evict the layers a release restores from, making the

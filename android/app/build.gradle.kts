@@ -18,6 +18,24 @@ val appVersionName: String = runCatching {
     File(rootProject.projectDir, "../VERSION").readText().trim()
 }.getOrNull()?.takeIf { it.isNotEmpty() } ?: "0.1.0"
 
+// --- Update-channel suffix ------------------------------------------------------------
+// CI passes APP_VERSION_SUFFIX=-dev when building from the `dev` branch, so a dev APK reports
+// "0.10.1-dev" where a release reports "0.10.1". Empty (and therefore a no-op) on the stable
+// channel and for any local build, so a release is exactly what it was before this existed.
+//
+// The SERVER is built with the same value (Dockerfile ARG -> ENV -> config.ts applyVersionSuffix),
+// and that pairing is the point: the heartbeat sends the server's version as `latestAppVersion`,
+// and the tablet decides an update is available by plain string inequality against this
+// versionName. Suffixing only one side would leave a dev tablet permanently reporting "update
+// available" against its own dev server, including straight after updating.
+//
+// VERSION itself is untouched — it is release-managed and identical on both branches.
+val appVersionSuffix: String =
+    ((project.findProperty("APP_VERSION_SUFFIX") as String?) ?: System.getenv("APP_VERSION_SUFFIX") ?: "")
+        .trim()
+        .takeIf { Regex("^-[A-Za-z0-9][A-Za-z0-9.-]{0,19}$").matches(it) }
+        ?: ""
+
 // --- Release signing (CI only) -------------------------------------------------------
 // The release signing config is created ONLY when a KEYSTORE_FILE is provided (Gradle
 // property or env var), so CI can sign release builds with secrets from GitHub Actions.
@@ -39,6 +57,13 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = appVersionName
+        // "" on the stable channel, "-dev" on a dev-branch CI build (see appVersionSuffix above).
+        // Set on defaultConfig so it applies to release AND debug builds alike. versionCode is
+        // deliberately NOT touched: it is a hardcoded 1 on every branch and tag, which is what
+        // lets a dev and a stable APK install over each other in place (equal versionCode is a
+        // reinstall, not a downgrade). Introducing a higher dev versionCode would trap tablets —
+        // the stable APK would then be a genuine downgrade and refuse to install.
+        if (appVersionSuffix.isNotEmpty()) versionNameSuffix = appVersionSuffix
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

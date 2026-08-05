@@ -68,6 +68,17 @@ jobs:
             echo "have_keystore=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # The update-channel suffix, decided from the git ref exactly as build-image.yml decides the
+      # image tags. A dev-branch APK reports "0.10.1-dev"; a release reports "0.10.1". The server
+      # in the same image is built with the SAME value, because the tablet's "update available"
+      # check is a plain string comparison between the two. See android/app/build.gradle.kts.
+      - name: Resolve the channel suffix
+        id: channel
+        run: |
+          if [ "$GITHUB_REF" = 'refs/heads/dev' ]; then suffix=-dev; else suffix=; fi
+          echo "suffix=$suffix" >> "$GITHUB_OUTPUT"
+          echo "APP_VERSION_SUFFIX='$suffix'"
+
       - name: Build signed release APK
         if: steps.signing.outputs.have_keystore == 'true'
         env:
@@ -75,10 +86,13 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          APP_VERSION_SUFFIX: ${{ steps.channel.outputs.suffix }}
         run: ./gradlew --no-daemon :app:assembleRelease
 
       - name: Build debug APK (no signing secrets)
         if: steps.signing.outputs.have_keystore != 'true'
+        env:
+          APP_VERSION_SUFFIX: ${{ steps.channel.outputs.suffix }}
         run: ./gradlew --no-daemon :app:assembleDebug
 
       - name: Collect APK as openmasjidkiosk.apk
