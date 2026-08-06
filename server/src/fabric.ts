@@ -120,16 +120,54 @@ export interface FabricEmailMessage {
   html?: string;
 }
 
-/** Last outcome of a Fabric email attempt, so the admin UI (and the receipt strategy) can tell
- *  whether email is set up in OpenMasjidOS WITHOUT sending a probe on every settings load. We only
- *  go "branded" (suppress Stripe's own receipt in favour of ours) once this is 'ok' — a proven send
- *  — so a donor is never left with zero receipts because email wasn't actually configured. In-memory
- *  only (never persisted); resets to 'unknown' each process start per the restore-resilience rules. */
+/** Last outcome of a Fabric email attempt, so the admin UI can show whether email is working in
+ *  OpenMasjidOS WITHOUT sending a probe on every settings load. In-memory only (never persisted);
+ *  resets to 'unknown' each process start per the restore-resilience rules — which is exactly why
+ *  the receipt strategy must NOT require it to be 'ok'. See [emailCanSend]. */
 export type EmailStatus = 'unknown' | 'ok' | 'not_configured' | 'rate_limited' | 'error' | 'no-fabric';
 let lastEmailStatus: EmailStatus = 'unknown';
 export function emailStatus(): EmailStatus {
   return lastEmailStatus;
 }
+
+/**
+ * May we plan to send a branded receipt ourselves (and therefore suppress Stripe's)?
+ *
+ * This used to be `emailStatus() === 'ok'`, which could never be true. 'ok' is set in exactly one
+ * place — a successful [fabricEmail] — and `fabricEmail` has exactly one caller, the branded-receipt
+ * send, which only runs for donations already marked branded. Nothing could enter the cycle, and the
+ * status resets to 'unknown' every process start anyway, so **no branded receipt has ever been sent**;
+ * every donor silently got Stripe's built-in one instead, however the admin set the toggle.
+ *
+ * There is no probe to break the tie with: the platform's only email endpoint is a send
+ * (POST /api/fabric/email), and it reports health solely as the outcome of a real message.
+ *
+ * So invert the default: assume we CAN until the platform says otherwise. 'not_configured' and
+ * 'no-fabric' are the platform telling us plainly that no mail will ever leave, and those stick.
+ * 'rate_limited' and 'error' are transient and must NOT latch — one bad night would otherwise turn
+ * branded receipts off until the next restart.
+ *
+ * The safety property that gate was protecting — a donor never ends up with zero receipts — is kept,
+ * but moved to where it can actually be enforced: if our own send fails for good, the caller asks
+ * Stripe to send its receipt after the fact ([sendStripeReceipt]). Deciding up front could only ever
+ * guess; deciding after the attempt knows.
+ */
+export function emailCanSend(): boolean {
+  if (lastEmailStatus === 'not_configured' || lastEmailStatus === 'no-fabric') return false;
+  // A provider that is CONFIGURED but broken (wrong SMTP password, a provider returning 401) reports
+  // 'error' every time, which must not latch on its own — one blip would otherwise switch branded
+  // receipts off until a restart, and nothing would switch them back on, since only a real send can
+  // prove recovery. So count instead: after a run of failures, stop minting branded PaymentIntents
+  // and let Stripe send, rather than silence Stripe for donation after donation that we then cannot
+  // deliver. The retry outbox keeps working the already-pending rows, and the first of those to
+  // succeed resets the counter and turns branded receipts straight back on.
+  return consecutiveEmailFailures < EMAIL_FAILURE_LIMIT;
+}
+
+/** How many sends in a row may fail before we stop suppressing Stripe's receipt. Small, because
+ *  each one is a real donor waiting on an email that is not coming. */
+const EMAIL_FAILURE_LIMIT = 3;
+let consecutiveEmailFailures = 0;
 
 /** Send one email through the Fabric. Returns {sent} / {sent:false, reason}. NEVER throws;
  *  NEVER logs the recipient or the body (only a status code / reason on failure). */
@@ -153,15 +191,18 @@ export async function fabricEmail(msg: FabricEmailMessage): Promise<{ sent: bool
     clearTimeout(t);
     if (!res.ok) {
       lastEmailStatus = 'error';
+      consecutiveEmailFailures++;
       return { sent: false, reason: `http_${res.status}` };
     }
     const j = (await res.json().catch(() => ({}))) as { sent?: boolean; reason?: string };
     if (j.sent === true) {
       lastEmailStatus = 'ok';
+      consecutiveEmailFailures = 0; // proven working — re-enable branded receipts immediately
       return { sent: true };
     }
     const reason = j.reason ?? 'unknown';
     lastEmailStatus = reason === 'not_configured' ? 'not_configured' : reason === 'rate_limited' ? 'rate_limited' : 'error';
+    consecutiveEmailFailures++;
     return { sent: false, reason };
   } catch (err) {
     // Reached-but-failed / unreachable — NOT proof it's unconfigured, so don't claim so.
