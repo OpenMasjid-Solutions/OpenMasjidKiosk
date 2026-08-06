@@ -620,14 +620,14 @@ function DeviceRow({ device, campaigns, serverVersion, onChange }: { device: Dev
       {outOfDate && showUpdateHelp && (
         <div className="update-help">
           <p className="hint" style={{ marginBlockEnd: '0.5rem' }}>
-            This kiosk is on <strong>v{device.appVersion}</strong>; the latest is <strong>v{serverVersion}</strong>. Android
-            won't let the app update itself, so update it <strong>at the tablet</strong>:
+            This kiosk is on <strong>v{device.appVersion}</strong>; the latest is <strong>v{serverVersion}</strong>. The app
+            updates itself from this server — start it <strong>at the tablet</strong>:
           </p>
           <ol className="update-steps">
-            <li>On the tablet, tap the giving screen <strong>7 times quickly</strong>, then enter the kiosk PIN.</li>
-            <li>Tap <strong>Update app</strong>. The kiosk leaves kiosk mode and opens the new app in its browser.</li>
-            <li>Tap through any security notice for your server and let it download, then open the file and tap <strong>Install</strong> (allow installs from the browser if asked).</li>
-            <li>The kiosk relaunches on the new version automatically.</li>
+            <li>On the tablet, tap the giving screen <strong>10 times quickly</strong> (anywhere on the background), then enter the kiosk PIN.</li>
+            <li>Tap <strong>Update app</strong>. It downloads the new version from this server and hands it straight to Android — no browser.</li>
+            <li>Tap <strong>Install</strong> when Android asks. The first time, it will also ask you to allow this app to install apps; the checklist under <strong>Permissions &amp; lockdown</strong> on that same screen has a button for it.</li>
+            <li>The kiosk relaunches on the new version and re-locks itself automatically.</li>
           </ol>
         </div>
       )}
