@@ -21,6 +21,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -43,6 +44,12 @@ import org.openmasjidos.kiosk.ui.theme.PrimaryDark
 /**
  * The setup screen shown while the kiosk is Unpaired. Typed URL + 6-digit code only (no camera,
  * per this slice). Everything is on-scene, so text uses the fixed on-scene inks.
+ *
+ * This screen is never pinned and always offers [onExit]. Until a server is paired there is no
+ * config, no donor flow, no money and no exit PIN to verify — but the app IS the tablet's Home app
+ * with a re-launch-on-leave watchdog, and the hidden 10-tap maintenance gesture only exists on the
+ * paired giving screen. Without a plain exit here, a tablet that was never paired (or one an admin
+ * has just revoked) can only be recovered over ADB. Nothing is protected by withholding it.
  */
 @Composable
 fun PairingScreen(
@@ -51,6 +58,7 @@ fun PairingScreen(
     onCodeChange: (String) -> Unit,
     onNameChange: (String) -> Unit,
     onSubmit: () -> Unit,
+    onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     SceneSurface(modifier = modifier) {
@@ -158,6 +166,31 @@ fun PairingScreen(
                         style = MaterialTheme.typography.titleLarge,
                     )
                 }
+            }
+
+            // The way out of an unpaired tablet — see the note on this composable. Deliberately
+            // plain and secondary so it never competes with "Pair kiosk", but never hidden either.
+            Spacer(Modifier.height(28.dp))
+            Text(
+                text = stringResource(R.string.pairing_exit_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = InkMutedDark,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onExit,
+                enabled = !form.busy,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.pairing_exit),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = InkMutedDark,
+                )
             }
         }
     }

@@ -136,11 +136,31 @@ class MainActivity : ComponentActivity() {
                         KioskController.exitKiosk(this)
                         runCatching { startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                     },
-                    onOpenAccessibility = {
-                        // Jump to Accessibility settings so the volunteer can enable the shade-lock
-                        // helper. Same temporary-excursion handling as onOpenSettings (re-locks on return).
-                        KioskController.exitKiosk(this)
-                        runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    // Drop screen pinning / Lock Task so a SYSTEM dialog or settings screen can
+                    // actually appear — while pinned, launching either is silently suppressed and
+                    // the button looks broken. Every permission-checklist action calls this first.
+                    // A temporary excursion (NOT `exiting`): onResume / onWindowFocusChanged re-lock.
+                    onLeaveLockdown = { KioskController.exitKiosk(this) },
+                    onOpenIntent = { intent ->
+                        // Already unpinned by onLeaveLockdown above. Not every OEM build ships every
+                        // settings screen (unknown-app-sources in particular), and a checklist button
+                        // that throws away an ActivityNotFoundException is just a dead button — so
+                        // fall back to this app's own "App info" page, which always exists and from
+                        // which every one of these can be reached by hand.
+                        val opened = runCatching {
+                            startActivity(Intent(intent).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            true
+                        }.getOrDefault(false)
+                        if (!opened) {
+                            runCatching {
+                                startActivity(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.parse("package:$packageName"),
+                                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            }
+                        }
                     },
                 )
                 }
