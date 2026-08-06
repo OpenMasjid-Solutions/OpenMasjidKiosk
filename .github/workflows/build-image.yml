@@ -253,10 +253,21 @@ jobs:
             echo "  ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:dev-$(echo ${{ github.sha }} | cut -c1-12)"
           fi
 
-      # Tell the OpenMasjidAPPS catalog to rebuild so the App Store picks up this build.
-      # Uses the shared CATALOG_PUSH_TOKEN (a token allowed to dispatch on the catalog repo,
-      # per that repo's README "Maintainers — catalog auto-publish" note), and never fails the
-      # build if the token is absent.
+      # Tell the OpenMasjidAPPS catalog to rebuild so the App Store picks up this build. Never
+      # fails the build if the token is absent — a catalog refresh failing must not fail an image
+      # that already published.
+      #
+      # THE SECRET IS MISSPELT AT SOURCE. The org secret is named CATLOG_PUSH_TOKEN — no "A" —
+      # while every app in the family asks for CATALOG_PUSH_TOKEN. It therefore always resolved to
+      # the empty string and this step silently took the skip path, which is why repository_dispatch
+      # has fired ZERO times org-wide even in repos where the step was already enabled. Widening the
+      # `if:` alone changed nothing; the runs still printed "CATALOG_PUSH_TOKEN not set".
+      #
+      # An unset secret is the empty string, which is falsy, so `||` takes whichever name exists.
+      # That works today AND keeps working after the secret is renamed, with no follow-up commit.
+      # Drop the fallback once every repo is on the correct spelling. (OpenMasjidDisplay already
+      # does this; OpenMasjidDonations and OpenMasjidStudents still ask only for the correct name
+      # and so are still silently skipping.)
       #
       # This step is placed AFTER "Build and push" deliberately, and that ordering is now load-
       # bearing on dev as well as on a release. The catalog pins an EXACT image tag, so an entry
@@ -272,10 +283,11 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/dev'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.CATALOG_PUSH_TOKEN }}
+          GH_TOKEN: ${{ secrets.CATALOG_PUSH_TOKEN || secrets.CATLOG_PUSH_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "CATALOG_PUSH_TOKEN not set — skipping catalog dispatch (add it as an org/repo secret to auto-publish)."
+            echo "Neither CATALOG_PUSH_TOKEN nor CATLOG_PUSH_TOKEN is set — skipping catalog dispatch."
+            echo "The dev catalog will still refresh on OpenMasjidAPPS's cron, but not promptly."
             exit 0
           fi
           gh api repos/OpenMasjid-Solutions/OpenMasjidAPPS/dispatches -f event_type=rebuild-catalog
