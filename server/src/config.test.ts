@@ -62,6 +62,44 @@ test('a nonsense suffix is dropped rather than rendered into the version', () =>
   }
 });
 
+test('a version that already carries a prerelease is left alone', () => {
+  // Dev builds now ship a real prerelease version (X.Y.Z-dev.N) so the platform can DETECT and
+  // notify about them — OpenMasjidOS compares the catalog's version with the installed one, and
+  // the old scheme (stable version + moving :dev tag) changed nothing observable per build.
+  // CI therefore stopped passing a suffix. If it is ever passed again, it must not corrupt the
+  // version into something no comparison can order.
+  assert.equal(applyVersionSuffix('0.11.0-dev.1', '-dev'), '0.11.0-dev.1');
+  assert.equal(applyVersionSuffix('0.11.0-dev.12', '-dev'), '0.11.0-dev.12');
+  assert.equal(applyVersionSuffix('0.11.0-rc.1', '-dev'), '0.11.0-rc.1');
+  // A plain release version still takes one, so the old behaviour is intact where it applied.
+  assert.equal(applyVersionSuffix('0.11.0', '-dev'), '0.11.0-dev');
+});
+
+test('the versioned dev scheme orders the way the platform needs', () => {
+  // OpenMasjidOS compares dotted-numeric parts (util/version.ts), so X.Y.Z-dev.N puts N in the
+  // fourth slot and increments compare correctly. The SHAPE is load-bearing: "0.11.0-dev1" would
+  // collapse to [0,11,0] and never register as an update. Pinned here because this repo chooses
+  // the version string that the platform then has to order.
+  const cmp = (current: string, latest: string): boolean => {
+    const a = current.split('.').map((n) => Number.parseInt(n, 10) || 0);
+    const b = latest.split('.').map((n) => Number.parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const x = a[i] ?? 0;
+      const y = b[i] ?? 0;
+      if (y > x) return true;
+      if (y < x) return false;
+    }
+    return false;
+  };
+  assert.equal(cmp('0.10.2', '0.11.0-dev.1'), true, 'stable → first dev build is an update');
+  assert.equal(cmp('0.11.0-dev.1', '0.11.0-dev.2'), true, 'each dev build is an update');
+  assert.equal(cmp('0.11.0-dev.9', '0.11.0-dev.10'), true, 'no lexical trap at 10');
+  assert.equal(cmp('0.11.0-dev.2', '0.11.0-dev.1'), false, 'never offers a downgrade');
+  assert.equal(cmp('0.11.0-dev.1', '0.11.0-dev.1'), false, 'same build is not an update');
+  // The shape that would silently break it, kept as the contrast.
+  assert.equal(cmp('0.11.0-dev1', '0.11.0-dev2'), false, 'X.Y.Z-devN does NOT work — needs the dot');
+});
+
 test('applying the suffix twice is a no-op (idempotent)', () => {
   // Defends against a rebuild that somehow passes an already-suffixed base through again.
   const once = applyVersionSuffix('0.10.1', '-dev');

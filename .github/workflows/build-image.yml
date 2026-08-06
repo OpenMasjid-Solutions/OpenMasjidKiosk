@@ -98,9 +98,11 @@ jobs:
           # workflow_dispatch run on `dev` can never publish :latest from dev code.
           if [ "$GITHUB_REF" = 'refs/heads/dev' ]; then channel=dev; else channel=stable; fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
-          # The version suffix the SERVER reports and the APK carries — they must match, because
-          # the tablet's "update available" check is a string comparison between the two.
-          if [ "$channel" = dev ]; then echo 'suffix=-dev' >> "$GITHUB_OUTPUT"; else echo 'suffix=' >> "$GITHUB_OUTPUT"; fi
+          # No suffix on either channel any more. It existed because VERSION did not move on dev,
+          # so a dev build had to be told apart from a stable one somehow. Dev builds now carry a
+          # real prerelease version (X.Y.Z-dev.N) in VERSION itself, which both the server and the
+          # APK read — so they already differ, and appending would give "0.11.0-dev.1-dev".
+          echo 'suffix=' >> "$GITHUB_OUTPUT"
           # Multi-line output: nothing else may write to $GITHUB_OUTPUT between the delimiters,
           # or it would be swallowed into the value — so `channel` is written above, and the tags
           # are echoed straight into the block (no shell variable, so no YAML indentation can
@@ -108,6 +110,10 @@ jobs:
           {
             echo 'tags<<TAGS_EOF'
             if [ "$channel" = dev ]; then
+              # The VERSIONED tag is the one that matters: the catalog pins it, so it must be
+              # immutable and must match manifest.yaml exactly. :dev and :dev-<sha> stay as
+              # convenience aliases for pulling and for identifying a box — nothing installs them.
+              echo "$image:$ver"
               echo "$image:dev"
               echo "$image:dev-${GITHUB_SHA::12}"
             else
@@ -135,25 +141,56 @@ jobs:
       - name: Check the compose image matches the channel
         run: |
           img=$(grep -E '^[[:space:]]*image:' docker-compose.yml | head -1 | sed -E 's/^[[:space:]]*image:[[:space:]]*//' | tr -d "\"' \r")
+          ver='${{ steps.meta.outputs.version }}'
           echo "compose image: $img"
+          echo "manifest version: $ver"
+          # EVERY service must be on the right image, not just the first — a sidecar left on an
+          # old tag is a half-applied update that looks fine from the outside.
+          count=$(grep -cE '^[[:space:]]*image:' docker-compose.yml)
+          if [ "$count" -ne 1 ]; then
+            echo "::error file=docker-compose.yml::this check reads the FIRST image: line, but the compose has $count. Extend it to cover every service before adding one."
+            exit 1
+          fi
           case "$GITHUB_REF" in
             refs/heads/dev)
+              # The dev channel is VERSIONED now, not moving. OpenMasjidOS detects an update by
+              # comparing the catalog's version with the installed one, so a dev entry that reuses
+              # the stable version and a moving :dev tag changes nothing observable when a build
+              # ships — the platform cannot notify and has nothing to install. So the dev compose
+              # must name the exact manifest version, and the two must not drift apart.
               case "$img" in
-                *@sha256:*) echo "::error file=docker-compose.yml::the dev compose must not digest-pin — :dev is a moving tag, and pinning freezes the channel on one build while still looking healthy (got '$img')"; exit 1 ;;
-                *:dev) echo "ok — dev channel, moving tag" ;;
-                *) echo "::error file=docker-compose.yml::the dev branch must reference the moving :dev tag, got '$img'"; exit 1 ;;
+                *:dev|*:dev@*) echo "::error file=docker-compose.yml::the dev compose must reference the versioned tag :$ver, not the moving :dev tag — the catalog installs this line, and a moving tag makes every dev build undetectable"; exit 1 ;;
+              esac
+              case "$img" in
+                *:"$ver") echo "ok — dev channel pinned to the manifest version ($ver)" ;;
+                *:"$ver"@sha256:*) echo "ok — dev channel pinned to the manifest version + digest ($ver)" ;;
+                *) echo "::error file=docker-compose.yml::the dev compose image must match manifest.yaml's version. manifest says '$ver', compose says '$img'. Bump both together."; exit 1 ;;
+              esac
+              case "$ver" in
+                *-dev.*) echo "ok — $ver is a prerelease" ;;
+                *) echo "::error file=manifest.yaml::a dev build's version must be a prerelease of the form X.Y.Z-dev.N (got '$ver'), so it can never equal a stable release and always sorts between the last one and the next"; exit 1 ;;
               esac ;;
-            refs/tags/v*)
+            refs/tags/v*|refs/heads/main)
+              # A prerelease version must never reach stable: it would tell every masjid they are
+              # running a development build, and it sorts BELOW the release it was working toward.
+              case "$ver" in
+                *-dev.*|*-dev) echo "::error file=manifest.yaml::'$ver' is a development prerelease and must never ship to stable. Set the release version (e.g. 0.11.0) as part of the merge."; exit 1 ;;
+              esac
               case "$img" in
-                *:dev|*:dev@*) echo "::error file=docker-compose.yml::a release must never reference the moving :dev image. Re-pin to <version>@sha256:<digest> before tagging."; exit 1 ;;
-                *@sha256:*) echo "ok — release is digest-pinned" ;;
-                *) echo "::error file=docker-compose.yml::a release compose must digest-pin the image (@sha256:…), got '$img'. Did a dev merge land without re-pinning?"; exit 1 ;;
-              esac ;;
-            refs/heads/main)
-              case "$img" in
-                *:dev|*:dev@*) echo "::error file=docker-compose.yml::main must never reference the moving :dev image — that would point every stable install at a development build. Re-pin to <version>@sha256:<digest>."; exit 1 ;;
-                *@sha256:*) echo "ok — main is digest-pinned" ;;
-                *) echo "::warning file=docker-compose.yml::main's compose is not digest-pinned yet — pin the digest before tagging the release" ;;
+                *:dev|*:dev@*) echo "::error file=docker-compose.yml::stable must never reference the moving :dev image — that would point every stable install at a development build. Re-pin to <version>@sha256:<digest>."; exit 1 ;;
+                *-dev.*|*-dev@sha256:*) echo "::error file=docker-compose.yml::stable must not reference a development prerelease image ('$img')."; exit 1 ;;
+              esac
+              case "$GITHUB_REF" in
+                refs/tags/v*)
+                  case "$img" in
+                    *@sha256:*) echo "ok — release is digest-pinned" ;;
+                    *) echo "::error file=docker-compose.yml::a release compose must digest-pin the image (@sha256:…), got '$img'. Did a dev merge land without re-pinning?"; exit 1 ;;
+                  esac ;;
+                *)
+                  case "$img" in
+                    *@sha256:*) echo "ok — main is digest-pinned" ;;
+                    *) echo "::warning file=docker-compose.yml::main's compose is not digest-pinned yet — pin the digest before tagging the release" ;;
+                  esac ;;
               esac ;;
           esac
 
@@ -216,13 +253,23 @@ jobs:
             echo "  ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:dev-$(echo ${{ github.sha }} | cut -c1-12)"
           fi
 
-      # Tell the OpenMasjidAPPS catalog to rebuild so the App Store picks up this release.
+      # Tell the OpenMasjidAPPS catalog to rebuild so the App Store picks up this build.
       # Uses the shared CATALOG_PUSH_TOKEN (a token allowed to dispatch on the catalog repo,
-      # per that repo's README "Maintainers — catalog auto-publish" note). Runs only on a
-      # version tag (when docker-compose.yml already pins this release's @sha256 digest and
-      # the registry tracks the tag), and never fails the build if the token is absent.
+      # per that repo's README "Maintainers — catalog auto-publish" note), and never fails the
+      # build if the token is absent.
+      #
+      # This step is placed AFTER "Build and push" deliberately, and that ordering is now load-
+      # bearing on dev as well as on a release. The catalog pins an EXACT image tag, so an entry
+      # that lands before its image exists is a pull failure on someone's box. Dispatching from
+      # here means the image is already in GHCR when the catalog goes looking.
+      #
+      # It does not close the window entirely: OpenMasjidAPPS also rebuilds hourly, so a tick that
+      # lands during this workflow (~7 min) can still catch the new manifest version before the
+      # image is pushed. That resolves itself on the next dispatch or tick, and a missing tag fails
+      # loudly rather than silently — but it is the reason not to bump the version until the build
+      # that will publish it is the one being pushed.
       - name: Notify catalog to rebuild
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/dev'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.CATALOG_PUSH_TOKEN }}
