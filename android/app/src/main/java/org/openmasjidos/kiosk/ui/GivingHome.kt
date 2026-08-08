@@ -44,6 +44,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import org.openmasjidos.kiosk.GivingStep
 import org.openmasjidos.kiosk.KIOSK_AUTO_RETURN_MS
@@ -185,13 +186,25 @@ private fun HomeTopBar(ui: UiState, style: SceneStyle, onSelect: (String) -> Uni
     // Tabs appear only when there's more than one campaign; a single-campaign kiosk is chrome-free.
     if (ui.campaigns.size > 1) {
         Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-            CampaignTabs(ui.campaigns, ui.selectedCampaignId, style, onSelect)
+            CampaignTabs(ui.campaigns, ui.selectedCampaignId, style, tabMetricsFor(ui.config?.tabSize), onSelect)
         }
     }
 }
 
+/** Font + padding for the campaign tabs, chosen by the admin's kiosk-wide "tab size" setting.
+ *  `medium` reproduces the original hardcoded values, so unset/legacy configs look unchanged.
+ *  Kept in sync with the web picker (campaigns.tsx TAB_SIZES). */
+private data class TabMetrics(val font: androidx.compose.ui.unit.TextUnit, val padH: androidx.compose.ui.unit.Dp, val padV: androidx.compose.ui.unit.Dp)
+
+private fun tabMetricsFor(size: String?): TabMetrics = when (size) {
+    "small" -> TabMetrics(15.sp, 20.dp, 12.dp)
+    "large" -> TabMetrics(22.sp, 34.dp, 22.dp)
+    "xlarge" -> TabMetrics(28.sp, 46.dp, 30.dp)
+    else -> TabMetrics(16.sp, 26.dp, 16.dp) // "medium" (and any unknown value) → the original size
+}
+
 @Composable
-private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, style: SceneStyle, onSelect: (String) -> Unit) {
+private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, style: SceneStyle, metrics: TabMetrics, onSelect: (String) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
@@ -212,12 +225,12 @@ private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, style: S
             ) {
                 Text(
                     text = c.title.ifBlank { "Appeal" },
-                    style = MaterialTheme.typography.titleMedium,
+                    fontSize = metrics.font,
                     fontWeight = FontWeight.Bold,
                     color = if (selected) onTab else style.onScene,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 26.dp, vertical = 16.dp),
+                    modifier = Modifier.padding(horizontal = metrics.padH, vertical = metrics.padV),
                 )
             }
         }

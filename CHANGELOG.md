@@ -3,6 +3,13 @@
 
 # Changelog
 
+## Unreleased
+- **Bigger, adjustable campaign tabs.** The tabs across the top of the kiosk (one per campaign,
+  shown when you have more than one) now have a **kiosk-wide "Campaign tab size"** setting in
+  **Campaigns → Kiosk settings** — Small / Medium / Large / Extra large. **Medium is the original
+  size**, so existing kiosks are unchanged until you pick a bigger one. The admin gets a faithful
+  live mini-preview of the tab strip, and the size pushes to every kiosk on the next heartbeat.
+
 ## 0.9.27
 - **Much stronger soft kiosk — no computer needed.** Without the (optional) device-owner setup, the
   kiosk now locks down far harder, all from the tablet:

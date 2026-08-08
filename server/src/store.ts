@@ -84,6 +84,9 @@ export interface GivingConfig {
   maxBrightness: boolean;
   /** Small tagline shown at the bottom of the kiosk giving screen ('' hides it). */
   footerText: string;
+  /** Size of the campaign tabs across the top of the kiosk (only shown when 2+ campaigns).
+   *  'medium' is the original size, so existing kiosks are unchanged. */
+  tabSize: 'small' | 'medium' | 'large' | 'xlarge';
   /** For a large donation the kiosk suggests a fee-free alternative (e.g. bank transfer). 0 = off. */
   largeAmountThresholdMinor: number;
   /** Message shown in the large-donation dialog (e.g. bank / Zelle transfer details). */
@@ -109,6 +112,7 @@ const GIVING_DEFAULTS: GivingConfig = {
   thankYouMessage: 'JazākAllāhu khayran — thank you for your generous donation.',
   maxBrightness: true,
   footerText: 'OpenMasjid Solutions',
+  tabSize: 'medium',
   largeAmountThresholdMinor: 0,
   largeAmountNote: '',
   largeAmountImage: '',
@@ -736,6 +740,7 @@ export class Store {
     merged.thankYouMessage = String(merged.thankYouMessage ?? GIVING_DEFAULTS.thankYouMessage).slice(0, 500);
     merged.maxBrightness = merged.maxBrightness !== false; // default ON — a wall kiosk wants max brightness
     merged.footerText = String(merged.footerText ?? GIVING_DEFAULTS.footerText).slice(0, 80);
+    merged.tabSize = (['small', 'medium', 'large', 'xlarge'] as const).includes(merged.tabSize) ? merged.tabSize : 'medium';
     merged.largeAmountThresholdMinor = Math.max(0, Math.round(Number(merged.largeAmountThresholdMinor) || 0));
     merged.largeAmountNote = String(merged.largeAmountNote ?? '').slice(0, 600);
     {
@@ -1366,6 +1371,7 @@ export class Store {
         emailPolicy: g.emailPolicy,
         maxBrightness: g.maxBrightness !== false,
         footerText: g.footerText,
+        tabSize: g.tabSize,
         largeAmountThresholdMinor: g.largeAmountThresholdMinor,
         largeAmountNote: g.largeAmountNote,
         largeAmountImage: g.largeAmountImage,

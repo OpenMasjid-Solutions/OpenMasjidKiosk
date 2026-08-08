@@ -157,6 +157,17 @@ test('setGiving clamps the large-donation threshold to ≥0 and only keeps valid
   assert.equal(config.largeAmountImage, '/uploads/qr_abcd1234.png');
 });
 
+test('setGiving keeps a valid tabSize (default medium) and rejects junk; it reaches the kiosk config', () => {
+  const s = freshStore();
+  assert.equal(s.getGiving().tabSize, 'medium'); // default: the original tab size
+  s.setGiving({ tabSize: 'large' });
+  assert.equal(s.getGiving().tabSize, 'large');
+  assert.equal(s.getKioskConfig('acct_primary').config.tabSize, 'large'); // delivered to the tablet
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  s.setGiving({ tabSize: 'gigantic' as any }); // unknown value → falls back to medium
+  assert.equal(s.getGiving().tabSize, 'medium');
+});
+
 test('the main campaign cannot be deleted; a normal campaign can', () => {
   const s = freshStore();
   const main = s.getMainCampaign()!;
