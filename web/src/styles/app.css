@@ -55,6 +55,11 @@ h1, h2, h3, p, ul { margin: 0; }
 @media (max-width: 520px) { .topbar { padding-inline: 1rem; } }
 .brand { display: flex; align-items: center; gap: 0.6rem; color: var(--color-primary); font-weight: 700; background: none; border: 0; padding: 0; }
 .brand b { color: var(--color-ink); font-family: var(--font-display); letter-spacing: -0.01em; }
+/* The app logo is dark artwork on an OPAQUE light square (no alpha channel), so on the dark
+   theme it lands as a bright tile. Round it and give it a hairline ring so that reads as a
+   deliberate logo chip rather than a stray white block. `contain` keeps the mark un-cropped
+   whatever square we ask for. */
+.brand__logo { border-radius: 0.5rem; object-fit: contain; display: block; box-shadow: 0 0 0 1px var(--color-border, rgba(255, 255, 255, 0.12)); }
 .spacer { flex: 1; }
 .icon-btn {
   width: 2.4rem; height: 2.4rem; border-radius: 0.6rem; display: grid; place-items: center;

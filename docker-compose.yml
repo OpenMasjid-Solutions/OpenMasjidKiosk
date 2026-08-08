@@ -11,10 +11,29 @@
 # a tablet from Devices. All state is saved to /data.
 services:
   app:
-    # Tag for humans + @sha256 digest for integrity (the digest is the real pin — a
-    # moved tag can't repoint it to a different image). Bump BOTH on every release.
-    # (digest filled in from the build-image.yml output after the first org build)
-    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.10.2@sha256:05e3aefa0112028d79c8d853dd82a72ea30858d9b321e231d9723d8998de92a0
+    # ── DEV BRANCH: the development channel ──────────────────────────────────
+    # This MUST match `version:` in manifest.yaml exactly, and it must never be the moving :dev
+    # tag. The dev channel is versioned: every dev build gets its own X.Y.Z-dev.N and its own
+    # immutable image tag, and the catalog serves this file verbatim.
+    #
+    # Why not :dev, which is what this line used to say. OpenMasjidOS decides an app has an
+    # update by comparing the catalog's `version` with the installed one. A dev entry that reused
+    # the stable version and a moving tag changed NOTHING observable when a new build shipped —
+    # same version string, same image reference — so the platform could not notify anyone and had
+    # nothing to point at. Stable works precisely because each release has a distinct version and
+    # a pinned image; dev now has the same property, via the prerelease version instead of a
+    # digest. (0.10.2 < 0.11.0-dev.1 < 0.11.0: ahead of the last release, behind the next.)
+    #
+    # Bump BOTH this line and manifest.yaml's `version:` on every dev build you want installable,
+    # and never publish the catalog entry before CI has pushed the matching image — the tag is
+    # exact, so an entry that lands first is a pull failure on someone's box.
+    #
+    # :dev is still published as a convenience alias for `docker pull`, and every build also gets
+    # :dev-<12-char commit sha> for identifying exactly what a box is running. Neither is what the
+    # catalog installs. On `main` this line carries the release tag + @sha256 digest; a "merge to
+    # main" must restore that form, and CI's "Check the compose image matches the channel" step
+    # fails the build in both directions.
+    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.11.0-dev.5
     restart: unless-stopped
     environment:
       PORT: "8080"

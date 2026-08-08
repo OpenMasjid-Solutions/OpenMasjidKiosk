@@ -42,11 +42,20 @@ export function Scene() {
   return <div className="scene" aria-hidden="true" />;
 }
 
+/** The app's own logo, served from web/public (a copy of the repo-root icon.svg — the same
+ *  mark the App Store and the browser tab show). Goes through withBase so it still resolves
+ *  when the panel is reached under a /<basePath> prefix. Decorative: the surrounding link
+ *  already carries the accessible name, so an empty alt keeps a screen reader from hearing
+ *  the app's name twice. */
+export function Logo({ size = 26 }: { size?: number }) {
+  return <img className="brand__logo" src={withBase('/logo.svg')} width={size} height={size} alt="" />;
+}
+
 /** Brand mark; returns to the dashboard tab. */
 export function Brand() {
   return (
     <a className="brand" href="#dashboard" aria-label="OpenMasjid Kiosk — dashboard">
-      <Crescent size={22} />
+      <Logo size={26} />
       <b>OpenMasjid&nbsp;Kiosk</b>
     </a>
   );
