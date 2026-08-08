@@ -4,6 +4,12 @@
 # Changelog
 
 ## Unreleased
+- **On-screen pointer to your card reader.** When a donor reaches the "Tap, insert or swipe" step, the
+  kiosk can now show a **pulsing contactless symbol with arrows pointing to it**, on the side of the
+  screen where your reader is mounted. When the payment goes through it turns **green**. Set it per
+  tablet in **Devices → Reader side** (Left / Right / **No hint** — the default, so nothing changes
+  until you choose a side). Left/right are for a landscape mount; on a portrait mount they follow the
+  rotation and become top/bottom automatically.
 - **Bigger, adjustable campaign tabs.** The tabs across the top of the kiosk (one per campaign,
   shown when you have more than one) now have a **kiosk-wide "Campaign tab size"** setting in
   **Campaigns → Kiosk settings** — Small / Medium / Large / Extra large. **Medium is the original

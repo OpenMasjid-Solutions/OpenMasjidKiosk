@@ -607,16 +607,19 @@ async function main(): Promise<void> {
         name: z.string().max(80).optional(),
         // A UI rotation in degrees ('0'/'90'/'180'/'270'); legacy named values are normalised in the store.
         orientation: z.string().max(20).optional(),
+        // Which side the reader sits on ('off'/'left'/'right'); normalised in the store.
+        nfcSide: z.string().max(20).optional(),
       })
       .safeParse(req.body);
-    if (!parsed.success || (parsed.data.name === undefined && parsed.data.orientation === undefined)) {
-      return reply.code(400).send({ error: 'Please enter a name or orientation.' });
+    if (!parsed.success || (parsed.data.name === undefined && parsed.data.orientation === undefined && parsed.data.nfcSide === undefined)) {
+      return reply.code(400).send({ error: 'Please enter a name, orientation, or reader side.' });
     }
     const id = (req.params as { id: string }).id;
     let d = store.getDevice(id);
     if (!d) return reply.code(404).send({ error: 'Kiosk not found.' });
     if (parsed.data.name !== undefined) d = store.renameDevice(id, parsed.data.name.trim()) ?? d;
     if (parsed.data.orientation !== undefined) d = store.setDeviceOrientation(id, parsed.data.orientation) ?? d;
+    if (parsed.data.nfcSide !== undefined) d = store.setDeviceNfcSide(id, parsed.data.nfcSide) ?? d;
     return { data: deviceView(d) };
   });
 

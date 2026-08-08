@@ -132,6 +132,14 @@ test('per-device: campaign targeting filters getKioskConfig, and orientation is 
   s.setDeviceOrientation(a.id, 'nonsense');
   assert.equal(s.getDevice(a.id)!.orientation, '0'); // invalid → no rotation
 
+  // Reader side (NFC hint): per-device, defaults off, only left/right/off are kept, reaches the config.
+  assert.equal(s.getKioskConfig('', a.id).config.nfcSide, 'off'); // default
+  s.setDeviceNfcSide(a.id, 'left');
+  assert.equal(s.getKioskConfig('', a.id).config.nfcSide, 'left');
+  assert.equal(s.getKioskConfig('', b.id).config.nfcSide, 'off'); // per-device, B unaffected
+  s.setDeviceNfcSide(a.id, 'sideways'); // unknown → back to off
+  assert.equal(s.getDevice(a.id)!.nfcSide, 'off');
+
   // Revoking a device scrubs its id from every campaign's targeting, so a campaign aimed only at it
   // doesn't silently vanish fleet-wide — it falls back to "all kiosks" ([] = all).
   const both = s.createCampaign({ title: 'Both', deviceIds: [a.id, b.id] })!;

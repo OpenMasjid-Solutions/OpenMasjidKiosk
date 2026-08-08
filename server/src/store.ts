@@ -340,6 +340,10 @@ export interface Device {
    *  tablet rotates its own content by this angle (works even where the device ignores orientation
    *  requests). Legacy named values are normalised to degrees on read. */
   orientation: string;
+  /** Which side of the tablet the card reader sits on, so the kiosk can point donors to it during the
+   *  card step: 'off' (no hint) | 'left' | 'right'. Left/right are in the app's LOGICAL landscape
+   *  space, so RotatedRoot maps them to top/bottom when the device is rotated to portrait. */
+  nfcSide: string;
 }
 
 /** Valid device orientations — a rotation applied to the kiosk UI in DEGREES ('0' = as mounted). We
@@ -362,6 +366,17 @@ export function normalizeOrientation(v: unknown): DeviceOrientation {
   const s = String(v ?? '');
   if ((DEVICE_ORIENTATIONS as readonly string[]).includes(s)) return s as DeviceOrientation;
   return LEGACY_ORIENTATION[s] ?? '0';
+}
+
+/** Valid NFC-reader sides — where the reader sits relative to the kiosk's LOGICAL landscape screen,
+ *  so it can point donors to it. 'off' = show no hint (the default; existing kiosks are unchanged). */
+export const DEVICE_NFC_SIDES = ['off', 'left', 'right'] as const;
+export type DeviceNfcSide = (typeof DEVICE_NFC_SIDES)[number];
+
+/** Normalise any stored/incoming NFC side to a valid value (default 'off'). */
+export function normalizeNfcSide(v: unknown): DeviceNfcSide {
+  const s = String(v ?? '');
+  return (DEVICE_NFC_SIDES as readonly string[]).includes(s) ? (s as DeviceNfcSide) : 'off';
 }
 
 /** Short, URL-safe id with a kind prefix, e.g. "dev_a1b2c3d4". */
@@ -400,7 +415,8 @@ export class Store {
         config_version INTEGER NOT NULL DEFAULT 0,
         identify INTEGER NOT NULL DEFAULT 0,
         revoked INTEGER NOT NULL DEFAULT 0,
-        orientation TEXT NOT NULL DEFAULT 'auto'
+        orientation TEXT NOT NULL DEFAULT 'auto',
+        nfc_side TEXT NOT NULL DEFAULT 'off'
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_token ON devices(token_hash);
 
@@ -585,10 +601,11 @@ export class Store {
       // Per-campaign device targeting (which kiosks show this campaign; '[]' = all).
       if (!cols.includes('device_ids')) this.db.exec("ALTER TABLE campaigns ADD COLUMN device_ids TEXT NOT NULL DEFAULT '[]'");
     }
-    // Per-device screen orientation (set from the web UI).
+    // Per-device screen orientation + NFC-reader side (both set from the web UI).
     {
       const dcols = (this.db.prepare('PRAGMA table_info(devices)').all() as { name: string }[]).map((c) => c.name);
       if (!dcols.includes('orientation')) this.db.exec("ALTER TABLE devices ADD COLUMN orientation TEXT NOT NULL DEFAULT 'auto'");
+      if (!dcols.includes('nfc_side')) this.db.exec("ALTER TABLE devices ADD COLUMN nfc_side TEXT NOT NULL DEFAULT 'off'");
     }
     // The per-child split of a tuition charge (students/billing v2) and the ticked bill lines (0.43.0).
     // Absent on installs that predate them; an in-flight outbox row without either simply lets Students
@@ -1597,6 +1614,8 @@ export class Store {
         masjidName: this.getMasjid().name,
         // The UI rotation in degrees for THIS device (from the web UI); '0' = as mounted.
         orientation: (deviceId !== '' ? this.getDevice(deviceId)?.orientation : '') || '0',
+        // Which side the reader sits on for THIS device, so the card step can point donors to it.
+        nfcSide: (deviceId !== '' ? this.getDevice(deviceId)?.nfcSide : '') || 'off',
         // Global giving policy (per-campaign amounts/monthly/thank-you live on each campaign).
         manualEntryEnabled: g.manualEntryEnabled,
         namePolicy: g.namePolicy,
@@ -1657,6 +1676,7 @@ export class Store {
       identify: !!r.identify,
       revoked: !!r.revoked,
       orientation: normalizeOrientation(r.orientation),
+      nfcSide: normalizeNfcSide(r.nfc_side),
     };
   }
 
@@ -1667,6 +1687,17 @@ export class Store {
     const res = this.db.prepare('UPDATE devices SET orientation = ? WHERE id = ?').run(o, id);
     if (res.changes === 0) return null;
     this.bumpConfigVersion(); // the tablet picks up the new orientation on its next heartbeat
+    return this.getDevice(id);
+  }
+
+  /** Set which side of the tablet the card reader sits on (from the web UI), so the kiosk can point
+   *  donors to it during the card step. Bumps the config version. Returns the updated device (null if
+   *  unknown). */
+  setDeviceNfcSide(id: string, nfcSide: string): Device | null {
+    const s = normalizeNfcSide(nfcSide);
+    const res = this.db.prepare('UPDATE devices SET nfc_side = ? WHERE id = ?').run(s, id);
+    if (res.changes === 0) return null;
+    this.bumpConfigVersion(); // the tablet picks up the new NFC hint on its next heartbeat
     return this.getDevice(id);
   }
 
