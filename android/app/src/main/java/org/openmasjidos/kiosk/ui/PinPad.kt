@@ -7,12 +7,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -117,20 +120,29 @@ fun PinPad(
 
             val enabled = !locked && !state.verifying
             for (row in listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"))) {
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(KEY_GAP)) {
                     row.forEach { d ->
                         Key(label = d, enabled = enabled) {
                             if (entry.length < MAX_PIN_LENGTH) entry += d
                         }
                     }
                 }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(KEY_GAP))
             }
+            // Pin the last row to the SAME width as the three digit rows and let Delete/Unlock split
+            // what's left beside the "0" key. Without this the two word keys size to their labels, and
+            // at kiosk type sizes that overflows the pad's 360dp column — which is how "Unlock" ended
+            // up hyphen-less across two lines.
             Row(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.width(PAD_WIDTH),
+                horizontalArrangement = Arrangement.spacedBy(KEY_GAP),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SmallKey(label = stringResource(R.string.pin_delete), enabled = enabled && entry.isNotEmpty()) {
+                SmallKey(
+                    label = stringResource(R.string.pin_delete),
+                    enabled = enabled && entry.isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                ) {
                     entry = entry.dropLast(1)
                 }
                 Key(label = "0", enabled = enabled) {
@@ -140,6 +152,7 @@ fun PinPad(
                     label = stringResource(R.string.pin_unlock),
                     enabled = enabled && entry.isNotEmpty(),
                     emphasised = true,
+                    modifier = Modifier.weight(1f),
                 ) {
                     onSubmit(entry)
                 }
@@ -175,6 +188,12 @@ private fun PinDots(count: Int) {
     }
 }
 
+/** One round digit key, and the gap between them — the two numbers the whole pad's width derives
+ *  from, so growing the keys can never leave the word keys wrapping again. */
+private val KEY_SIZE = 84.dp
+private val KEY_GAP = 16.dp
+private val PAD_WIDTH = KEY_SIZE * 3 + KEY_GAP * 2
+
 @Composable
 private fun Key(label: String, enabled: Boolean, onClick: () -> Unit) {
     Surface(
@@ -182,13 +201,13 @@ private fun Key(label: String, enabled: Boolean, onClick: () -> Unit) {
         enabled = enabled,
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
-        modifier = Modifier.size(72.dp),
+        modifier = Modifier.size(KEY_SIZE),
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             Text(
                 text = label,
                 color = InkDark,
-                fontSize = 28.sp,
+                fontSize = 34.sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
@@ -200,20 +219,30 @@ private fun SmallKey(
     label: String,
     enabled: Boolean,
     emphasised: Boolean = false,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier
-            .widthIn(min = 72.dp)
-            .height(72.dp),
+        // A button's default 24dp side padding eats most of a key-width slot, leaving the label
+        // nowhere to go but a second line. The slot itself is the touch target, so the padding buys
+        // nothing here.
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+        modifier = modifier.height(KEY_SIZE),
     ) {
         Text(
             text = label,
             color = if (emphasised) MaterialTheme.colorScheme.primary else InkMutedDark,
-            fontWeight = if (emphasised) FontWeight.SemiBold else FontWeight.Normal,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = if (emphasised) FontWeight.Bold else FontWeight.Medium,
+            // One line, always: a word broken across two lines reads as a rendering fault, and these
+            // labels are short enough that the ellipsis should never actually be needed.
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
         )
     }
 }

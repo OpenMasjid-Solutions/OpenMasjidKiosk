@@ -56,14 +56,25 @@ RUN npm ci --omit=dev
 COPY --from=server /server/dist ./dist
 COPY --from=web /web/dist ./public
 
+# The release notes this image shipped with — the admin panel's "What's new" reads this
+# file, so the notes always describe the version actually running (no call to GitHub).
+COPY CHANGELOG.md ./CHANGELOG.md
+
 # Bundle the Android kiosk APK, served by /new. CI drops the signed APK into ./apk/
 # before this build; locally the folder holds only a .gitkeep (build still succeeds).
 COPY apk/ ./public/download/
 
+# Update-channel suffix: "-dev" on a dev-branch build, empty on a release. CI passes the same
+# value to the Gradle APK build, so the server's reported version and the bundled APK's
+# versionName always agree — the tablet's "update available" check is a plain string comparison
+# between the two, so they must move together. See server/src/config.ts applyVersionSuffix.
+ARG APP_VERSION_SUFFIX=""
+
 ENV PORT=8080 \
     DATA_DIR=/data \
     PUBLIC_DIR=/app/public \
-    APK_PATH=/app/public/download/openmasjidkiosk.apk
+    APK_PATH=/app/public/download/openmasjidkiosk.apk \
+    APP_VERSION_SUFFIX=${APP_VERSION_SUFFIX}
 EXPOSE 8080
 VOLUME ["/data"]
 

@@ -3,6 +3,8 @@
 
 package org.openmasjidos.kiosk.ui
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -42,12 +44,15 @@ fun RePairScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             modifier = Modifier
-                .widthIn(max = 440.dp)
+                .widthIn(max = 520.dp)
+                // Kiosk type is large; a short screen must scroll rather than clip the one button
+                // that unblocks this lockout.
+                .verticalScroll(rememberScrollState())
                 .padding(28.dp),
         ) {
             Text(
                 text = stringResource(R.string.repair_title),
-                style = MaterialTheme.typography.displayMedium,
+                style = MaterialTheme.typography.headlineLarge,
                 color = InkDark,
                 textAlign = TextAlign.Center,
             )
@@ -70,7 +75,7 @@ fun RePairScreen(
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp),
+                    .height(64.dp),
             ) {
                 Text(stringResource(R.string.repair_button), style = MaterialTheme.typography.titleLarge)
             }

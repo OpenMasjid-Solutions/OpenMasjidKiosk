@@ -24,17 +24,25 @@ import { Store, grossUpForFees, type Device, type DonationRecord, type EmailRece
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus } from './fabric';
 import { renderReceipt, type ReceiptContext } from './email';
-import { studentsInfo, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, billingConfigured } from './students';
-import { LoginLimiter } from './rateLimit';
+import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
+import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
+import { blockedOverTunnel } from './tunnel';
 import { toCsv } from './csv';
 import {
   completeCardPresentPaymentIntent,
   createCardPaymentIntent,
   createCardPresentPaymentIntent,
+  cancelPlan,
   createConnectionToken,
   createLocation,
   createMonthlySubscription,
   listLocations,
+  listPlanInvoices,
+  listPlans,
+  pausePlan,
+  retrievePlan,
+  schedulePlanEnd,
+  type StripePlan,
   looksLikePublishable,
   looksLikeSecret,
   publicStripeStatus,
@@ -96,6 +104,20 @@ async function main(): Promise<void> {
   fs.mkdirSync(uploadsDir, { recursive: true });
   await app.register(fastifyStatic, { root: uploadsDir, prefix: '/uploads/', decorateReply: false, index: false });
 
+  // ── Baseline security headers ────────────────────────────────────────────────
+  // `nosniff` is the one that earns its keep: /uploads/* serves admin-uploaded files, and although
+  // the upload route allow-lists the MIME type and assigns its own random name and extension,
+  // nosniff is what stops a browser reinterpreting a "PNG" whose bytes begin with markup.
+  //
+  // NO framing header here on purpose. X-Frame-Options / frame-ancestors would close the
+  // clickjacking gap, but I could not confirm whether OpenMasjidOS ever renders an installed app
+  // inside an iframe, and a framing denial that breaks the dashboard would be worse than the gap it
+  // closes. See docs/audit/ACTION_REQUIRED.md.
+  app.addHook('onSend', async (_req, reply) => {
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('referrer-policy', 'no-referrer');
+  });
+
   // ── Gently upgrade insecure browser hits to HTTPS ────────────────────────────
   // The platform terminates TLS and serves us over HTTPS on a dedicated port (setting
   // x-forwarded-proto=https), but it doesn't tell the container that port. So we LEARN our
@@ -127,10 +149,14 @@ async function main(): Promise<void> {
   // uploaded images at /uploads — the setup page needs them). Every OTHER /api route — admin, login,
   // session, setup, logout, and /api/fabric — stays LAN-only, so the admin panel and its auth are
   // never reachable from the internet even when a remote kiosk is adopted.
+  //
+  // The rule itself lives in ./tunnel because it has to canonicalise the path the way the ROUTER
+  // resolves it, not the way it arrived: Fastify percent-decodes path segments before matching, so
+  // the previous inline `startsWith('/api/')` on the raw url was walked past by encoding one letter
+  // ('/%61pi/login' reached the real password login over the tunnel). See tunnel.test.ts.
   app.addHook('onRequest', async (req, reply) => {
     if ((req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel !== true) return;
-    const p = (req.raw.url ?? '/').split('?')[0];
-    if (p.startsWith('/api/') && !(p === '/api/app' || p.startsWith('/api/public/') || p.startsWith('/api/kiosk/'))) {
+    if (blockedOverTunnel(req.raw.url ?? '/')) {
       return reply.code(404).send({ error: 'Not found.' });
     }
   });
@@ -138,6 +164,27 @@ async function main(): Promise<void> {
   /** A request is authenticated if it carries a valid local session cookie — minted by
    *  first-run setup, password login, or a confirmed OpenMasjidOS SSO check. */
   const isAuthed = (cookie: string | undefined): boolean => verifyToken(store.secret, cookie, 'admin');
+
+  /** Note an admin action that reaches OUTSIDE this app — ending or altering a donor's standing
+   *  order, cutting a kiosk off, rotating the exit PIN. Best-effort by construction (store.recordAudit
+   *  never throws), so it can be called on the success path without risking the action itself.
+   *
+   *  `actor` is as good as we can honestly make it: our session cookie carries no identity (it is an
+   *  assertion that SOMEONE signed in), so when the platform can name the signed-in user we record
+   *  that, and otherwise we say plainly that we don't know rather than inventing a name. */
+  const audit = async (
+    req: import('fastify').FastifyRequest,
+    action: string,
+    target: string,
+    detail: string,
+  ): Promise<void> => {
+    let actor = 'admin (local password)';
+    if (ssoConfigured()) {
+      const who = await probePlatform(req.headers.cookie).catch(() => null);
+      actor = who?.username ? `${who.username} (OpenMasjidOS)` : 'admin (signed in, name unknown)';
+    }
+    store.recordAudit({ action, target, detail, actor, source: req.socket.remoteAddress ?? '' });
+  };
   const requireAdmin = async (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
     if (!isAuthed(req.cookies[COOKIE])) return reply.code(401).send({ error: 'Please sign in.' });
   };
@@ -244,6 +291,24 @@ async function main(): Promise<void> {
   app.post('/api/logout', async (_req, reply) => {
     reply.clearCookie(COOKIE, { path: '/' });
     return { data: { ok: true } };
+  });
+
+  // ── "What's new": the release notes THIS build shipped with ─────────────────
+  // Read from the CHANGELOG.md copied into the image, not fetched from GitHub — an admin
+  // panel that describes a release the container isn't running is worse than none, and a
+  // masjid server has no business making an outbound call to render a menu. Admin-gated
+  // (so it stays off the tunnel with the rest of /api/admin) and capped, since it is a
+  // file that grows by a section every release.
+  const CHANGELOG_MAX = 256 * 1024;
+  app.get('/api/admin/changelog', { preHandler: requireAdmin }, async () => {
+    let markdown = '';
+    try {
+      markdown = fs.readFileSync(config.changelogPath, 'utf8').slice(0, CHANGELOG_MAX);
+    } catch {
+      // Not fatal: an image built without it just shows "no release notes".
+      log.debug('changelog not readable');
+    }
+    return { data: { version: config.version, markdown } };
   });
 
   // ── Fabric notifications: diagnose + send a test alert ──────────────────────
@@ -476,11 +541,18 @@ async function main(): Promise<void> {
   });
 
   // ── Devices: pairing, fleet management, kiosk PIN ───────────────────────────
-  const pairLimiter = new LoginLimiter(); // brute-force guard for 6-digit pairing codes
-  // Tuition name+PIN lookups: a fixed rolling window per peer (20 / 60s), capped regardless of
-  // success or failure — a valid lookup must NOT refill the brute-force budget (a shared-IP attacker
-  // with one good pair could otherwise reset the backoff). Students itself locks a PIN after repeated
-  // failures (contract §14); this is defence-in-depth. Well above any real kiosk's lookup rate.
+  const pairLimiter = new LoginLimiter(); // per-peer brute-force guard for 6-digit pairing codes
+  // …and a budget shared across every peer. The per-peer limiter hands out 5 free guesses each, so
+  // an attacker with many source addresses (a /64 of IPv6 is one host's worth on a LAN) multiplies
+  // its way through the million-code space while no single bucket ever trips. 50 wrong codes in ten
+  // minutes across the whole network is already far beyond a volunteer mistyping one.
+  const pairBudget = new GlobalAttemptBudget(50, 10 * 60_000);
+  // Tuition Student-ID lookups (identify + lookup SHARE this bucket, as they do at Students): a fixed
+  // rolling window per peer (20 / 60s), capped regardless of success or failure — a valid lookup must
+  // NOT refill the brute-force budget (a shared-IP attacker with one good ID could otherwise reset the
+  // backoff), and splitting the budget per endpoint would just let a sweep alternate between them.
+  // Students locks a Student ID after 6 failed probes an hour (contract §11.0/§14); this is
+  // defence-in-depth so the kiosk is never the open relay. Well above any real kiosk's lookup rate.
   const tuitionLookupHits = new Map<string, { count: number; resetAt: number }>();
   const tuitionLookupOk = (ip: string): boolean => {
     const now = Date.now();
@@ -548,7 +620,10 @@ async function main(): Promise<void> {
   });
 
   app.delete('/api/admin/devices/:id', { preHandler: requireAdmin }, async (req) => {
-    store.revokeDevice((req.params as { id: string }).id);
+    const id = (req.params as { id: string }).id;
+    const name = store.getDevice(id)?.name ?? '';
+    store.revokeDevice(id);
+    await audit(req, 'device.revoke', id, name ? `kiosk "${name}" removed — its token no longer works` : 'kiosk removed');
     return { data: { ok: true } };
   });
 
@@ -576,10 +651,13 @@ async function main(): Promise<void> {
     const pin = parsed.data.pin.trim();
     if (pin === '') {
       store.setPinHash('');
+      // The PIN itself is never recorded, here or anywhere — only that it changed.
+      await audit(req, 'pin.clear', '', 'kiosk exit PIN removed — the maintenance screen is no longer PIN-gated');
       return { data: { set: false } };
     }
     if (!/^\d{4,8}$/.test(pin)) return reply.code(400).send({ error: 'The PIN must be 4 to 8 digits.' });
     store.setPinHash(hashPin(pin));
+    await audit(req, 'pin.set', '', 'kiosk exit PIN changed — takes effect on each kiosk’s next heartbeat');
     return { data: { set: true } };
   });
 
@@ -754,6 +832,204 @@ async function main(): Promise<void> {
     return { data: { donations: store.listDonations(), totals: store.donationTotals(), currency: store.getCurrency() } };
   });
 
+  // ── Recurring plans (monthly donations) ─────────────────────────────────────
+  // STRIPE IS THE SOURCE OF TRUTH. There are no webhooks here (LAN-only, §4), so we hold no copy of
+  // a plan's status, next charge or renewals and read them live instead — a cached status on a screen
+  // an admin uses to cancel someone's standing order would be worse than no screen. The local `plans`
+  // table supplies only what Stripe cannot know: the campaign, the account, and month one (which was
+  // card-present, so it is not an invoice).
+
+  const SUB_ID_RE = /^sub_[A-Za-z0-9_]+$/;
+
+  /** Every Stripe account a plan could live on: the primary, any campaign's own, and any we have
+   *  recorded. Deduped by resolved account id — '' and 'local' can be the very same keys. */
+  const planAccounts = async (): Promise<ResolvedAccount[]> => {
+    const wanted = new Set<string>(['']);
+    for (const c of store.listCampaigns()) if (c.stripeAccountId) wanted.add(c.stripeAccountId);
+    for (const a of store.listPlanAccountIds()) wanted.add(a);
+    const out: ResolvedAccount[] = [];
+    const seen = new Set<string>();
+    for (const id of wanted) {
+      const acct = await resolveAccountById(id).catch(() => null);
+      if (!acct || seen.has(acct.id)) continue;
+      seen.add(acct.id);
+      out.push(acct);
+    }
+    return out;
+  };
+
+  /** Join Stripe's live view of a plan to the local record. */
+  const toPlan = (sp: StripePlan, accountId: string) => {
+    const rec = store.getPlanRecord(sp.id);
+    // Month one never appears in `invoices.list` — it was a card-present PaymentIntent on the reader.
+    // Without the local record we cannot know it, so the total is flagged short rather than quietly
+    // under-reported: "this plan has raised £X" being wrong by a month is the kind of number an
+    // admin repeats to a committee.
+    const first = rec?.firstAmountMinor ?? 0;
+    return {
+      ...sp,
+      accountId,
+      // The local row first, then what we stamped on the subscription itself — that copy is the one
+      // that survives restoring the data volume from a backup older than the plan.
+      campaignId: rec?.campaignId || sp.campaignId || '',
+      campaignTitle: rec?.campaignTitle || sp.campaignTitle || '',
+      totalMinor: sp.totalMinor + first,
+      totalPartial: first <= 0,
+      donorName: sp.donorName || rec?.donorName || '',
+      donorEmail: sp.donorEmail || rec?.donorEmail || '',
+      deviceId: sp.deviceId || rec?.deviceId || '',
+    };
+  };
+
+  /** Find the account a subscription lives on and run something against it. Prefers the recorded
+   *  account (one API call); otherwise asks each account in turn, because acting on the wrong one
+   *  would at best 404 and at worst touch a same-id object elsewhere. */
+  const withPlan = async <T,>(
+    id: string,
+    fn: (keys: StripeKeys, accountId: string) => Promise<T>,
+  ): Promise<{ ok: true; value: T } | { ok: false; reason: 'not-found' | 'no-account' }> => {
+    const accounts = await planAccounts();
+    if (!accounts.length) return { ok: false, reason: 'no-account' };
+    const recorded = store.getPlanRecord(id)?.stripeAccountId ?? '';
+    const ordered = recorded ? [...accounts].sort((a, b) => (a.id === recorded ? -1 : b.id === recorded ? 1 : 0)) : accounts;
+    for (const acct of ordered) {
+      const found = await retrievePlan(acct.keys.secretKey, id).catch(() => null);
+      if (!found) continue;
+      return { ok: true, value: await fn(acct.keys, acct.id) };
+    }
+    return { ok: false, reason: 'not-found' };
+  };
+
+  app.get('/api/admin/plans', { preHandler: requireAdmin }, async () => {
+    const accounts = await planAccounts();
+    if (!accounts.length) return { data: { plans: [], unavailable: 'Payments aren’t set up yet.' } };
+    const byId = new Map<string, ReturnType<typeof toPlan>>();
+    let failures = 0;
+    let truncated = false;
+    let totalsCapped = false;
+    for (const acct of accounts) {
+      try {
+        const res = await listPlans(acct.keys.secretKey);
+        truncated = truncated || res.truncated;
+        totalsCapped = totalsCapped || res.totalsCapped;
+        for (const sp of res.plans) {
+          if (!byId.has(sp.id)) byId.set(sp.id, toPlan(sp, acct.id));
+        }
+      } catch (e) {
+        failures++;
+        log.warn(`plans list failed for one account: ${e instanceof Error ? e.message : 'error'}`);
+      }
+    }
+    // A capped invoice scan means every total on this screen is a floor. Mark them all partial so
+    // the list uses the footnote it already has, rather than showing a confident number that is
+    // quietly short — opening a plan re-totals it exactly.
+    const plans = [...byId.values()]
+      .map((p) => (totalsCapped ? { ...p, totalPartial: true } : p))
+      .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+    // Say so when a whole account couldn't be read, or when the scan filled up — an admin looking at
+    // a short list needs to know it's short, not assume those donors cancelled.
+    const unavailable =
+      failures && !plans.length
+        ? 'Couldn’t reach Stripe just now — please try again.'
+        : failures
+          ? 'Some plans couldn’t be loaded — this list may be incomplete.'
+          : truncated
+            ? 'This Stripe account has more subscriptions than we can scan at once, so this list may be incomplete.'
+            : '';
+    return { data: { plans, unavailable } };
+  });
+
+  app.get('/api/admin/plans/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!SUB_ID_RE.test(id)) return reply.code(400).send({ error: 'That plan wasn’t valid.' });
+    const r = await withPlan(id, async (keys, accountId) => {
+      const sp = await retrievePlan(keys.secretKey, id);
+      if (!sp) return null;
+      return { plan: toPlan(sp, accountId), invoices: await listPlanInvoices(keys.secretKey, id) };
+    });
+    if (!r.ok || !r.value) return reply.code(404).send({ error: 'That plan couldn’t be found in Stripe.' });
+    return { data: r.value };
+  });
+
+  /** The three write actions. Each re-reads the plan from Stripe afterwards and returns it, so the
+   *  screen shows what Stripe actually did rather than what we asked for. */
+  const planAction = async (
+    req: import('fastify').FastifyRequest,
+    reply: import('fastify').FastifyReply,
+    act: (keys: StripeKeys, id: string) => Promise<unknown>,
+  ) => {
+    const id = (req.params as { id: string }).id;
+    if (!SUB_ID_RE.test(id)) return reply.code(400).send({ error: 'That plan wasn’t valid.' });
+    try {
+      const r = await withPlan(id, async (keys, accountId) => {
+        await act(keys, id);
+        const sp = await retrievePlan(keys.secretKey, id);
+        return sp ? toPlan(sp, accountId) : null;
+      });
+      if (!r.ok || !r.value) return reply.code(404).send({ error: 'That plan couldn’t be found in Stripe.' });
+      return { data: { plan: r.value } };
+    } catch (e) {
+      const why = e instanceof Error ? e.message : 'error';
+      log.warn(`plan action failed: ${why}`);
+      return reply.code(502).send({ error: 'Stripe wouldn’t accept that change. Please try again, or check the Stripe dashboard.' });
+    }
+  };
+
+  const CancelBody = z.object({ immediately: z.boolean().optional() });
+  app.post('/api/admin/plans/:id/cancel', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = CancelBody.safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
+    const now = body.data.immediately === true;
+    return planAction(req, reply, async (keys, id) => {
+      const r = await cancelPlan(keys.secretKey, id, now);
+      await audit(req, 'plan.cancel', id, now ? 'ended immediately' : 'ends at the end of the paid period');
+      return r;
+    });
+  });
+
+  const PauseBody = z.object({ paused: z.boolean() });
+  app.post('/api/admin/plans/:id/pause', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = PauseBody.safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
+    return planAction(req, reply, async (keys, id) => {
+      const r = await pausePlan(keys.secretKey, id, body.data.paused);
+      await audit(req, 'plan.pause', id, body.data.paused ? 'paused — nothing collected until resumed' : 'resumed');
+      return r;
+    });
+  });
+
+  // End on a date, or after a fixed number of further charges. Both empty clears the schedule.
+  const ScheduleBody = z.object({
+    endAt: z.string().max(40).nullish(),
+    charges: z.number().int().min(1).max(600).nullish(),
+  });
+  app.post('/api/admin/plans/:id/schedule', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = ScheduleBody.safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
+    const { endAt, charges } = body.data;
+    if (endAt && charges) return reply.code(400).send({ error: 'Choose an end date or a number of payments, not both.' });
+    let endSec: number | null = null;
+    if (endAt) {
+      const t = Date.parse(endAt);
+      if (Number.isNaN(t)) return reply.code(400).send({ error: 'That date wasn’t valid.' });
+      if (t <= Date.now()) return reply.code(400).send({ error: 'Pick a date in the future.' });
+      endSec = Math.floor(t / 1000);
+    }
+    return planAction(req, reply, async (keys, id) => {
+      const r = await schedulePlanEnd(keys.secretKey, id, { endAt: endSec, charges: charges ?? null });
+      const what = endSec ? `ends on ${new Date(endSec * 1000).toISOString().slice(0, 10)}` : charges ? `stops after ${charges} more charge(s)` : 'end date cleared — carries on';
+      await audit(req, 'plan.schedule', id, what);
+      return r;
+    });
+  });
+
+  // The audit trail itself. Read-only by construction — there is no route that edits or deletes a
+  // row, which is the point of keeping one.
+  app.get('/api/admin/audit', { preHandler: requireAdmin }, async (req) => {
+    const q = (req.query ?? {}) as { limit?: string };
+    return { data: { entries: store.listAudit(Number(q.limit) || 200) } };
+  });
+
   // CSV export — behind admin auth (it exposes donor PII). Every cell is escaped against CSV formula
   // injection (donor name/email are attacker-controllable). Amounts are in major units for humans.
   // Exports the FULL history (limit -1 = no SQLite limit), not just the on-screen page.
@@ -806,7 +1082,7 @@ async function main(): Promise<void> {
   const PairBody = z.object({ code: z.string().max(12), name: z.string().max(80).optional(), platform: z.string().max(40).optional() });
   app.post('/api/kiosk/pair', async (req, reply) => {
     const peer = req.socket.remoteAddress ?? 'unknown';
-    const wait = pairLimiter.retryAfterMs(peer);
+    const wait = Math.max(pairLimiter.retryAfterMs(peer), pairBudget.retryAfterMs());
     if (wait > 0) return reply.code(429).send({ error: `Too many attempts. Try again in ${Math.ceil(wait / 1000)}s.` });
     // Remote (over-the-tunnel) pairing is opt-in: refuse it unless the admin turned on "Allow
     // remote adoption". LAN pairing (no tunnel prefix, so omosViaTunnel is unset) is always allowed.
@@ -818,6 +1094,7 @@ async function main(): Promise<void> {
     const code = parsed.data.code.trim();
     if (!store.consumePairingCode(code)) {
       pairLimiter.fail(peer);
+      pairBudget.fail(); // a wrong code costs the shared budget too, whoever sent it
       return reply.code(400).send({ error: 'That pairing code is invalid or has expired. Generate a fresh one in Admin → Devices.' });
     }
     pairLimiter.succeed(peer);
@@ -1044,10 +1321,10 @@ async function main(): Promise<void> {
     const campaign = (parsed.data.campaignId ? store.getCampaign(parsed.data.campaignId) : null) ?? store.getMainCampaign();
     if (!campaign) return reply.code(400).send({ error: 'Giving isn’t set up yet.' });
     if (!campaign.live && !campaign.isMain) return reply.code(400).send({ error: 'That appeal isn’t available.' });
-    // A tuition appeal is NOT paid through the donation flow — it has its own name+PIN → balance →
+    // A tuition appeal is NOT paid through the donation flow — it has its own Student ID → balance →
     // record-to-Students path (/api/kiosk/tuition/*). Reject it here so a crafted tablet can't mint a
     // tuition charge as a plain donation (wrong metadata, polluted totals, no Students record).
-    if (campaign.type === 'tuition') return reply.code(400).send({ error: 'Tuition is paid on its own screen (name + PIN).' });
+    if (campaign.type === 'tuition') return reply.code(400).send({ error: 'Tuition is paid on its own screen (Student ID).' });
     // Amount is validated against THIS campaign's presets/custom bounds — never trust the tablet.
     if (!store.isAllowedAmountForCampaign(campaign, amountMinor)) return reply.code(400).send({ error: 'That amount isn’t available.' });
     // Resolve the campaign's Stripe account (its own, or the primary/reader account when unset).
@@ -1174,10 +1451,30 @@ async function main(): Promise<void> {
             email: meta.donorEmail || undefined,
             productName: `Monthly donation — ${campaignLabel}`,
             deviceId: d.id,
+            campaignId: meta.campaignId || '',
+            campaignTitle: meta.campaign || '',
             anchorSec: result.createdSec, // deterministic across retries (idempotency-safe)
             idempotencyKey: id,
           });
           monthly = { requested: true, created: sub.created };
+          // Remember the half of this plan Stripe will never know: the campaign, the account it
+          // lives on, and THIS charge — month one is card-present, so it is not an invoice and
+          // adding up invoices alone under-reports what the plan has raised.
+          if (sub.subscriptionId) {
+            store.recordPlan({
+              subscriptionId: sub.subscriptionId,
+              customerId: sub.customerId,
+              stripeAccountId: acct.id,
+              campaignId: meta.campaignId || '',
+              campaignTitle: meta.campaign || '',
+              deviceId: d.id,
+              firstPaymentIntentId: id,
+              firstAmountMinor: result.amountMinor,
+              currency: result.currency,
+              donorName: meta.donorName || '',
+              donorEmail: meta.donorEmail || '',
+            });
+          }
         } catch (e) {
           log.warn('monthly subscription failed: ' + (e instanceof Error ? e.message : String(e)));
         }
@@ -1231,11 +1528,13 @@ async function main(): Promise<void> {
   });
 
   // ── Tuition (students/billing) — a `tuition` campaign shells out to OpenMasjid Students ─────
-  // The parent taps the tuition tile, types their child's name + PIN, we verify + fetch the balance
-  // from Students over the Fabric broker, they pay the full balance or pick invoices, the M2 reader
-  // takes the card, and we record it into the Students ledger (never as a kiosk "donation"). The app
-  // secret stays on the server; the PIN is inert input (body only, never logged/stored/in metadata);
-  // amounts are computed server-side from a held session. Everything fails soft if Students is absent.
+  // The parent taps the tuition tile and types their child's Student ID; we `identify` it, the tablet
+  // asks "is this <first name>?", and only on confirmation do we `lookup` the balance over the Fabric
+  // broker. They then pay the full balance or pick invoices, the M2 reader takes the card, and we
+  // record it into the Students ledger (never as a kiosk "donation"). Contract v2 (§11.0) — there is
+  // no PIN any more; the name confirmation is what catches a mistyped ID. The app secret stays on the
+  // server; the Student ID is inert input (body only, never logged/stored/in metadata); amounts are
+  // computed server-side from a held session. Everything fails soft if Students is absent.
 
   /** Push a succeeded tuition charge to the Students ledger (idempotent on the PI id); update the
    *  outbox. `recorded` → done; `rejected` → give up (Students' daily reconciliation is the backstop);
@@ -1257,6 +1556,12 @@ async function main(): Promise<void> {
         stripeAccountId: row.stripeAccountId || undefined,
       },
       allocations: row.allocations ?? undefined,
+      // The per-child split of a "choose what to pay" charge (v2). Students derives its own when this
+      // is absent, which is right for a pay-full charge and wrong for picked invoices.
+      students: row.students ?? undefined,
+      // The exact ticked bill lines (0.43.0). Supersedes both of the above — students.ts drops them
+      // when this is set, so the wire never carries two answers to "what did they pay for?".
+      lines: row.lines ?? undefined,
     });
     if (res.status === 'recorded') store.setTuitionRecordStatus(piId, 'recorded', res.paymentId);
     else if (res.status === 'rejected') store.setTuitionRecordStatus(piId, 'skipped');
@@ -1283,31 +1588,69 @@ async function main(): Promise<void> {
     if (!d) return;
     const r = await studentsInfo();
     if (!r.available || !r.info.enabled) return { data: { enabled: false } };
-    return { data: { enabled: true, schoolName: r.info.schoolName, currency: r.info.currency, tagline: r.info.tagline } };
+    return {
+      data: {
+        enabled: true,
+        schoolName: r.info.schoolName,
+        currency: r.info.currency,
+        tagline: r.info.tagline,
+        // 0.41.0 (§11.0a): whether a parent may pay when nothing is due, and the floor for a typed
+        // amount. The tablet uses these to render; the server re-checks both at pay time.
+        allowAdvance: r.info.allowAdvance,
+        minAmountMinor: r.info.minAmountCents,
+      },
+    };
   });
 
-  // Resolve a student name + PIN to a family + balance. Rate-limited per peer; the PIN is NEVER logged.
-  // A wrong PIN and a name mismatch return the SAME `found:false` (no enumeration oracle).
-  const TuitionLookupBody = z.object({
+  // Step 1 of the v2 flow: a typed Student ID → the child's first name, so the tablet can ask "is this
+  // the right child?" BEFORE any balance appears. Returns a name and nothing else (§11.2) — no balance,
+  // no invoices, no siblings, no ids. Unknown / withdrawn / locked / tuition-off all answer the same
+  // uniform `found:false`. Rate-limited per peer on the same bucket as the lookup below.
+  const TuitionCodeBody = z.object({
     campaignId: z.string().max(120),
-    name: z.string().trim().min(1).max(120),
-    pin: z.string().trim().min(1).max(40),
+    // Max 32 to match the provider's own cap; normalised (case/spaces/hyphens) in students.ts.
+    studentCode: z.string().trim().min(1).max(32),
   });
+  app.post('/api/kiosk/tuition/identify', async (req, reply) => {
+    const d = authDevice(req, reply);
+    if (!d) return;
+    const peer = req.socket.remoteAddress ?? 'unknown';
+    if (!tuitionLookupOk(peer)) return reply.code(429).send({ error: 'Too many tries. Please wait a moment and try again.' });
+    const parsed = TuitionCodeBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Enter the Student ID.' });
+    const campaign = store.getCampaign(parsed.data.campaignId);
+    if (!campaign || campaign.type !== 'tuition') return reply.code(400).send({ error: 'That isn’t a tuition appeal.' });
+    const r = await studentsIdentify(parsed.data.studentCode);
+    if (r.status === 'unavailable') return reply.code(503).send({ error: 'Tuition is temporarily unavailable — please try again shortly.' });
+    if (r.status === 'not-found') return { data: { found: false } };
+    // First name + last initial only — exactly what the parent needs to say "yes, that's my child".
+    return { data: { found: true, student: { firstName: r.student.firstName, lastInitial: r.student.lastInitial } } };
+  });
+
+  // Step 2: the parent has confirmed the name → resolve the SAME Student ID to the family + balance.
+  // Rate-limited per peer; the ID is NEVER logged. Every mismatch returns the same `found:false`
+  // (no enumeration oracle). There is no PIN at v2 — see §11.0.
   app.post('/api/kiosk/tuition/lookup', async (req, reply) => {
     const d = authDevice(req, reply);
     if (!d) return;
     const peer = req.socket.remoteAddress ?? 'unknown';
     if (!tuitionLookupOk(peer)) return reply.code(429).send({ error: 'Too many tries. Please wait a moment and try again.' });
-    const parsed = TuitionLookupBody.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'Enter the student’s name and PIN.' });
+    const parsed = TuitionCodeBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Enter the Student ID.' });
     const campaign = store.getCampaign(parsed.data.campaignId);
     if (!campaign || campaign.type !== 'tuition') return reply.code(400).send({ error: 'That isn’t a tuition appeal.' });
-    const r = await studentsLookup(parsed.data.name, parsed.data.pin);
+    const r = await studentsLookup(parsed.data.studentCode);
     if (r.status === 'unavailable') return reply.code(503).send({ error: 'Tuition is temporarily unavailable — please try again shortly.' });
     if (r.status === 'not-found') {
       // Uniform "not found" (no enumeration oracle); the rolling window already counted this attempt.
       return { data: { found: false } };
     }
+    // The school's advance/floor policy, captured into the session so the pay step validates against
+    // the server's copy. Cached ~5 min alongside the tile label; unavailable → no paying ahead.
+    const info = await studentsInfo();
+    const policy = info.available
+      ? { allowAdvance: info.info.allowAdvance, minAmountCents: info.info.minAmountCents }
+      : { allowAdvance: false, minAmountCents: MIN_TUITION_CENTS };
     // Stash the family + invoices server-side; the tablet only gets display fields + an opaque session id.
     const session = createTuitionSession({
       campaignId: campaign.id,
@@ -1317,18 +1660,87 @@ async function main(): Promise<void> {
       familyLabel: r.family.label,
       currency: r.family.currency,
       balanceCents: r.family.balanceCents,
-      invoices: r.family.openInvoices.map((i) => ({ id: i.id, balanceCents: i.balanceCents })),
+      creditCents: r.family.creditCents,
+      allowAdvance: policy.allowAdvance,
+      minAmountCents: policy.minAmountCents,
+      // The children, in the SAME order the response lists them — the tablet addresses one by its
+      // position (`s0`, `s1`) so "add £50 for Maryam" can name her ledger without the device ever
+      // holding the school's internal ids.
+      students: r.family.students.map((s) => ({
+        studentId: s.studentId,
+        name: [s.firstName, s.lastInitial].filter(Boolean).join(' '),
+        balanceCents: s.balanceCents,
+        creditCents: s.creditCents,
+      })),
+      // studentId is held server-side only — it is what lets the pay step tell Students whose bill
+      // each picked invoice is (contract v2). `items` is what a ticked bill LINE resolves against
+      // (0.43.0); empty on an older Students, which falls the pay step back to whole invoices.
+      invoices: r.family.openInvoices.map((i) => ({
+        id: i.id,
+        balanceCents: i.balanceCents,
+        studentId: i.studentId,
+        items: i.items.map((it) => ({ id: it.id, balanceCents: it.balanceCents })),
+      })),
     });
+    // The tablet renders the account CHILD BY CHILD (each with their own balance, credit and bills), so
+    // group the invoices here rather than shipping one flat list for the device to untangle.
+    const wireInvoice = (i: (typeof r.family.openInvoices)[number]) => ({
+      id: i.id,
+      label: i.label,
+      dueDate: i.dueDate,
+      balanceCents: i.balanceCents,
+      studentName: i.studentName,
+      // 0.43.0 (§11.0b): what this bill is MADE OF, so a parent can pay the book fee without the
+      // month's tuition. Empty on an older Students → the bill stays one line, exactly as before.
+      items: i.items.map((it) => ({ id: it.id, label: it.label, kind: it.kind, amountCents: it.amountCents, balanceCents: it.balanceCents })),
+    });
+    const byStudent = new Map<string, ReturnType<typeof wireInvoice>[]>();
+    for (const i of r.family.openInvoices) {
+      const list = byStudent.get(i.studentId) ?? [];
+      list.push(wireInvoice(i));
+      byStudent.set(i.studentId, list);
+    }
+    const known = new Set(r.family.students.map((s) => s.studentId));
+    const sections = r.family.students.map((s, idx) => ({
+      key: studentKey(idx), // the handle the pay step maps back to a real studentId
+      name: [s.firstName, s.lastInitial].filter(Boolean).join(' '),
+      // The pre-sections shape, still spelled out: an older APK reads these two off this same array.
+      firstName: s.firstName,
+      lastInitial: s.lastInitial,
+      balanceCents: s.balanceCents,
+      creditCents: s.creditCents,
+      invoices: byStudent.get(s.studentId) ?? [],
+    }));
+    // Defensive: a bill for a child missing from the sibling list would otherwise vanish from a screen
+    // that only renders sections. Show it under an unnamed section — still payable, just unattributed.
+    const orphans = r.family.openInvoices.filter((i) => !known.has(i.studentId)).map(wireInvoice);
+    if (orphans.length) sections.push({ key: '', name: '', firstName: '', lastInitial: '', balanceCents: 0, creditCents: 0, invoices: orphans });
     return {
       data: {
         found: true,
         session: session.id, // opaque; the family/student ids stay on the server
+        // What the tablet needs to offer "pay ahead" and to floor a typed amount.
+        allowAdvance: policy.allowAdvance,
+        minAmountMinor: policy.minAmountCents,
         family: {
           label: r.family.label,
-          students: r.family.students, // firstName + lastInitial only (per contract)
+          // Per-child sections: name, that child's own balance/credit, and their bills. `key` is the
+          // opaque handle for "pay towards this child"; the internal studentId never leaves the server.
+          students: sections,
           balanceCents: r.family.balanceCents,
+          // What is actually PAYABLE — the open bills added up. It differs from `balanceCents` the
+          // moment a sibling is in credit, because the household figure Students reports is a NET:
+          // a family with one child £340 ahead and another £160 behind reports a £0 balance. This is
+          // the number the pay button spends, and the server re-derives it at pay time.
+          dueCents: dueCents(session),
+          // 0.41.0: money already paid ahead. A zero balance means "square" or "paid ahead", and the
+          // parent should see which — once an advance settles its invoice this is the only signal left.
+          creditCents: r.family.creditCents,
           currency: r.family.currency,
-          openInvoices: r.family.openInvoices, // id (for selection) + label + dueDate + balanceCents
+          // The same bills as one flat list. Kept because a kiosk in the field may still be running an
+          // APK that predates the per-child sections, and a tablet update is a separate errand from a
+          // server update — that build reads this and keeps working unchanged.
+          openInvoices: r.family.openInvoices.map(wireInvoice),
         },
       },
     };
@@ -1341,6 +1753,17 @@ async function main(): Promise<void> {
     selection: z.discriminatedUnion('kind', [
       z.object({ kind: z.literal('full') }),
       z.object({ kind: z.literal('invoices'), invoiceIds: z.array(z.string().max(128)).min(1).max(60) }),
+      // Ticked bill LINES (0.43.0 §11.0b) — "just the book fee". Ids come from the lookup and are
+      // resolved against the held session, same as invoice ids.
+      z.object({ kind: z.literal('items'), itemIds: z.array(z.string().max(128)).min(1).max(200) }),
+      // A typed amount — a part payment, or money paid ahead when nothing is due (§11.0a). Bounds are
+      // re-derived from the SESSION in computeTuitionAmount; this only keeps junk out of the maths.
+      // `studentKey` is the opaque per-session handle for WHICH child the money is for.
+      z.object({
+        kind: z.literal('amount'),
+        amountMinor: z.number().int().positive().max(MAX_TUITION_CENTS),
+        studentKey: z.string().max(8).optional(),
+      }),
     ]),
     idempotencyKey: z.string().trim().min(8).max(255).optional(),
   });
@@ -1355,8 +1778,28 @@ async function main(): Promise<void> {
     }
     const campaign = store.getCampaign(session.campaignId);
     if (!campaign || campaign.type !== 'tuition') return reply.code(400).send({ error: 'That isn’t a tuition appeal.' });
-    const amt = computeTuitionAmount(session, parsed.data.selection);
-    if ('error' in amt) return reply.code(400).send({ error: 'Please choose what to pay.' });
+    const sel = parsed.data.selection;
+    const amt = computeTuitionAmount(
+      session,
+      sel.kind === 'amount' ? { kind: 'amount', amountCents: sel.amountMinor, studentKey: sel.studentKey } : sel,
+    );
+    if ('error' in amt) {
+      // Say which rule stopped it — a floor or a school that doesn't take money ahead is something the
+      // parent can act on, unlike a generic "invalid".
+      const message =
+        amt.error === 'below-min'
+          ? `The smallest payment is ${formatMoney(session.minAmountCents, session.currency || store.getCurrency())}.`
+          : amt.error === 'too-large'
+            ? 'That amount is too large to take here — please see the office.'
+            : amt.error === 'advance-not-allowed'
+              ? 'This school isn’t taking payments in advance right now.'
+              : amt.error === 'nothing-due'
+                ? 'There’s nothing due to pay.'
+                : amt.error === 'unknown-item' || amt.error === 'unknown-invoice' || amt.error === 'unknown-student'
+                  ? 'That’s out of date — please look up the balance again.'
+                  : 'Please choose what to pay.';
+      return reply.code(400).send({ error: message });
+    }
     // Tuition is card-present on the reader's (primary) account — which MUST be the school's account so
     // Students' reconciliation finds it (contract §4). We charge the primary account here.
     const acct = await resolveAccount();
@@ -1372,7 +1815,10 @@ async function main(): Promise<void> {
       campaignId: campaign.id,
       stripeAccountId: acct.id,
     };
-    if (session.studentId) metadata.students_student_id = session.studentId;
+    // The child this charge is for: the one the parent picked on the "add money for…" pad when there
+    // was one, else the student whose ID was typed.
+    const chargeStudentId = amt.studentId || session.studentId;
+    if (chargeStudentId) metadata.students_student_id = chargeStudentId;
     const piInput = {
       amountMinor: amt.amountCents,
       currency,
@@ -1389,11 +1835,13 @@ async function main(): Promise<void> {
         campaignId: campaign.id,
         stripeAccountId: acct.id,
         familyId: session.familyId,
-        studentId: session.studentId,
+        studentId: chargeStudentId,
         familyLabel: session.familyLabel,
         amountMinor: amt.amountCents,
         currency,
         allocations: amt.allocations,
+        students: amt.students, // per-child split (v2); null for a pay-full charge
+        lines: amt.lines, // the ticked bill lines (0.43.0); supersedes both of the above
       });
       return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, chargeMinor: amt.amountCents, currency } };
     } catch (err) {

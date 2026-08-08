@@ -4,6 +4,57 @@
 
 ---
 
+## 0. Branching policy
+
+**This section comes before everything else in this file, and overrides anything below it that assumes work lands on `main`.** Nothing here changes the build contract or the slice plan in §17 — slices simply continue on `dev` now.
+
+### Session-start check (do this before making any change)
+
+```bash
+git branch --show-current    # MUST print: dev
+```
+
+If it prints anything else, `git checkout dev` first. If you are on `main`, you are in the wrong place — stop and switch. Do not "just make this one small change" here.
+
+### The two branches
+
+| Branch | What it is | Who moves it |
+|---|---|---|
+| `dev` | Where **all** development happens. Every slice, feature, fix, experiment, docs edit and dependency bump. | You, freely. |
+| `main` | The stable channel. Its tip is always the last release. | **Only Hasan, by saying "merge to main".** |
+
+### Rules
+
+1. **All development happens on `dev`** — this session and every future one. Commit and push to `dev` as normal work.
+2. **Never commit to `main`.** Not for a hotfix, not for a typo, not for a one-line docs fix, not because something is urgent. There is no exception that does not start with Hasan saying so.
+3. **Never merge, rebase onto, cherry-pick into, or fast-forward `main` autonomously.** Not even when `dev` is green and `main` is behind. Being obviously-correct is not authorisation.
+4. **`main` moves only when Hasan explicitly says so** — the words **"merge to main"** or **"push to main"**. Nothing else counts: not "ship it", not "release it", not "looks good", not approving a diff, not merging a PR into `dev`. If you think a release is due, *say so and wait*.
+5. **After every push to `dev`, ask.** End the reply with a clear one-line offer — *"Pushed to `dev`. Do you want me to push to main?"* — and then keep working on `dev` until he answers with the words in rule 4. Ask every time, not once per session: the answer is per change, and silence is not a yes. A "no" (or no reply) means carry on pushing to `dev` as normal.
+6. **That merge is a release.** When told, run the full runbook: bump `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and add the `CHANGELOG.md` entry → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → bump the OpenMasjidAPPS `registry.yaml` entry (`ref:` + the immutable 40-char `commit:`). `VERSION` and `CHANGELOG.md` move **only** here, never on a plain `dev` push.
+7. **Restore the pinned image line when merging to `main`.** On `dev`, `docker-compose.yml` points at the moving `:dev` tag with no digest. `main` must always carry `:<version>@sha256:<digest>`. A merge that carries the `:dev` line into `main` would point every stable install at a development build — check this line explicitly, every time. CI enforces it in both directions (below), but do not rely on that to notice for you.
+
+### Update channels (how the two branches reach a masjid)
+
+OpenMasjidOS has an Update Channel toggle, and the OpenMasjidAPPS catalog resolves this app per channel:
+
+| Channel | Git ref | Image tag | Digest-pinned? |
+|---|---|---|---|
+| stable | the `vX.Y.Z` tag (registry `ref:` + immutable `commit:`) | `:<version>` | **yes** — `@sha256:…` in compose |
+| dev | the `dev` branch | `:dev` | **no, deliberately** |
+
+`.github/workflows/build-image.yml` decides the channel from the **git ref, not the event**, so a manual `workflow_dispatch` run on `dev` can never publish `:latest`. Both channels run the *full* pipeline — Gradle APK → web → server → multi-arch (amd64 + arm64) image — so a dev image ships a dev APK built from the dev branch, and an arm64-only regression surfaces on the channel that exists to catch it.
+
+Every dev build also gets an immutable `:dev-<12-char sha>` tag. `:dev` means "newest"; `:dev-<sha>` identifies exactly which commit a box is running, which is what keeps a bad dev build diagnosable and rollback-able despite the moving tag.
+
+The workflow's **"Check the compose image matches the channel"** step fails the build if `docker-compose.yml` is ever wrong for the ref it is on — a digest pin on `dev` (which would silently freeze the channel on one build), or a `:dev` line on `main` or a `v*` tag (which would ship a development build to every masjid). The catalog build's own digest-pin check is a **warning, not a failure**, so the dev entry builds fine and warns. **That warning is expected on `dev` — do not silence it by pinning a digest there.**
+
+### Two things that are NOT wired yet
+
+- **The catalog has no channel support.** `dev_ref:` is *silently ignored* by `OpenMasjidAPPS/scripts/build-catalog.mjs` (it destructures only `id`, `repo`, `ref`, `path`, `commit`, `sha`), and a second entry reusing `id: kiosk` is a hard `process.exit(1)` that breaks the whole catalog. Making the dev channel actually reachable needs tooling changes in OpenMasjidAPPS **and** a channel concept in OpenMasjidOS. The `:dev` image and this branch are the prerequisites, not the finished feature.
+- **The APK has no channel identity.** `versionCode` is a hardcoded `1` and `versionName` comes from `VERSION`, which is unchanged on `dev` — so a dev tablet reports the same version as a stable one, shows as up to date on the Devices page, and is never offered an update. A dev APK *is* signed with the same key and installs in place in both directions; it just cannot be told apart. See §10 and the release notes in `docs/audit/`.
+
+---
+
 ## 1. What we are building (one paragraph)
 
 **OpenMasjidKiosk** turns a wall-mounted Android tablet with a **Stripe Reader M2** into a beautiful tap-to-donate station for a masjid. It has **two parts in one repo**: (1) a **server** — a normal OpenMasjidOS app (one Docker container: Fastify API + admin web UI + SQLite) that holds all configuration, records donations, and talks to Stripe with the secret key it fetches from the **OpenMasjidOS Fabric**; and (2) an **Android app** — a Kotlin kiosk/launcher that a volunteer installs by browsing to the server's setup page (e.g. `http://192.168.1.x:7878/new`), downloading the APK, and entering a short **6-digit pairing code** (no camera needed — most kiosk tablets don't have one). The tablet shows a GiveALittle-style giving screen — **six preset amounts + a custom amount**, one-time or **monthly** — takes the card on the M2 reader (**Bluetooth or USB**), and shows a custom thank-you. The app is locked in kiosk mode and can only be exited with a **PIN set in the admin web UI**. Everything matches the OpenMasjidOS design language, is served over **HTTPS**, and is **AGPL-3.0-only**.

@@ -225,6 +225,34 @@ h1, h2, h3, p, ul { margin: 0; }
 .menu-item svg { color: var(--color-ink-muted); flex-shrink: 0; }
 .menu-foot { padding: 0.55rem 0.7rem 0.25rem; margin-block-start: 0.3rem; border-block-start: 1px solid var(--color-border); font-size: 0.8rem; color: var(--color-ink-faint); }
 
+/* "What's new" — a quiet dot on the account button when the app has been updated since the
+   release notes were last opened. Gold, not red: it's news, not a problem. */
+.profile-btn { position: relative; }
+.profile-dot {
+  position: absolute; inset-block-start: 0.15rem; inset-inline-end: 0.15rem;
+  width: 0.55rem; height: 0.55rem; border-radius: 50%;
+  background: var(--color-gold); box-shadow: 0 0 0 2px var(--color-surface-raised);
+}
+.menu-dot {
+  margin-inline-start: auto; width: 0.45rem; height: 0.45rem; border-radius: 50%;
+  background: var(--color-gold); flex-shrink: 0;
+}
+
+/* ── What's new (release notes modal) ────────────────────────────────────────── */
+.wn-release { padding-block: 0.7rem; border-block-end: 1px solid var(--color-border); }
+.wn-release:last-child { border-block-end: 0; }
+.wn-version {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin: 0 0 0.4rem; font-size: 1.05rem; font-weight: 700; color: var(--color-ink);
+}
+.wn-list { margin: 0; padding-inline-start: 1.1rem; display: flex; flex-direction: column; gap: 0.45rem; }
+.wn-list li { font-size: 0.92rem; line-height: 1.6; color: var(--color-ink-muted); }
+.wn-list strong { color: var(--color-ink); font-weight: 650; }
+.wn-list code {
+  font-size: 0.86em; padding: 0.05rem 0.3rem; border-radius: 5px;
+  background: var(--glass-bg-inset); color: var(--color-ink);
+}
+
 /* ── Bottom dock (primary navigation — matches OpenMasjidOS/Donations) ──────── */
 .dock-wrap {
   position: fixed; inset-block-end: 1rem; inset-inline: 0; z-index: 40;
@@ -508,7 +536,7 @@ button.status-pill:hover { filter: brightness(1.08); }
 }
 .gv-check { color: var(--color-success); font-weight: 800; }
 
-/* Tuition-campaign preview note (a tuition tile shows a name+PIN lookup, not amount tiles). */
+/* Tuition-campaign preview note (a tuition tile shows a Student ID lookup, not amount tiles). */
 .tuition-preview-note {
   padding: 1.2rem 1.1rem; border-radius: 14px; text-align: center; line-height: 1.55;
   color: var(--color-ink-muted); background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
@@ -694,3 +722,77 @@ button.status-pill:hover { filter: brightness(1.08); }
 .er-receipt__table td:last-child { text-align: right; }
 .er-receipt__table td.er-strong { font-weight: 700; font-size: 15px; }
 .er-receipt__foot { margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef1f3; text-align: center; font-size: 12px; line-height: 1.6; color: #7a8892; }
+
+/* ── Recurring plans (Recurring screen) ───────────────────────────────────────── */
+/* A plan row carries far more than a donation row does — the cadence, the card, two dates and a
+   running total — so it gets its own facts strip rather than squeezing all that into one meta line. */
+.plan-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.plan-list > li { border-block-end: 1px solid var(--color-border); }
+.plan-list > li:last-child { border-block-end: 0; }
+.plan-row {
+  width: 100%; border: 0; background: none; cursor: pointer; text-align: start;
+  display: flex; flex-direction: column; gap: 0.28rem;
+  padding: 0.7rem 0.5rem; border-radius: var(--radius-button);
+  transition: background-color var(--dur-micro) ease;
+}
+.plan-row:hover { background: var(--color-surface-overlay); }
+.plan-row:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.plan-row__top { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.plan-amt { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-ink); }
+.plan-who { font-size: 0.85rem; color: var(--color-ink-muted); }
+/* Column gap does the separating, so the facts stay readable when they wrap on a narrow screen. */
+.plan-facts { display: flex; flex-wrap: wrap; gap: 0.15rem 1.1rem; font-size: 0.78rem; color: var(--color-ink-faint); }
+.plan-fact b { font-weight: 600; color: var(--color-ink-muted); }
+/* The quiet mark on a total we know is short (the first reader payment isn't in it). */
+.plan-star { color: var(--color-warning); font-weight: 700; cursor: help; }
+.plan-foot { margin-block-start: 0.7rem; padding-inline: 0.5rem; font-size: 0.78rem; line-height: 1.5; }
+
+/* Severity on the status pill: past due / unpaid must not read the same as active. */
+.status-pill--warn { color: var(--color-warning); }
+.status-pill--danger { color: var(--color-danger); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent); }
+.status-pill--muted { color: var(--color-ink-faint); }
+
+/* A stat tile that has to be noticed — plans whose card has stopped working. */
+.stat-tile--alert { background: color-mix(in srgb, var(--color-danger) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 35%, transparent); }
+.stat-tile--alert .stat-tile__icon, .stat-tile--alert .stat-tile__value { color: var(--color-danger); }
+
+/* Action groups in the plan window (pause / end date / end the plan), each divided off so a
+   destructive button is never adjacent to a harmless one. */
+.plan-actions { margin-block-start: 1.1rem; padding-block-start: 1rem; border-block-start: 1px solid var(--color-border); }
+.plan-act { margin-block-end: 1.1rem; }
+.plan-act:last-child { margin-block-end: 0; }
+.plan-act__title { font-weight: 600; font-size: 0.92rem; margin-block-end: 0.25rem; }
+.plan-act__row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.plan-end-btn:hover { color: var(--color-danger); }
+/* Action feedback is a whole sentence ("Paused — nothing will be collected until you resume"), which
+   a 999px status pill turns into an odd stretched lozenge. */
+.plan-note { display: flex; align-items: flex-start; gap: 0.4rem; margin-block-start: 0.6rem; font-size: 0.84rem; line-height: 1.5; color: var(--color-success); }
+.plan-note svg { flex: none; margin-block-start: 0.15rem; }
+/* The danger twin of .note-amber — for the confirm step before a standing order is ended outright. */
+.note-danger {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent);
+  border-radius: var(--radius-button); padding: 0.55rem 0.7rem; font-size: 0.82rem; line-height: 1.5;
+}
+.note-danger strong { color: var(--color-danger); }
+/* This window doesn't drag (it holds forms and a scrolling list), so the bar mustn't promise it can. */
+.tl-bar--static { cursor: default; }
+
+/* Invoice history. A failed renewal is the ONLY sign an admin gets that a donor's card has died —
+   no webhooks reach us — so a bad row is tinted, not just dotted. */
+.inv-list { display: flex; flex-direction: column; list-style: none; margin: 0; padding: 0; }
+.inv-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.1rem; border-block-end: 1px solid var(--color-border); }
+.inv-row:last-child { border-block-end: 0; }
+.inv-dot { flex: none; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--color-ink-faint); }
+.inv-row--ok .inv-dot { background: var(--color-success); }
+.inv-row--warn .inv-dot { background: var(--color-warning); }
+.inv-row--bad .inv-dot { background: var(--color-danger); }
+.inv-row--bad { background: color-mix(in srgb, var(--color-danger) 8%, transparent); border-radius: var(--radius-button); padding-inline: 0.5rem; }
+.inv-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.inv-top { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+.inv-date { font-size: 0.88rem; font-weight: 600; }
+.inv-amt { font-weight: 600; font-variant-numeric: tabular-nums; }
+.inv-sub { font-size: 0.78rem; color: var(--color-ink-faint); }
+.inv-row--warn .inv-sub { color: var(--color-warning); }
+.inv-row--bad .inv-sub { color: var(--color-danger); }

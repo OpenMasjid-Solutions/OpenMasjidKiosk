@@ -41,16 +41,16 @@ jobs:
       run:
         working-directory: android
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@d7793b545071e98d581d3bf084a51c3213318a07 # v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
@@ -68,6 +68,17 @@ jobs:
             echo "have_keystore=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # The update-channel suffix, decided from the git ref exactly as build-image.yml decides the
+      # image tags. A dev-branch APK reports "0.10.1-dev"; a release reports "0.10.1". The server
+      # in the same image is built with the SAME value, because the tablet's "update available"
+      # check is a plain string comparison between the two. See android/app/build.gradle.kts.
+      - name: Resolve the channel suffix
+        id: channel
+        run: |
+          if [ "$GITHUB_REF" = 'refs/heads/dev' ]; then suffix=-dev; else suffix=; fi
+          echo "suffix=$suffix" >> "$GITHUB_OUTPUT"
+          echo "APP_VERSION_SUFFIX='$suffix'"
+
       - name: Build signed release APK
         if: steps.signing.outputs.have_keystore == 'true'
         env:
@@ -75,25 +86,60 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          APP_VERSION_SUFFIX: ${{ steps.channel.outputs.suffix }}
         run: ./gradlew --no-daemon :app:assembleRelease
 
+      # Kept so a run without the signing secrets still proves the Kotlin compiles. Its output is
+      # NEVER published — see the collect step below, which refuses anything but a release APK.
       - name: Build debug APK (no signing secrets)
         if: steps.signing.outputs.have_keystore != 'true'
+        env:
+          APP_VERSION_SUFFIX: ${{ steps.channel.outputs.suffix }}
         run: ./gradlew --no-daemon :app:assembleDebug
 
       - name: Collect APK as openmasjidkiosk.apk
         run: |
-          set -e
-          # Never bundle an *-unsigned.apk: an unsigned APK (or one signed with a throwaway per-run
-          # debug key) is exactly what causes "App not installed" on update. Prefer the signed
-          # release APK and fail loudly if release signing didn't happen.
-          apk=$(find app/build/outputs/apk -name '*.apk' ! -name '*unsigned*' | head -1)
-          if [ -z "$apk" ]; then echo "No signed APK produced (check signing secrets)"; exit 1; fi
+          set -eu
+          # ONLY a release-signed APK may ever be published. This APK is bundled into the server
+          # image and served to tablets from /new, and Android will refuse to install an update
+          # whose signing certificate differs from the installed one ("App not installed"),
+          # recoverable only by uninstalling — which destroys the device token and the pinned
+          # certificate and forces a physical re-pair at every tablet.
+          #
+          # The previous filter was `! -name '*unsigned*'`, which did NOT do this. The debug
+          # fallback above emits app/build/outputs/apk/debug/app-debug.apk: that name contains no
+          # "unsigned", and the file IS signed — with a throwaway per-run debug key. So a run with
+          # the signing secrets missing (rotated out, org transfer, a fork) produced a green build
+          # that shipped a key-mismatched APK to the whole fleet. Three independent guards now:
+          #   1. look only inside the release/ output directory
+          #   2. reject anything named *unsigned* or *debug* even if it is in there
+          #   3. `sort` before picking, so a stray second APK can't win a race by directory order
+          rel=app/build/outputs/apk/release
+          apk=$(find "$rel" -maxdepth 1 -name '*.apk' ! -name '*unsigned*' ! -name '*debug*' 2>/dev/null | sort | head -1 || true)
+          if [ -z "${apk:-}" ]; then
+            echo "::error::No release-signed APK was produced, so there is nothing safe to publish."
+            echo "have_keystore was '${{ steps.signing.outputs.have_keystore }}'. When that is false the"
+            echo "build falls back to a DEBUG-signed APK, which is deliberately NOT publishable: it is"
+            echo "signed with a throwaway per-run key, so every tablet in the field would fail to update"
+            echo "with \"App not installed\". Restore the SIGNING_* repo secrets and re-run."
+            echo "--- what the build actually produced ---"
+            find app/build/outputs/apk -name '*.apk' 2>/dev/null || echo "(no APKs at all)"
+            exit 1
+          fi
           echo "Found $apk"
+          # Best-effort, informational: print the signer so the key in use is visible in the log and
+          # a change to it is noticeable. Never fails the build — apksigner's location varies.
+          # ${ANDROID_HOME:-} matters: `set -u` would otherwise abort the whole step over an unset
+          # variable, turning a perfectly good build into a failure at the last line.
+          signer=$(find "${ANDROID_HOME:-/nonexistent}/build-tools" -name apksigner -type f 2>/dev/null | sort -r | head -1 || true)
+          if [ -n "${signer:-}" ]; then
+            echo "--- signer ---"
+            "$signer" verify --print-certs "$apk" 2>/dev/null | grep -iE 'signer .*(DN|SHA-256)' || echo "(could not read certs)"
+          fi
           cp "$apk" "$RUNNER_TEMP/openmasjidkiosk.apk"
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: kiosk-apk
           path: ${{ runner.temp }}/openmasjidkiosk.apk

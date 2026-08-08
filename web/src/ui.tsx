@@ -5,10 +5,11 @@
  *  live clock, theme toggle, and the top-right profile menu. Mirrors the OpenMasjidOS
  *  dashboard (and OpenMasjidDonations) so the panel feels like part of the platform. */
 import { useEffect, useRef, useState } from 'react';
-import { LogOut, Monitor, Moon, Settings, Sun, User } from 'lucide-react';
+import { LogOut, Monitor, Moon, Settings, Sparkles, Sun, User } from 'lucide-react';
 import { prefsStore, resolveTheme, usePrefs, type Prefs } from './prefs';
 import { getSession, logout, type AppInfo, type Session } from './api';
 import { withBase } from './base';
+import { useUnreadRelease, WhatsNewModal } from './whatsnew';
 
 /** A simple crescent + star mark (geometric motif — never sacred text in chrome). */
 export function Crescent({ size = 22 }: { size?: number }) {
@@ -93,8 +94,13 @@ export function ProfileMenu({ info }: { info: AppInfo | null }) {
   const prefs = usePrefs();
   const current = resolveTheme(prefs.theme);
   const [open, setOpen] = useState(false);
+  const [whatsNew, setWhatsNew] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const version = info?.version ?? __APP_VERSION__;
+  // A quiet dot when OpenMasjidOS has updated this app since the notes were last opened —
+  // otherwise "What's new" is a menu item nobody has a reason to press.
+  const unread = useUnreadRelease(info?.version);
 
   useEffect(() => {
     if (!open) return;
@@ -113,8 +119,15 @@ export function ProfileMenu({ info }: { info: AppInfo | null }) {
 
   return (
     <div className="profile" ref={ref}>
-      <button className="profile-btn" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu">
+      <button
+        className="profile-btn"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={unread ? 'Account menu — new release notes' : 'Account menu'}
+      >
         <User size={18} />
+        {unread && <span className="profile-dot" aria-hidden="true" />}
       </button>
       {open && (
         <div className="profile-menu glass-raised" role="menu">
@@ -122,13 +135,19 @@ export function ProfileMenu({ info }: { info: AppInfo | null }) {
             {current === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             <span>{current === 'dark' ? 'Light mode' : 'Dark mode'}</span>
           </button>
+          <button className="menu-item" role="menuitem" onClick={() => { setWhatsNew(true); setOpen(false); }}>
+            <Sparkles size={17} />
+            <span>What’s new</span>
+            {unread && <span className="menu-dot" aria-hidden="true" />}
+          </button>
           <a className="menu-item" role="menuitem" href="#settings" onClick={() => setOpen(false)}><Settings size={17} /><span>Settings</span></a>
           {canSignOut && (
             <button className="menu-item" role="menuitem" onClick={signOut}><LogOut size={17} /><span>Sign out</span></button>
           )}
-          <div className="menu-foot">OpenMasjid Kiosk v{info?.version ?? __APP_VERSION__}</div>
+          <div className="menu-foot">OpenMasjid Kiosk v{version}</div>
         </div>
       )}
+      {whatsNew && <WhatsNewModal onClose={() => setWhatsNew(false)} />}
     </div>
   );
 }

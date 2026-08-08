@@ -779,9 +779,9 @@ function CampaignEditor({
                 <div className="tuition-preview-note">
                   <p className="tuition-preview-title">Tuition appeal</p>
                   <p>
-                    On the kiosk this tab shows a <strong>name + PIN</strong> lookup, then the family's balance and
-                    invoices to pay — the school details, balances and receipts are managed by <strong>OpenMasjid
-                    Students</strong>, not here. There are no preset amounts to design.
+                    On the kiosk this tab asks for the child's <strong>Student ID</strong>, confirms the child's name,
+                    then shows the family's balance and invoices to pay — the school details, balances and receipts are
+                    managed by <strong>OpenMasjid Students</strong>, not here. There are no preset amounts to design.
                   </p>
                 </div>
               ) : (
@@ -901,9 +901,9 @@ function CampaignEditor({
                   <div className="field">
                     <span className="label">Amounts</span>
                     <p className="hint" style={{ lineHeight: 1.55 }}>
-                      Tuition amounts come from <strong>OpenMasjid Students</strong> — a parent looks up their child
-                      by name + PIN and pays the balance (or picks specific months). There are no preset amounts to
-                      set here.
+                      Tuition amounts come from <strong>OpenMasjid Students</strong> — a parent types their child's
+                      Student ID, confirms the name, and pays the balance (or picks specific months). There are no
+                      preset amounts to set here.
                     </p>
                   </div>
                 ) : (
@@ -972,7 +972,8 @@ function CampaignEditor({
                     {type === 'tuition' && (
                       <p className="note-amber">
                         A tuition appeal is powered by <strong>OpenMasjid Students</strong>: the parent types their
-                        child's name + PIN and pays the balance on the card reader. Turn it on in OpenMasjidOS and in
+                        child's <strong>Student ID</strong> (on their statement), confirms the child's name, and pays
+                        the balance on the card reader. Turn it on in OpenMasjidOS and in
                         the Students app (if it's off, the tile stays hidden), and charge it on the{' '}
                         <strong>same Stripe account the school uses in OpenMasjid Students</strong> — that's the
                         reader's account, so tuition lands in the school's account and reconciles there.

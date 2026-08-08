@@ -29,6 +29,7 @@ import org.openmasjidos.kiosk.local.PairingRecord
 import org.openmasjidos.kiosk.kiosk.DeviceStatus
 import org.openmasjidos.kiosk.net.HeartbeatOutcome
 import org.openmasjidos.kiosk.net.PairResult
+import org.openmasjidos.kiosk.net.TuitionPay
 import org.openmasjidos.kiosk.readers.PaymentController
 import org.openmasjidos.kiosk.readers.ReaderConn
 import org.openmasjidos.kiosk.readers.ReaderManager
@@ -46,7 +47,7 @@ enum class Overlay { None, Pin, Maintenance }
 /** The donor-facing giving flow (Paired phase). The kiosk now boots straight into [Amount] (no
  *  attract screen); [Idle] is retained only as a defensive default. Processing = the card was read
  *  and we're verifying with the server (so the tap is acknowledged immediately). */
-enum class GivingStep { Idle, Amount, LargeAmount, Details, Card, Processing, Thanks, Error, TuitionInvoices }
+enum class GivingStep { Idle, Amount, LargeAmount, Details, Card, Processing, Thanks, Error, TuitionConfirm, TuitionInvoices }
 
 /** How long a non-main campaign tab may sit idle before the kiosk returns to the main tab. */
 const val KIOSK_AUTO_RETURN_MS = 45_000L
@@ -67,30 +68,115 @@ data class ManualEntry(
 /** Outcome the UI reports back after presenting the manual card form. */
 enum class ManualResult { Completed, Canceled, Failed }
 
-/** An open invoice a parent can pay (display + the opaque id used for selection). */
-data class TuitionInvoiceUi(val id: String, val label: String, val dueDate: String, val balanceMinor: Long)
+/** One LINE of a bill (contract 0.43.0): "Monthly tuition £200", "Book fee £50", "Bursary −£30".
+ *  [payable] is the only thing the tick logic cares about — a settled line and a credit line are both
+ *  shown (a part-paid bill should say what is already dealt with) but neither can be chosen. */
+data class TuitionItemUi(
+    val id: String,
+    val label: String,
+    val kind: String,
+    val amountMinor: Long,
+    val balanceMinor: Long,
+) {
+    val payable: Boolean get() = balanceMinor > 0
+    val isCredit: Boolean get() = kind == "credit" || amountMinor < 0
+}
 
-/** State of the tuition (students/billing) shell — the name+PIN lookup, then the family's balance +
- *  invoices to pay. Only set when the active campaign is a `tuition` campaign. Holds nothing beyond
- *  what's on screen and is cleared whenever the flow resets, so no family's balance lingers for the
- *  next person (contract §6). */
+/** An open invoice a parent can pay (display + the opaque id used for selection). [studentName] is
+ *  whose bill it is — blank for an only child (contract v2: one bill per student). [items] is what the
+ *  bill is made of; empty against a Students older than 0.43.0, and then the bill is one tickable row
+ *  exactly as before. */
+data class TuitionInvoiceUi(
+    val id: String,
+    val label: String,
+    val dueDate: String,
+    val balanceMinor: Long,
+    val studentName: String = "",
+    val items: List<TuitionItemUi> = emptyList(),
+) {
+    /** The lines a parent can actually choose. */
+    val payableItems: List<TuitionItemUi> get() = items.filter { it.payable }
+
+    /** What ticking THIS bill selects: its lines when it has them, else the bill itself. One or the
+     *  other — a charge that mixes the two can't be expressed on the wire (the provider takes `lines`
+     *  or `allocations`, and a partial `lines[]` is a hard rejection). */
+    val unitIds: List<String> get() = if (items.isEmpty()) listOf(id) else payableItems.map { it.id }
+}
+
+/** One CHILD's part of the account: their name, their own balance and credit, and their own bills.
+ *  [key] is the opaque per-session handle for "pay towards this child" — the school's internal id
+ *  never reaches the tablet. Blank on the (defensive) unattributed section, which therefore offers no
+ *  per-child button. */
+data class TuitionStudentUi(
+    val key: String,
+    val name: String,
+    val balanceMinor: Long,
+    val creditMinor: Long,
+    val invoices: List<TuitionInvoiceUi> = emptyList(),
+)
+
+/** State of the tuition (students/billing) shell — the Student ID entry, the "is this your child?"
+ *  confirmation, then the family's balance + invoices to pay. Only set when the active campaign is a
+ *  `tuition` campaign. Holds nothing beyond what's on screen and is cleared whenever the flow resets,
+ *  so no family's balance lingers for the next person (contract §6).
+ *
+ *  Contract v2 (Students 0.39.0 §11.0): there is no PIN. The Student ID alone identifies the child and
+ *  the parent confirms the name we echo back — that confirmation is what catches a mistyped ID. */
 data class TuitionState(
     val schoolName: String = "",
     val tagline: String = "",
     val available: Boolean = true,      // Students info.enabled; false → the tile shows "unavailable"
-    val name: String = "",
-    val pin: String = "",
-    val looking: Boolean = false,       // a lookup is in flight
+    val studentCode: String = "",       // the ID printed on the statement, e.g. YUS1234
+    val identifiedName: String = "",    // the child `identify` matched — shown for confirmation
+    val looking: Boolean = false,       // an identify/lookup is in flight
     val notFound: Boolean = false,      // uniform "couldn't find that"
     val error: String? = null,          // e.g. temporarily unavailable / choose an item
     val session: String = "",           // opaque server session id (set after a successful lookup)
     val familyLabel: String = "",
     val balanceMinor: Long = 0L,
+    /** Money already paid ahead (0.41.0). At most one of balance/credit is non-zero; without this a
+     *  zero balance can't be told apart from "you're paid up ahead". */
+    val creditMinor: Long = 0L,
     val currency: String = "",
-    val invoices: List<TuitionInvoiceUi> = emptyList(),
+    /** The account CHILD BY CHILD. One flat list of bills was unreadable the moment a family had two
+     *  children with the same month's label, and it could not say who was in credit. */
+    val students: List<TuitionStudentUi> = emptyList(),
     val payFull: Boolean = true,
-    val selected: Set<String> = emptySet(), // ticked invoice ids when !payFull
-)
+    /** Ticked units when !payFull — bill LINE ids where the provider gave us lines, else invoice ids
+     *  (see [TuitionInvoiceUi.unitIds]). */
+    val selected: Set<String> = emptySet(),
+    /** The school takes money when nothing is due (pay a term up front). Drives the amount pad. */
+    val allowAdvance: Boolean = false,
+    /** Floor for a typed amount — the school's, never below the kiosk's own £1/$1 minimum. */
+    val minAmountMinor: Long = 100L,
+) {
+    /** Every open bill across the family, for the totals and the pay-selection maths. */
+    val invoices: List<TuitionInvoiceUi> get() = students.flatMap { it.invoices }
+
+    /** What is actually PAYABLE — the open bills added up.
+     *
+     *  NOT [balanceMinor]. The household figure is a NET: one child's credit cancels another's bill
+     *  in it, so a family with Yusuf £340 ahead and Yunus £160 behind reports a £0 balance and £180
+     *  of credit while £160 is genuinely owed. Gating the pay controls on the balance left the
+     *  parent staring at three of Yunus's bills with no way to pay any of them. Credit belongs to
+     *  the child holding it and never pays a sibling's bill, so the bills are the honest total. */
+    val dueMinor: Long get() = invoices.sumOf { it.balanceMinor }.takeIf { it > 0 } ?: balanceMinor
+
+    /** True when EVERY open bill came with lines. The two selections can't be mixed in one charge (the
+     *  provider takes `lines` or `allocations`, and a `lines[]` covering only part of the charge is a
+     *  hard rejection), so this decides which one the WHOLE screen uses — rendering included. */
+    val itemised: Boolean get() = invoices.isNotEmpty() && invoices.all { it.items.isNotEmpty() }
+
+    /** What ticking this bill selects, honouring that whole-screen choice: its lines only when every
+     *  bill has them, else the bill itself. */
+    fun unitsOf(inv: TuitionInvoiceUi): List<String> = if (itemised) inv.unitIds else listOf(inv.id)
+
+    /** What a ticked unit id is worth, whichever kind of unit it is. */
+    fun unitAmount(id: String): Long =
+        invoices.firstOrNull { it.id == id }?.balanceMinor
+            ?: invoices.firstNotNullOfOrNull { inv -> inv.items.firstOrNull { it.id == id } }?.balanceMinor
+            ?: 0L
+}
 
 /** State of an in-progress donation. Amounts are integer MINOR units (validated server-side).
  *  The resting state is [GivingStep.Amount] — the kiosk idles on the giving screen (no attract).
@@ -302,7 +388,16 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         // Arm/cancel the idle-abandon timer at every step transition (so a donor who fills in details
         // then walks away doesn't leave their name/email on screen — see rescheduleIdleReset).
         viewModelScope.launch {
-            local.map { it.giving.step }.distinctUntilChanged().collect { rescheduleIdleReset() }
+            local.map { it.giving.step }.distinctUntilChanged().collect {
+                rescheduleIdleReset()
+                // …and re-evaluate the return-to-main timer, which self-cancels off the amount screen.
+                // Without this it was only ever re-evaluated BY onUserActivity while already on that
+                // screen, so stepping into a donation left `autoReturnStartedMs` set at its old value.
+                // The countdown ring prefers that marker over the idle one, so every later step drew a
+                // ring frozen at whatever was left of a timer that had already stopped mattering — the
+                // one piece of feedback telling a parent the kiosk is about to reset, showing a lie.
+                rescheduleAutoReturn()
+            }
         }
     }
 
@@ -379,6 +474,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     private var autoReturnJob: Job? = null
     private var idleResetJob: Job? = null
+    /** The touch-proof ceiling on the tuition balance screen — see [armTuitionHardReset]. */
+    private var tuitionHardResetJob: Job? = null
 
     /** The active campaign (the selected tab, or the main campaign). */
     private fun activeCampaign(): Campaign? {
@@ -417,13 +514,15 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         idleResetJob?.cancel()
         val g = local.value.giving
         val step = g.step
-        val armStep = step == GivingStep.LargeAmount || step == GivingStep.Details || step == GivingStep.Card || step == GivingStep.Error || step == GivingStep.TuitionInvoices
+        val armStep = step == GivingStep.LargeAmount || step == GivingStep.Details || step == GivingStep.Card || step == GivingStep.Error ||
+            step == GivingStep.TuitionConfirm || step == GivingStep.TuitionInvoices
         // A tuition campaign rests on GivingStep.Amount, but the lookup shell there holds a typed
-        // student name (plaintext) + family PIN. That is PII a walked-away parent must not leave for
-        // the next person — and on the MAIN/single tab the return-to-main timer never fires — so once
-        // anything is typed we arm the idle timer here and clear the fields on timeout.
+        // Student ID — which identifies a child and is enough to see their balance. That is not
+        // something a walked-away parent should leave for the next person, and on the MAIN/single tab
+        // the return-to-main timer never fires, so once anything is typed we arm the idle timer here
+        // and clear the field on timeout.
         val tuitionDirty = step == GivingStep.Amount && activeCampaign()?.type == "tuition" &&
-            (g.tuition?.name?.isNotBlank() == true || g.tuition?.pin?.isNotBlank() == true)
+            g.tuition?.studentCode?.isNotBlank() == true
         if (!armStep && !tuitionDirty) {
             if (local.value.idleReturnStartedMs != null) local.update { it.copy(idleReturnStartedMs = null) }
             return
@@ -437,11 +536,13 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             delay(timeout)
             val cur = local.value.giving
             val s = cur.step
-            if (s == GivingStep.LargeAmount || s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error || s == GivingStep.TuitionInvoices) {
+            if (s == GivingStep.LargeAmount || s == GivingStep.Details || s == GivingStep.Card || s == GivingStep.Error ||
+                s == GivingStep.TuitionConfirm || s == GivingStep.TuitionInvoices
+            ) {
                 cancelGiving()
             } else if (s == GivingStep.Amount && activeCampaign()?.type == "tuition" &&
-                (cur.tuition?.name?.isNotBlank() == true || cur.tuition?.pin?.isNotBlank() == true)) {
-                // Wipe the abandoned name/PIN (and any looked-up family) back to a fresh lookup shell,
+                cur.tuition?.studentCode?.isNotBlank() == true) {
+                // Wipe the abandoned Student ID (and any looked-up family) back to a fresh lookup shell,
                 // keeping the tile itself on screen — no restart, no lingering balance for a passer-by.
                 updateTuition { TuitionState(schoolName = it.schoolName, tagline = it.tagline, available = it.available) }
                 if (local.value.idleReturnStartedMs != null) local.update { it.copy(idleReturnStartedMs = null) }
@@ -449,9 +550,20 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Return the giving flow to the resting amount screen (after cancel / thank-you / error). */
+    /** Return the giving flow to the resting amount screen (after cancel / thank-you / error).
+     *
+     *  A tuition tile keeps its SHELL — the school's name, tagline and availability — because that is
+     *  the tile's heading, fetched once when the campaign mounts and never re-fetched (the mount is
+     *  keyed on the campaign id, which doesn't change). Wiping it left the Fees tab headed with the
+     *  bare campaign title after every timeout. Everything about the FAMILY goes. */
     private fun resetGiving() {
-        updateGiving { GivingState() }
+        tuitionHardResetJob?.cancel()
+        val shell = local.value.giving.tuition
+        updateGiving {
+            GivingState(
+                tuition = shell?.let { TuitionState(schoolName = it.schoolName, tagline = it.tagline, available = it.available) },
+            )
+        }
         rescheduleAutoReturn()
     }
 
@@ -778,33 +890,91 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                     schoolName = info?.schoolName ?: it.schoolName,
                     tagline = info?.tagline ?: it.tagline,
                     available = info?.enabled ?: it.available,
+                    // The advance/floor policy also arrives with the lookup; keeping it here too means
+                    // the pay screen is right even on the first paint after a config change.
+                    allowAdvance = info?.allowAdvance ?: it.allowAdvance,
+                    minAmountMinor = info?.minAmountMinor ?: it.minAmountMinor,
                 )
             }
         }
     }
 
     // Typing re-arms the idle-abandon timer (and the return-to-main timer on a non-main tab) so an
-    // abandoned name/PIN is always cleared — see rescheduleIdleReset's tuition branch.
-    fun setTuitionName(v: String) { updateTuition { it.copy(name = v.take(120), notFound = false, error = null) }; onUserActivity() }
-    fun setTuitionPin(v: String) { updateTuition { it.copy(pin = v.take(20), notFound = false, error = null) }; onUserActivity() }
+    // abandoned Student ID is always cleared — see rescheduleIdleReset's tuition branch. The ID is
+    // normalised the way the school does it (uppercase, no spaces/hyphens) so "yus-1234" just works.
+    fun setTuitionStudentCode(v: String) {
+        updateTuition { it.copy(studentCode = v.uppercase().filter { ch -> ch != ' ' && ch != '-' }.take(32), notFound = false, error = null) }
+        onUserActivity()
+    }
 
-    /** Look up the family by name + PIN, then move to the invoices step. A wrong PIN / name mismatch is
-     *  a uniform "not found"; a broker outage is "temporarily unavailable" (never "wrong PIN"). */
-    fun tuitionLookup() {
+    /** Step 1 (contract v2 §11.0): resolve the typed Student ID to a child's name and ask the parent to
+     *  confirm it. No balance is fetched yet — that confirmation is what replaced the PIN, so a
+     *  mistyped ID is caught here rather than paying a stranger's bill. A mistyped/unknown/locked ID is
+     *  a uniform "not found"; a broker outage is "temporarily unavailable" (never "wrong ID"). */
+    fun tuitionIdentify() {
         onUserActivity()
         val c = activeCampaign() ?: return
         val t = local.value.giving.tuition ?: return
-        if (t.name.isBlank() || t.pin.isBlank()) {
-            updateTuition { it.copy(error = "Enter the student’s name and PIN.") }
+        if (t.studentCode.isBlank()) {
+            updateTuition { it.copy(error = "Enter the Student ID.") }
             return
         }
         updateTuition { it.copy(looking = true, notFound = false, error = null) }
         givingJob?.cancel()
         givingJob = viewModelScope.launch {
-            val res = runCatching { repo.tuitionLookup(c.id, t.name.trim(), t.pin.trim()) }.getOrNull()
+            val res = runCatching { repo.tuitionIdentify(c.id, t.studentCode.trim()) }.getOrNull()
             when {
                 res == null -> updateTuition { it.copy(looking = false, error = "Tuition is temporarily unavailable — please try again.") }
                 !res.found -> updateTuition { it.copy(looking = false, notFound = true) }
+                else -> {
+                    updateGiving {
+                        it.copy(
+                            step = GivingStep.TuitionConfirm,
+                            error = null,
+                            tuition = (it.tuition ?: TuitionState()).copy(looking = false, notFound = false, error = null, identifiedName = res.name),
+                        )
+                    }
+                    rescheduleIdleReset()
+                }
+            }
+        }
+    }
+
+    /** "No, that's not my child" — back to the ID entry with the mistyped code cleared. */
+    fun tuitionRejectStudent() {
+        onUserActivity()
+        givingJob?.cancel()
+        updateGiving {
+            it.copy(
+                step = GivingStep.Amount,
+                error = null,
+                tuition = (it.tuition ?: TuitionState()).copy(studentCode = "", identifiedName = "", looking = false, notFound = false, error = null),
+            )
+        }
+        rescheduleIdleReset()
+    }
+
+    /** Step 2: the parent confirmed the name → fetch the balance for that SAME Student ID and move to
+     *  the invoices step. */
+    fun tuitionConfirmStudent() {
+        onUserActivity()
+        val c = activeCampaign() ?: return
+        val t = local.value.giving.tuition ?: return
+        if (t.studentCode.isBlank()) return
+        updateTuition { it.copy(looking = true, notFound = false, error = null) }
+        givingJob?.cancel()
+        givingJob = viewModelScope.launch {
+            val res = runCatching { repo.tuitionLookup(c.id, t.studentCode.trim()) }.getOrNull()
+            when {
+                res == null -> updateTuition { it.copy(looking = false, error = "Tuition is temporarily unavailable — please try again.") }
+                // Vanishingly rare (identify just matched it) — send them back to the ID screen rather
+                // than stranding them on a confirmation for a child we can no longer price.
+                !res.found -> updateGiving {
+                    it.copy(
+                        step = GivingStep.Amount,
+                        tuition = (it.tuition ?: TuitionState()).copy(looking = false, notFound = true, identifiedName = ""),
+                    )
+                }
                 else -> {
                     val fam = res.family!!
                     updateGiving {
@@ -818,16 +988,54 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                                 session = fam.session,
                                 familyLabel = fam.label,
                                 balanceMinor = fam.balanceMinor,
+                                creditMinor = fam.creditMinor,
+                                allowAdvance = fam.allowAdvance,
+                                minAmountMinor = fam.minAmountMinor,
                                 currency = fam.currency,
-                                invoices = fam.invoices.map { i -> TuitionInvoiceUi(i.id, i.label, i.dueDate, i.balanceMinor) },
+                                students = fam.students.map { s ->
+                                    TuitionStudentUi(
+                                        key = s.key,
+                                        name = s.name,
+                                        balanceMinor = s.balanceMinor,
+                                        creditMinor = s.creditMinor,
+                                        invoices = s.invoices.map { i ->
+                                            TuitionInvoiceUi(
+                                                i.id,
+                                                i.label,
+                                                i.dueDate,
+                                                i.balanceMinor,
+                                                i.studentName,
+                                                i.items.map { line -> TuitionItemUi(line.id, line.label, line.kind, line.amountMinor, line.balanceMinor) },
+                                            )
+                                        },
+                                    )
+                                },
                                 payFull = true,
                                 selected = emptySet(),
                             ),
                         )
                     }
                     rescheduleIdleReset()
+                    armTuitionHardReset()
                 }
             }
+        }
+    }
+
+    /** A HARD ceiling on how long a named family's balance may sit on the wall.
+     *
+     *  The 45-second idle timer is extended by every touch, which is right for a donation in progress
+     *  — nobody should be yanked away mid-flow. It is wrong for a balance screen: a parent who is
+     *  stuck, or reading, or just resting a hand on the tablet keeps their children's names, bills and
+     *  arrears on a foyer screen indefinitely, and that is the one thing this screen must not do.
+     *  So this deadline is NOT reset by activity. It never interrupts a payment: by the time the card
+     *  is being collected the step has moved past the balance screen and the check below no-ops. */
+    private fun armTuitionHardReset() {
+        tuitionHardResetJob?.cancel()
+        tuitionHardResetJob = viewModelScope.launch {
+            delay(TUITION_MAX_ON_SCREEN_MS)
+            val s = local.value.giving.step
+            if (s == GivingStep.TuitionConfirm || s == GivingStep.TuitionInvoices) cancelGiving()
         }
     }
 
@@ -836,15 +1044,36 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         updateTuition { it.copy(payFull = full, error = null) }
     }
 
-    fun toggleTuitionInvoice(id: String) {
+    /** Tick or untick one unit of the bill — a LINE where the school itemises its bills, else the whole
+     *  bill (contract 0.43.0 §11.0b). */
+    fun toggleTuitionUnit(id: String) {
         onUserActivity()
         updateTuition { st -> st.copy(payFull = false, error = null, selected = if (st.selected.contains(id)) st.selected - id else st.selected + id) }
     }
 
-    /** Pay the tuition balance (full or picked invoices) on the reader. Mirrors the donation reader
-     *  flow but the amount is recomputed server-side from the held session, and it records a "payment"
-     *  into the Students ledger — never a kiosk donation. */
-    fun payTuition() {
+    /** Tick or untick a whole bill at once — every payable line of it, so a parent who wants the lot
+     *  doesn't have to tap each line. */
+    fun toggleTuitionInvoice(id: String) {
+        onUserActivity()
+        updateTuition { st ->
+            val inv = st.invoices.firstOrNull { it.id == id } ?: return@updateTuition st
+            val units = st.unitsOf(inv)
+            val allOn = units.isNotEmpty() && units.all { st.selected.contains(it) }
+            st.copy(payFull = false, error = null, selected = if (allOn) st.selected - units.toSet() else st.selected + units.toSet())
+        }
+    }
+
+    /** Pay tuition on the reader: the whole balance, the ticked bills/lines, or — when [amountMinor] is
+     *  given — a typed amount, which may be a part payment or money paid AHEAD of any bill (0.41.0),
+     *  for one named child. Mirrors the donation reader flow, but the amount is recomputed server-side
+     *  from the held session, and it records a "payment" into the Students ledger — never a donation. */
+    fun payTuition() = payTuitionInternal(null, "")
+
+    /** Pay a TYPED amount — a part payment, or money paid ahead when nothing is due. [studentKey] names
+     *  the child whose ledger it belongs to (blank = the household, walked oldest-due-first). */
+    fun payTuitionAmount(amountMinor: Long, studentKey: String = "") = payTuitionInternal(amountMinor, studentKey)
+
+    private fun payTuitionInternal(amountMinor: Long?, studentKey: String) {
         val t = local.value.giving.tuition ?: return
         val readerConnected = ui.value.reader.conn == ReaderConn.Connected
         if (!readerConnected) {
@@ -852,22 +1081,43 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val payFull = t.payFull
-        val ids = t.selected.toList()
-        if (!payFull && ids.isEmpty()) {
+        // Only ids that are still real: a selection made before a refresh must never survive into a
+        // charge as a made-up id (the server would refuse it anyway, after the parent had committed).
+        val ids = t.selected.filter { t.unitAmount(it) > 0 }
+        if (amountMinor == null && !payFull && ids.isEmpty()) {
             updateTuition { it.copy(error = "Choose at least one item to pay, or pay the full balance.") }
             return
+        }
+        // Belt to the server's braces: it re-checks the floor against its own copy of the school's
+        // settings. The pad shows the actual minimum, so this line only has to stop the charge.
+        if (amountMinor != null && amountMinor < t.minAmountMinor) {
+            updateTuition { it.copy(error = "That's below the smallest payment this school accepts.") }
+            return
+        }
+        val pay = when {
+            amountMinor != null -> TuitionPay.Amount(amountMinor, studentKey)
+            payFull -> TuitionPay.Full
+            // Lines where the school itemises its bills, whole bills where it doesn't. Never both in
+            // one charge — the provider takes one breakdown or the other.
+            t.itemised -> TuitionPay.Items(ids)
+            else -> TuitionPay.Invoices(ids)
         }
         // Show the amount immediately on the Card/Processing/Thanks screens (no "$0" flash before the
         // PI round-trip). This is a DISPLAY estimate from the looked-up balances; the server recomputes
         // the authoritative charge from the held session and serverChargeMinor overrides it below.
-        val displayMinor = if (payFull) t.balanceMinor else t.invoices.filter { ids.contains(it.id) }.sumOf { it.balanceMinor }
+        val displayMinor = when {
+            amountMinor != null -> amountMinor
+            // The open bills, not the netted household balance — see TuitionState.dueMinor.
+            payFull -> t.dueMinor
+            else -> ids.sumOf { t.unitAmount(it) }
+        }
         updateGiving { it.copy(step = GivingStep.Card, busy = true, error = null, amountMinor = displayMinor) }
         givingJob?.cancel()
         givingJob = viewModelScope.launch {
             val idem = UUID.randomUUID().toString()
-            repo.log("info", "tuition_started", "payFull=$payFull items=${ids.size}")
+            repo.log("info", "tuition_started", if (amountMinor != null) "typedAmount" else "payFull=$payFull items=${ids.size}")
             val pi = try {
-                repo.createTuitionPaymentIntent(t.session, payFull, ids, idem)
+                repo.createTuitionPaymentIntent(t.session, pay, idem)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
@@ -1071,9 +1321,18 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     /** Exponential backoff after repeated wrong PINs; no lockout for the first few attempts. */
+    /** Exponential backoff after a wrong PIN, capped.
+     *
+     *  `steps` is clamped BEFORE the shift, which matters: `attempts` grows without bound, and
+     *  `Long shl` compiles to the JVM's `lshl` — that masks the distance to its low 6 bits and
+     *  wraps on overflow rather than saturating. Unclamped, `5L shl 61` overflows NEGATIVE (so
+     *  `coerceAtMost` picks the negative and the lockout lands in the past) and `5L shl 64` wraps
+     *  back to 5 seconds, restarting the whole ramp. Clamping at 6 changes nothing an admin or a
+     *  donor can observe — `5 shl 6` is 320, already past the 300s cap — it just stops the ramp
+     *  from resetting itself every 64 attempts. */
     private fun backoffUntil(attempts: Int): Long {
         if (attempts < FREE_ATTEMPTS) return 0L
-        val steps = attempts - FREE_ATTEMPTS
+        val steps = (attempts - FREE_ATTEMPTS).coerceAtMost(BACKOFF_MAX_STEPS)
         val seconds = (BACKOFF_BASE_SECONDS shl steps).coerceAtMost(MAX_BACKOFF_SECONDS)
         return System.currentTimeMillis() + seconds * 1000L
     }
@@ -1091,6 +1350,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         const val IDLE_ABANDON_MS = 45_000L
         // While the keyed-card WebView is open the donor's taps don't reach us, so give a long window.
         const val MANUAL_IDLE_MS = 120_000L
+        // The longest a named family's balance may stay on the wall, touches or not. Generous enough
+        // to read three bills and use the amount pad; short enough that a screen full of a family's
+        // arrears can't be left up by someone who wandered off with a finger on the glass.
+        const val TUITION_MAX_ON_SCREEN_MS = 180_000L
         // Deliberately hard to trigger by accident: 10 rapid taps in the hidden corner within the
         // window below. Bumped from 7 → 10 to further lock the kiosk down.
         const val SECRET_TAPS = 10
@@ -1098,5 +1361,8 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         const val FREE_ATTEMPTS = 3
         const val BACKOFF_BASE_SECONDS = 5L
         const val MAX_BACKOFF_SECONDS = 300L
+        // 5 << 6 == 320s, already past the cap — so this is where the ramp stops mattering. Kept as
+        // a named bound because its job is to keep the shift distance small (see backoffUntil).
+        const val BACKOFF_MAX_STEPS = 6
     }
 }

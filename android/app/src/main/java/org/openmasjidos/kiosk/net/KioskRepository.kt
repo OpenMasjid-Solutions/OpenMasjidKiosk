@@ -293,17 +293,30 @@ class KioskRepository(context: Context) {
         KioskApi(pinnedClientFor(p.certSha256)).tuitionInfo(p.serverUrl, p.deviceToken)
     }
 
-    /** Resolve a student name + PIN to a family + balance (server-side; the PIN is in the body only). */
-    suspend fun tuitionLookup(campaignId: String, name: String, pin: String): TuitionLookupResult = withContext(Dispatchers.IO) {
+    /** Resolve a typed Student ID to the child's name so the parent can confirm it (contract v2 — the
+     *  confirmation step that replaced the PIN). No balance is fetched or shown by this call. */
+    suspend fun tuitionIdentify(campaignId: String, studentCode: String): TuitionIdentifyResult = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: throw IOException("Not paired")
-        KioskApi(pinnedClientFor(p.certSha256)).tuitionLookup(p.serverUrl, p.deviceToken, campaignId, name, pin)
+        KioskApi(pinnedClientFor(p.certSha256)).tuitionIdentify(p.serverUrl, p.deviceToken, campaignId, studentCode)
     }
 
-    /** Mint the card-present tuition PaymentIntent for the full balance or the ticked invoices (the
-     *  server recomputes the amount from its held session — the tablet only sends the selection). */
-    suspend fun createTuitionPaymentIntent(session: String, payFull: Boolean, invoiceIds: List<String>, idempotencyKey: String): CreatedPaymentIntent = withContext(Dispatchers.IO) {
+    /** Resolve a confirmed Student ID to a family + balance (server-side; the ID is in the body only). */
+    suspend fun tuitionLookup(campaignId: String, studentCode: String): TuitionLookupResult = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: throw IOException("Not paired")
-        KioskApi(pinnedClientFor(p.certSha256)).createTuitionPaymentIntent(p.serverUrl, p.deviceToken, session, payFull, invoiceIds, idempotencyKey)
+        KioskApi(pinnedClientFor(p.certSha256)).tuitionLookup(p.serverUrl, p.deviceToken, campaignId, studentCode)
+    }
+
+    /** Mint the card-present tuition PaymentIntent for what the parent chose — the full balance, ticked
+     *  bills or lines, or a typed amount for one child (the server recomputes the amount from its held
+     *  session; the tablet only sends the selection). */
+    suspend fun createTuitionPaymentIntent(
+        session: String,
+        pay: TuitionPay,
+        idempotencyKey: String,
+    ): CreatedPaymentIntent = withContext(Dispatchers.IO) {
+        val p = store.pairing.first() ?: throw IOException("Not paired")
+        KioskApi(pinnedClientFor(p.certSha256))
+            .createTuitionPaymentIntent(p.serverUrl, p.deviceToken, session, pay, idempotencyKey)
     }
 
     /** After the reader confirms, verify the tuition charge + record it into the Students ledger. */

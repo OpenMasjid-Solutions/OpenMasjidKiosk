@@ -257,7 +257,7 @@ fun MaintenanceScreen(
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp),
+                    .height(64.dp),
             ) {
                 Text(stringResource(R.string.maintenance_return), style = MaterialTheme.typography.titleLarge)
             }
@@ -271,7 +271,7 @@ fun MaintenanceScreen(
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(54.dp),
+                        .height(64.dp),
                 ) {
                     Text(stringResource(R.string.maintenance_exit), color = DangerDark)
                 }
@@ -476,7 +476,7 @@ private fun ReaderControls(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary,
                     ),
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    modifier = Modifier.fillMaxWidth().height(60.dp),
                 ) { Text(stringResource(R.string.reader_stop_scan)) }
                 Spacer(Modifier.height(8.dp))
                 Text(stringResource(R.string.reader_scanning), style = MaterialTheme.typography.bodyMedium, color = InkMutedDark)
@@ -489,7 +489,7 @@ private fun ReaderControls(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary,
                     ),
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    modifier = Modifier.fillMaxWidth().height(60.dp),
                 ) { Text(stringResource(R.string.reader_scan)) }
             }
 

@@ -366,3 +366,78 @@ test('upgrading a legacy campaign with force_cover_fees=1 (pre-`type`) maps it t
   s!.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// ── Admin audit trail (KIOSK-004) ────────────────────────────────────────────
+// The actions recorded here end or alter a real donor's standing order. The properties that
+// matter are: it records, it stays append-only, it never throws, and it never holds a secret.
+
+test('audit records an action and reads it back newest-first', () => {
+  const s = freshStore();
+  assert.deepEqual(s.listAudit(), []); // nothing until something happens
+  s.recordAudit({ action: 'plan.cancel', target: 'sub_A', detail: 'ends at the end of the paid period', actor: 'aisha (OpenMasjidOS)', source: '10.0.0.5' });
+  s.recordAudit({ action: 'plan.pause', target: 'sub_B', detail: 'paused', actor: 'aisha (OpenMasjidOS)', source: '10.0.0.5' });
+  const rows = s.listAudit();
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].action, 'plan.pause'); // newest first
+  assert.equal(rows[1].action, 'plan.cancel');
+  assert.equal(rows[1].target, 'sub_A');
+  assert.equal(rows[1].actor, 'aisha (OpenMasjidOS)');
+  assert.equal(rows[1].source, '10.0.0.5');
+  assert.match(rows[1].ts, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test('audit never throws, whatever it is handed', () => {
+  const s = freshStore();
+  // A failure to write the note must never take down the cancellation it describes.
+  assert.doesNotThrow(() => s.recordAudit({ action: '' }));
+  assert.doesNotThrow(() => s.recordAudit({ action: 'x', detail: 'y'.repeat(10_000), target: 'z'.repeat(10_000) }));
+  assert.doesNotThrow(() => s.recordAudit({ action: 'plan.cancel', actor: undefined, source: undefined }));
+  const rows = s.listAudit();
+  assert.equal(rows.length, 3);
+  assert.ok(rows.every((r) => r.detail.length <= 500 && r.target.length <= 200));
+});
+
+test('audit survives a store reopened on the same file (it is durable, not in-memory)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiosk-audit-'));
+  const file = path.join(dir, 'k.db');
+  try {
+    const a = new Store(file);
+    a.recordAudit({ action: 'pin.set', detail: 'kiosk exit PIN changed' });
+    a.close();
+    const b = new Store(file);
+    const rows = b.listAudit();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].action, 'pin.set');
+    b.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the audit table adds itself to an EXISTING database (upgrade path)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiosk-audit-mig-'));
+  const file = path.join(dir, 'k.db');
+  try {
+    // A database that predates this release: the kv table exists, admin_audit does not.
+    const old = new Database(file);
+    old.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    old.prepare('INSERT INTO kv (key, value) VALUES (?, ?)').run('currency', 'GBP');
+    old.close();
+    const s = new Store(file);
+    assert.equal(s.getCurrency(), 'GBP'); // existing data untouched
+    s.recordAudit({ action: 'device.revoke', target: 'dev_1' });
+    assert.equal(s.listAudit()[0].action, 'device.revoke');
+    s.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('listAudit clamps its limit (no unbounded read)', () => {
+  const s = freshStore();
+  for (let i = 0; i < 20; i++) s.recordAudit({ action: `a${i}` });
+  assert.equal(s.listAudit(5).length, 5);
+  assert.equal(s.listAudit(0).length, 1); // floored at 1, never 0 or negative
+  assert.equal(s.listAudit(-3).length, 1);
+  assert.equal(s.listAudit(99_999).length, 20); // ceiling applied, still returns what exists
+});

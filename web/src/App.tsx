@@ -19,6 +19,7 @@ import {
   MonitorSmartphone,
   Palette,
   Plus,
+  Repeat,
   Settings,
   ShieldCheck,
   Smartphone,
@@ -32,6 +33,7 @@ import { PaymentsSection } from './payments';
 import { DevicesSection } from './devices';
 import { CampaignsSection } from './campaigns';
 import { DonationsSection } from './donations';
+import { PlansSection } from './plans';
 import { EmailReceiptSection } from './email';
 import { Brand, Clock, Crescent, ProfileMenu, Scene } from './ui';
 
@@ -125,12 +127,13 @@ function LoadingCard() {
 }
 
 // ── Admin shell: top bar + hash-routed tabs + bottom dock ─────────────────────
-type Tab = 'dashboard' | 'devices' | 'giving' | 'analytics' | 'settings';
+type Tab = 'dashboard' | 'devices' | 'giving' | 'analytics' | 'recurring' | 'settings';
 const TABS: { id: Tab; label: string; Icon: typeof LayoutDashboard }[] = [
   { id: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard },
   { id: 'devices', label: 'Devices', Icon: MonitorSmartphone },
   { id: 'giving', label: 'Campaigns', Icon: Megaphone },
   { id: 'analytics', label: 'Donations', Icon: TrendingUp },
+  { id: 'recurring', label: 'Recurring', Icon: Repeat },
   { id: 'settings', label: 'Settings', Icon: Settings },
 ];
 
@@ -182,6 +185,7 @@ function AdminShell({ app, session }: { app: AppInfo | null; session: Session })
     devices: { title: 'Devices', sub: 'The tablets running your giving screen.' },
     giving: { title: 'Campaigns', sub: 'Design the giving screens your kiosks show — each appeal is its own tab.' },
     analytics: { title: 'Donations', sub: 'What your kiosks have taken.' },
+    recurring: { title: 'Recurring', sub: 'Monthly donations set up at your kiosks — read live from Stripe.' },
     settings: { title: 'Settings', sub: 'Your account, platform connection and this app.' },
   };
 
@@ -203,6 +207,7 @@ function AdminShell({ app, session }: { app: AppInfo | null; session: Session })
         {tab === 'devices' && <DevicesTab />}
         {tab === 'giving' && <CampaignsSection />}
         {tab === 'analytics' && <DonationsSection />}
+        {tab === 'recurring' && <PlansSection />}
         {tab === 'settings' && <SettingsTab app={app} session={session} embedded={embedded} />}
       </main>
       <Dock tab={tab} setTab={setTab} />

@@ -87,7 +87,7 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
     // DEEPEN the whole gradient and use light text, so headings stay readable everywhere (not just the
     // mid-tone). This avoids low-contrast white text over a lightened-toward-white background.
     val lightScene = sceneBase.luminance() > 0.35f
-    val style = sceneStyleFor(bright, accent, lightScene)
+    val style = sceneStyleFor(bright, accent, lightScene, sceneBase)
     val darkBrush = SceneBrush
     val bgBrush = when {
         !bright -> darkBrush
@@ -152,12 +152,15 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                             onEnterManually = vm::enterManually,
                             onCancel = vm::cancelGiving,
                             onTuitionStart = vm::onTuitionStart,
-                            onTuitionName = vm::setTuitionName,
-                            onTuitionPin = vm::setTuitionPin,
-                            onTuitionLookup = vm::tuitionLookup,
+                            onTuitionStudentCode = vm::setTuitionStudentCode,
+                            onTuitionIdentify = vm::tuitionIdentify,
+                            onTuitionConfirmStudent = vm::tuitionConfirmStudent,
+                            onTuitionRejectStudent = vm::tuitionRejectStudent,
                             onTuitionPayFull = vm::setTuitionPayFull,
+                            onTuitionToggleUnit = vm::toggleTuitionUnit,
                             onTuitionToggleInvoice = vm::toggleTuitionInvoice,
                             onTuitionPay = vm::payTuition,
+                            onTuitionPayAmount = vm::payTuitionAmount,
                             loadImage = { url -> vm.image(url)?.asImageBitmap() },
                         )
                     }
@@ -317,12 +320,21 @@ private fun bestTextOn(bg: Color): Color {
     return if (onBlack >= onWhite) InkBlack else Color.White
 }
 
-/** Resolve the giving-screen colour set from the accent + whether the scene reads light. Bright +
- *  [lightScene]: dark text on a light PRIMARY background. Bright + dark primary: light text on a
- *  deepened background (the gradient is built to match in GivingHome). Either way the tiles are white
- *  (slightly glassy) with big black numbers and an accent "Donate" band. Dark theme: the calm dark
- *  scene, light text on solid elevated tiles. */
-private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean): SceneStyle = if (bright) {
+/** Resolve the giving-screen colour set from the accent + the scene it will actually be painted on.
+ *
+ *  CONTRAST IS COMPUTED, NOT ASSUMED. Every ink is picked against the real background — [sceneBase]
+ *  for a bright scene, the fixed dark gradient otherwise — so a masjid can choose any campaign colour,
+ *  light or dark, and the words on top stay readable. Secondary text is a *blend* toward the
+ *  background rather than a translucent grey: it still reads as secondary, but at a fraction of the
+ *  contrast loss (and it composites predictably over a background image's scrim).
+ *
+ *  Bright + light primary: dark ink on a light wash. Bright + dark primary: light ink on a deepened
+ *  wash (the gradient in GivingHome is built to match). Either way the tiles are white (slightly
+ *  glassy) with big black numbers and an accent "Donate" band. Dark theme: the calm dark scene, light
+ *  ink on solid elevated tiles. */
+private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean, sceneBase: Color): SceneStyle = if (bright) {
+    // The ink that wins on the wash the text actually sits on (the gradient's mid stop is sceneBase).
+    val ink = bestTextOn(sceneBase)
     SceneStyle(
         bright = true,
         accent = accent,
@@ -330,10 +342,10 @@ private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean): 
         // white on a dark one. Crossover ≈ 0.4 luminance (well above the 0.179 WCAG break-even) so a
         // mid-bright accent like the default cyan gets readable dark text, not low-contrast white.
         onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
-        onScene = if (lightScene) InkBlack else Color.White,
-        // Secondary text (subtitle/footer): a DARK slate on a light wash so it stays clearly readable,
-        // and near-opaque white on a dark wash — not a washed-out grey.
-        onSceneMuted = if (lightScene) Color(0xFF2F3742) else Color.White.copy(alpha = 0.9f),
+        onScene = if (lightScene) InkBlack else ink,
+        // Secondary text (subtitles, hints, Cancel): only a step down from the heading, never a
+        // washed-out grey — 12% toward the background keeps the hierarchy and the legibility.
+        onSceneMuted = lerp(if (lightScene) InkBlack else ink, sceneBase, 0.12f),
         tile = Color.White.copy(alpha = 0.92f), // slight liquid-glass — the background tints through a touch
         tileInk = InkBlack,                      // big BOLD BLACK numbers, like the reference
         card = Color.White,
@@ -347,7 +359,9 @@ private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean): 
         // and would vanish on a pale accent band), white on a dark accent.
         onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
         onScene = InkDark,
-        onSceneMuted = InkMutedDark,
+        // Brighter than the dashboard's muted ink: that grey is tuned for a monitor an arm's length
+        // away, and it greys out on a foyer tablet. Halfway back toward the primary ink.
+        onSceneMuted = lerp(InkMutedDark, InkDark, 0.5f),
         tile = SurfaceOverlayDark,
         tileInk = InkDark,
         card = SurfaceRaisedDark,
