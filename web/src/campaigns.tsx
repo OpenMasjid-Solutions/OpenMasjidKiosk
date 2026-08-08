@@ -42,6 +42,7 @@ import {
   type GivingSettings,
   type PromptPolicy,
   type StripeAccountRef,
+  type TabSize,
 } from './api';
 import { formatMoney, symbolFor, toMajorStr, toMinor } from './money';
 import { safeImageUrl } from './ui';
@@ -49,6 +50,16 @@ import { safeImageUrl } from './ui';
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
 
 const MAX_PRESETS = 6;
+
+/** Campaign-tab sizes — kept in sync with the kiosk (android GivingHome.kt `tabMetricsFor`).
+ *  `medium` is the original hardcoded size, so it's the safe default. font/padX/padY are the
+ *  dp/sp values the tablet uses; the web preview reuses them 1:1 as px for a faithful mock. */
+const TAB_SIZES: { id: TabSize; label: string; font: number; padX: number; padY: number }[] = [
+  { id: 'small', label: 'Small', font: 15, padX: 20, padY: 12 },
+  { id: 'medium', label: 'Medium', font: 16, padX: 26, padY: 16 },
+  { id: 'large', label: 'Large', font: 22, padX: 34, padY: 22 },
+  { id: 'xlarge', label: 'Extra large', font: 28, padX: 46, padY: 30 },
+];
 /** Campaign title/description limits — kept tight so the tab name and the kiosk header never overflow
  *  or get cut off on the giving screen. */
 const TITLE_MAX = 48;
@@ -235,6 +246,7 @@ function GlobalSettingsCard() {
   const [emailPolicy, setEmailPolicy] = useState<PromptPolicy>('optional');
   const [maxBrightness, setMaxBrightness] = useState(true);
   const [footerText, setFooterText] = useState('OpenMasjid Solutions');
+  const [tabSize, setTabSize] = useState<TabSize>('medium');
   const [currency, setCurrency] = useState('USD');
   const [largeThreshold, setLargeThreshold] = useState(''); // major units; '' = off
   const [largeNote, setLargeNote] = useState('');
@@ -252,6 +264,7 @@ function GlobalSettingsCard() {
     setEmailPolicy(s.giving.emailPolicy);
     setMaxBrightness(s.giving.maxBrightness !== false);
     setFooterText(s.giving.footerText ?? 'OpenMasjid Solutions');
+    setTabSize(s.giving.tabSize ?? 'medium');
     setCurrency(s.currency);
     setLargeThreshold(s.giving.largeAmountThresholdMinor > 0 ? toMajorStr(s.giving.largeAmountThresholdMinor, s.currency) : '');
     setLargeNote(s.giving.largeAmountNote ?? '');
@@ -282,6 +295,7 @@ function GlobalSettingsCard() {
         emailPolicy,
         maxBrightness,
         footerText,
+        tabSize,
         largeAmountThresholdMinor: toMinor(largeThreshold, currency), // 0 when blank = off
         largeAmountNote: largeNote,
         largeAmountImage: largeImage.trim(),
@@ -325,6 +339,8 @@ function GlobalSettingsCard() {
             <input id="g-footer" className="input" value={footerText} maxLength={80} placeholder="OpenMasjid Solutions" onChange={(e) => setFooterText(e.target.value)} />
             <p className="hint">Small line at the bottom of the kiosk giving screen. Leave blank to hide it.</p>
           </div>
+
+          <TabSizeField value={tabSize} onChange={setTabSize} />
 
           <p className="hint" style={{ marginTop: '0.25rem' }}>
             Donors can always tap “Enter card details” to pay by typing their card — with or without a
@@ -426,6 +442,76 @@ function GlobalSettingsCard() {
         </>
       )}
     </section>
+  );
+}
+
+// ── Campaign-tab size picker (kiosk-wide) ──────────────────────────────────────────
+/** A segmented picker for the campaign-tab size, with a faithful mini preview of the tab strip
+ *  (mirrors android GivingHome.kt CampaignTabs: rounded-top browser tabs, colour-coded, one filled
+ *  "selected"). Tabs only appear on the kiosk when there are 2+ campaigns. */
+function TabSizeField({ value, onChange }: { value: TabSize; onChange: (v: TabSize) => void }) {
+  const m = TAB_SIZES.find((t) => t.id === value) ?? TAB_SIZES[1];
+  const sample = [
+    { title: 'General', color: '#0891b2' },
+    { title: 'Zakat', color: '#16a34a' },
+    { title: 'Building', color: '#d97706' },
+  ];
+  return (
+    <div className="field">
+      <span className="label">Campaign tab size</span>
+      <p className="hint" style={{ marginBlockStart: 0 }}>
+        The size of the tabs across the top of the kiosk. These only appear when you have more than
+        one campaign. “Medium” is the standard size.
+      </p>
+      <div className="ce-tabs" role="group" aria-label="Campaign tab size" style={{ borderBlockEnd: 'none', marginBlock: '0.4rem' }}>
+        {TAB_SIZES.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`ce-tab${t.id === value ? ' ce-tab--on' : ''}`}
+            aria-pressed={t.id === value}
+            onClick={() => onChange(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div
+        aria-hidden="true"
+        style={{
+          display: 'flex',
+          gap: '0.6rem',
+          overflowX: 'auto',
+          padding: '0.7rem 0.6rem 0.5rem',
+          borderRadius: 'var(--radius-card)',
+          background: 'linear-gradient(180deg, #b9e6f2, #7fd4e8)',
+        }}
+      >
+        {sample.map((s, i) => {
+          const selected = i === 1;
+          return (
+            <span
+              key={s.title}
+              style={{
+                flex: 'none',
+                fontWeight: 700,
+                fontSize: `${m.font}px`,
+                lineHeight: 1,
+                padding: `${m.padY}px ${m.padX}px`,
+                borderRadius: '18px 18px 6px 6px',
+                border: `2px solid ${s.color}`,
+                background: selected ? s.color : `${s.color}33`,
+                color: selected ? '#fff' : '#0a2b38',
+                boxShadow: selected ? '0 6px 14px rgba(0,0,0,0.22)' : 'none',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {s.title}
+            </span>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

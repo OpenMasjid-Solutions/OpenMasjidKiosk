@@ -382,6 +382,9 @@ export const setKioskPin = (pin: string) =>
 // Stripe). Saving pushes live: kiosks pick up the change on their next heartbeat.
 export type PromptPolicy = 'off' | 'optional' | 'required';
 
+/** Campaign-tab size on the kiosk. 'medium' matches the original hardcoded size. */
+export type TabSize = 'small' | 'medium' | 'large' | 'xlarge';
+
 export interface GivingConfig {
   presetsMinor: number[];
   allowCustom: boolean;
@@ -397,6 +400,9 @@ export interface GivingConfig {
   maxBrightness: boolean;
   /** Small tagline shown at the bottom of the kiosk giving screen ('' hides it). */
   footerText: string;
+  /** Size of the campaign tabs across the top of the kiosk (shown only with 2+ campaigns).
+   *  'medium' is the original size. */
+  tabSize: TabSize;
   /** When a donation is at/above this many MINOR units, the kiosk gently suggests a cheaper
    *  alternative (bank transfer / Zelle QR) before the card. 0 disables the prompt. */
   largeAmountThresholdMinor: number;

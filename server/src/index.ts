@@ -682,6 +682,7 @@ async function main(): Promise<void> {
       thankYouMessage: z.string().max(500).optional(),
       maxBrightness: z.boolean().optional(),
       footerText: z.string().max(80).optional(),
+      tabSize: z.enum(['small', 'medium', 'large', 'xlarge']).optional(),
       largeAmountThresholdMinor: z.number().int().min(0).optional(),
       largeAmountNote: z.string().max(600).optional(),
       largeAmountImage: z.string().max(500).optional(),
