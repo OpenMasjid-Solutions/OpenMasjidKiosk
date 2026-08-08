@@ -30,7 +30,9 @@ import org.openmasjidos.kiosk.MainActivity
  *     to HOME-only (Home returns to us; recents / global power menu / system info / notifications are
  *     all blocked), and we register as the persistent HOME so Home always lands back on the kiosk.
  *     In this mode the ONLY way out is this app calling [exitKiosk] — which happens solely behind the
- *     verified exit PIN. There is no OS gesture to escape it.
+ *     verified exit PIN. There is no OS gesture to escape it. Because that is absolute, tier 1 is
+ *     applied ONLY while the kiosk is actually running (`locked`): an unpaired or re-pairing tablet
+ *     is released, or it would be sealed on a screen that has no exit gesture (see [enterKiosk]).
  *  2. NOT DEVICE OWNER — the SOFT kiosk (no ADB, no computer). We use Android SCREEN PINNING:
  *     a plain app may call [Activity.startLockTask] to pin ITSELF, which blocks the notification
  *     shade / quick-settings AND Home/Recents. When the tablet has a screen lock with "ask before
@@ -83,12 +85,35 @@ object KioskController {
      * Enter kiosk lockdown. Idempotent: safe to call from onResume. As device owner this is true Lock
      * Task Mode with the status bar disabled and HOME-only features; otherwise it degrades to screen
      * pinning (escapable — see the class note).
+     *
+     * [locked] = a PAIRED kiosk that is not in a re-pair lockout, i.e. a screen a donor may actually
+     * use. When it is false we RELEASE the lock on BOTH tiers, so the setup / re-pair screens (which
+     * carry no donor flow, no configuration and their own plain Exit button) can never strand a
+     * tablet. Pairing flips it back and re-locks on the next call.
      */
     fun enterKiosk(activity: Activity, locked: Boolean) {
         applyWindow(activity)
 
         val owner = dpmIfOwner(activity)
-        if (owner != null) {
+        if (owner != null && !locked) {
+            // NOT a running kiosk (setup screen, or a cert-mismatch re-pair lockout). Release Lock
+            // Task and give the status bar back, exactly as the soft-kiosk branch below does.
+            //
+            // This is the difference between "recoverable" and "needs ADB": with LOCK_TASK_FEATURE_NONE
+            // there is no Home, no Recents, no shade and no power menu, and the only in-app way out —
+            // the 10-tap maintenance gesture — lives on the PAIRED giving screen. So a device-owner
+            // tablet that is unpaired (never set up, or freshly REVOKED by an admin) would otherwise be
+            // sealed shut on a screen with no exit at all. Nothing is lost by unlocking: there is no
+            // donor flow and no configuration on those screens. We stay the persistent HOME, so the
+            // kiosk still owns the Home button and still comes back after a reboot, and pairing
+            // re-locks everything on the very next call.
+            val (dpm, admin) = owner
+            runCatching { dpm.setStatusBarDisabled(admin, false) }
+            val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (am != null && am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
+                runCatching { activity.stopLockTask() }
+            }
+        } else if (owner != null) {
             val (dpm, admin) = owner
             // Allow-list OUR package + the device's browser(s). The browser is needed so Stripe's card
             // authentication (3DS) can open its Chrome Custom Tab during a KEYED card payment — a

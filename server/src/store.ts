@@ -1328,6 +1328,19 @@ export class Store {
    *  so without a floor a 60s outbox tick landing in that window would re-select the same row and send a
    *  SECOND identical receipt. With the floor the outbox only ever retries a row that has been pending a
    *  good while — i.e. one whose inline send genuinely didn't land. */
+  /** Branded rows the outbox has given up on: still 'pending' and now OLDER than the retry window.
+   *  Selected so the caller can hand the receipt back to Stripe and close them, instead of leaving
+   *  a donor whose Stripe receipt we suppressed with nothing at all. Complement of
+   *  [listPendingReceipts]'s age window, so a row is in exactly one of the two. */
+  listExpiredPendingReceipts(maxAgeMs: number, limit = 50): DonationRecord[] {
+    const floor = new Date(Date.now() - maxAgeMs).toISOString();
+    return (
+      this.db
+        .prepare(`SELECT d.*, dev.name AS device_name FROM donations d LEFT JOIN devices dev ON dev.id = d.device_id WHERE d.status = 'succeeded' AND d.receipt = 'pending' AND d.created_at < ? ORDER BY d.created_at LIMIT ?`)
+        .all(floor, limit) as Record<string, unknown>[]
+    ).map((r) => this.rowToDonation(r));
+  }
+
   listPendingReceipts(maxAgeMs: number, minAgeMs = 0, limit = 50): DonationRecord[] {
     const now = Date.now();
     const floor = new Date(now - maxAgeMs).toISOString(); // oldest we still bother retrying

@@ -68,7 +68,7 @@ fun MaintenanceScreen(
     locationId: String,
     noPinSet: Boolean,
     exitAllowed: Boolean,
-    showPinningHint: Boolean,
+    isDeviceOwner: Boolean,
     updating: Boolean,
     onScanReaders: (ReaderTransport) -> Unit,
     onStopReaderScan: () -> Unit,
@@ -80,7 +80,11 @@ fun MaintenanceScreen(
     onUpdateApp: () -> Unit,
     onSetHomeApp: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenAccessibility: () -> Unit,
+    /** Drop screen pinning / Lock Task so a system dialog or settings screen can actually appear.
+     *  A temporary excursion — the Activity re-locks on its next resume. */
+    onLeaveLockdown: () -> Unit,
+    /** Open an Android settings screen (already unpinned by the caller). */
+    onOpenIntent: (android.content.Intent) -> Unit,
     onReturn: () -> Unit,
     onRePair: () -> Unit,
     onExit: () -> Unit,
@@ -104,39 +108,22 @@ fun MaintenanceScreen(
                 Spacer(Modifier.height(12.dp))
                 Banner(text = stringResource(R.string.maintenance_no_pin), tone = WarningDark)
             }
-            if (showPinningHint) {
-                Spacer(Modifier.height(12.dp))
-                Banner(text = stringResource(R.string.kiosk_pinning_hint), tone = WarningDark)
-                Spacer(Modifier.height(8.dp))
-                // Make Home return to the kiosk (become the default launcher) — the biggest non-owner
-                // improvement, so pressing Home stops showing a launcher chooser.
-                Button(
-                    onClick = onSetHomeApp,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(stringResource(R.string.kiosk_set_home_app)) }
-                Spacer(Modifier.height(8.dp))
-                // Jump straight to tablet Settings so the volunteer can enable Screen pinning + a
-                // screen lock without a computer (the hint above lists the exact toggles).
-                OutlinedButton(
-                    onClick = onOpenSettings,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(stringResource(R.string.kiosk_open_settings_pinning), color = InkDark) }
-                Spacer(Modifier.height(8.dp))
-                // Jump to Accessibility settings to enable the (optional) shade-lock helper.
-                OutlinedButton(
-                    onClick = onOpenAccessibility,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(stringResource(R.string.kiosk_open_accessibility), color = InkDark) }
+            Spacer(Modifier.height(24.dp))
+
+            // --- Permissions & lockdown ------------------------------------------------
+            // Every allowance the kiosk wants, live state, and one button per unset item that
+            // opens exactly the right dialog/settings page. Each button unpins first, because a
+            // pinned app can't show a system dialog. See ui/PermissionChecklist.kt.
+            SectionCard(title = stringResource(R.string.maintenance_permissions_title)) {
+                PermissionChecklist(
+                    isDeviceOwner = isDeviceOwner,
+                    onLeaveLockdown = onLeaveLockdown,
+                    onOpenIntent = onOpenIntent,
+                    onSetHomeApp = onSetHomeApp,
+                )
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(16.dp))
 
             // --- Diagnostics -----------------------------------------------------------
             SectionCard(title = stringResource(R.string.maintenance_diagnostics_title)) {
@@ -175,6 +162,7 @@ fun MaintenanceScreen(
                 ReaderControls(
                     reader = reader,
                     locationId = locationId,
+                    onLeaveLockdown = onLeaveLockdown,
                     onScanReaders = onScanReaders,
                     onStopReaderScan = onStopReaderScan,
                     onConnectReader = onConnectReader,
@@ -282,8 +270,9 @@ fun MaintenanceScreen(
     }
 }
 
+/** Shared by [PermissionChecklist] too, hence internal rather than private. */
 @Composable
-private fun SectionCard(title: String, content: @Composable () -> Unit) {
+internal fun SectionCard(title: String, content: @Composable () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)),
         shape = RoundedCornerShape(18.dp),
@@ -325,8 +314,9 @@ private fun DiagnosticRow(
     }
 }
 
+/** Shared by [PermissionChecklist] too, hence internal rather than private. */
 @Composable
-private fun Banner(text: String, tone: androidx.compose.ui.graphics.Color) {
+internal fun Banner(text: String, tone: androidx.compose.ui.graphics.Color) {
     Card(
         colors = CardDefaults.cardColors(containerColor = tone.copy(alpha = 0.16f)),
         shape = RoundedCornerShape(14.dp),
@@ -346,6 +336,7 @@ private fun Banner(text: String, tone: androidx.compose.ui.graphics.Color) {
 private fun ReaderControls(
     reader: ReaderUiState,
     locationId: String,
+    onLeaveLockdown: () -> Unit,
     onScanReaders: (ReaderTransport) -> Unit,
     onStopReaderScan: () -> Unit,
     onConnectReader: (String) -> Unit,
@@ -373,7 +364,16 @@ private fun ReaderControls(
     fun startScan(t: ReaderTransport) {
         val perms = readerPermissions(t)
         val granted = perms.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
-        if (perms.isEmpty() || granted) onScanReaders(t) else { pending = t; permLauncher.launch(perms) }
+        if (perms.isEmpty() || granted) {
+            onScanReaders(t)
+        } else {
+            // Unpin before the permission dialog: screen pinning / Lock Task suppresses system
+            // dialogs, so without this the Scan button silently does nothing on a locked kiosk.
+            // Temporary excursion — the Activity re-locks when focus returns.
+            onLeaveLockdown()
+            pending = t
+            permLauncher.launch(perms)
+        }
     }
 
     // --- Status line ---

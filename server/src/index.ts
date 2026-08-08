@@ -22,7 +22,7 @@ import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
 import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus } from './fabric';
+import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus, emailCanSend } from './fabric';
 import { renderReceipt, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
@@ -47,6 +47,7 @@ import {
   looksLikeSecret,
   publicStripeStatus,
   retrieveLocation,
+  sendStripeReceipt,
   stripeConfigured,
   stripeMode,
   toMajor,
@@ -1281,9 +1282,36 @@ async function main(): Promise<void> {
       const rendered = renderReceipt(store.getEmailReceipt(), receiptContext(don));
       const res = await fabricEmail({ to: addr, subject: rendered.subject, text: rendered.text, html: rendered.html });
       if (res.sent) return { sent: true, retry: false };
-      return { sent: false, retry: res.reason !== 'bad_recipient' }; // bad recipient is permanent; else retry
+      // Permanent = the recipient is unusable, OR the platform has just told us no mail will ever
+      // leave here (emailCanSend flips false the moment fabricEmail latches 'not_configured' /
+      // 'no-fabric'). Both must be permanent, because a branded row that keeps "retrying" for ever
+      // never reaches the Stripe hand-back and the donor ends up with NOTHING. 'bad_recipient'
+      // alone was not enough: it is the one reason our own address check almost never lets through.
+      const permanent = res.reason === 'bad_recipient' || !emailCanSend();
+      return { sent: false, retry: !permanent };
     } catch {
       return { sent: false, retry: true };
+    }
+  };
+
+  /**
+   * Give a donation's receipt back to Stripe, for a branded one we can no longer deliver.
+   *
+   * The branded path omits `receipt_email` at intent so Stripe stays quiet. Whenever we give up —
+   * permanently at /complete, permanently in the outbox, or by ageing out of it — that silence has
+   * to be undone or the donor is left with no record of their gift at all. Resolves the account the
+   * PaymentIntent was actually created on, so a campaign on its own Stripe account still works.
+   * Never throws.
+   */
+  const handReceiptBackToStripe = async (don: DonationRecord): Promise<void> => {
+    try {
+      const addr = (don.donorEmail || '').trim();
+      if (!don.chargeId || !addr) return;
+      const acct = await resolveAccountById(store.getPiAccount(don.paymentIntentId));
+      if (!acct) return;
+      await sendStripeReceipt(acct.keys.secretKey, don.chargeId, addr);
+    } catch {
+      /* a failed hand-back must never disturb a donation that already succeeded */
     }
   };
 
@@ -1356,13 +1384,12 @@ async function main(): Promise<void> {
     // /complete recording + retry outbox stay consistent with whether we suppressed Stripe's receipt:
     //   • branded → suppress Stripe's built-in receipt + WE send our branded one (receipt:'pending').
     //   • else    → let Stripe send its receipt; we send nothing (receipt:'stripe') → never a double.
-    // We only go branded when the OS email is CONFIRMED working (emailStatus 'ok') AND the donor gave
-    // an email, so a donor is never left with zero receipts because email wasn't set up; a transient
-    // failure after that is covered by the retry outbox. NOT re-evaluated at confirm (that's the bug).
-    // Require a VALID-looking email (not just non-empty): if we suppressed Stripe's receipt but our
-    // own send then rejected a malformed address, the donor would get ZERO receipts. Gating on the
-    // same check sendDonationReceipt uses guarantees a branded PI is actually sendable.
-    const branded = looksLikeEmail(donorEmail) && store.getEmailReceipt().enabled && ssoConfigured() && emailStatus() === 'ok';
+    // We go branded unless the platform has told us mail can never leave (emailCanSend — see the
+    // long note there: the old `emailStatus() === 'ok'` was unsatisfiable, so branded receipts had
+    // never once been sent). Require a VALID-looking email, not just a non-empty one: a branded PI
+    // must actually be sendable. The "never zero receipts" guarantee now lives at /complete, where a
+    // permanently failed branded send hands the job back to Stripe.
+    const branded = looksLikeEmail(donorEmail) && store.getEmailReceipt().enabled && ssoConfigured() && emailCanSend();
     const metadata = {
       app: 'kiosk',
       deviceId: d.id,
@@ -1441,6 +1468,16 @@ async function main(): Promise<void> {
       // that monthly couldn't be arranged so the tablet can say so kindly.
       const campaignLabel = meta.campaign || store.getMasjid().name || 'OpenMasjid Kiosk';
       let monthly = { requested: wantsMonthly, created: false };
+      // Why a requested monthly plan did not get set up. Empty means it did (or none was asked for).
+      // This used to go nowhere at all: the generated-card branch simply didn't run, and the throw
+      // branch reached only the container log — so an admin saw a donation badged "Monthly", no plan
+      // on the Recurring screen, and nothing anywhere saying why.
+      let monthlyProblem = '';
+      if (result.succeeded && wantsMonthly && !result.generatedCard) {
+        // Stripe returns no reusable card for some cards and networks (and for anything that isn't a
+        // card-present charge). The gift stands; the standing order cannot be created from it.
+        monthlyProblem = 'Stripe returned no reusable card for this charge, so no standing order could be created. Some cards and networks cannot be reused.';
+      }
       if (result.succeeded && wantsMonthly && result.generatedCard) {
         try {
           const sub = await createMonthlySubscription(acct.keys.secretKey, {
@@ -1476,8 +1513,23 @@ async function main(): Promise<void> {
             });
           }
         } catch (e) {
-          log.warn('monthly subscription failed: ' + (e instanceof Error ? e.message : String(e)));
+          const why = e instanceof Error ? e.message : String(e);
+          log.warn('monthly subscription failed: ' + why);
+          monthlyProblem = `Stripe refused to create the standing order: ${why.slice(0, 200)}`;
         }
+      }
+      // A monthly gift the donor asked for and did NOT get is the one outcome here that must never
+      // be silent: the money was taken once, the donor believes they have set up a standing order,
+      // and the admin has nothing to cancel because nothing exists. Put it where both can see it —
+      // this kiosk's log, and an alert to the admin.
+      if (result.succeeded && wantsMonthly && !monthly.created) {
+        store.addLogs(d.id, [{ level: 'warn', event: 'monthly_setup_failed', detail: monthlyProblem || 'No standing order was created.' }]);
+        void fabricAlert(
+          'monthly-failed',
+          'A monthly donation could not be set up',
+          `${formatMoney(result.amountMinor, result.currency)} was taken once at ${d.name || 'the kiosk'}, but the donor's monthly plan could NOT be created, so nothing will be collected again and there is nothing to cancel. ${monthlyProblem} If the donor expected a standing order, please contact them.`,
+          'warning',
+        ).catch(() => {});
       }
       // Branded receipt owed ONLY when the PI was minted branded (Stripe's receipt suppressed at
       // intent) AND it succeeded AND the donor gave an email. recordDonation persists that decision
@@ -1491,7 +1543,12 @@ async function main(): Promise<void> {
         campaignTitle: meta.campaign || '',
         amountMinor: result.amountMinor,
         currency: result.currency,
-        kind: meta.kind || 'one_time',
+        // What ACTUALLY happened, not what was asked for. Recording a requested-but-failed monthly
+        // as 'monthly' is what put a "Monthly" badge in Donations with no matching plan on the
+        // Recurring screen — an admin reasonably reads that as a live standing order they cannot
+        // cancel, when in truth a single gift was taken and nothing recurs. A failed monthly IS a
+        // one-off charge; the intent is preserved in the kiosk log and the alert raised above.
+        kind: monthly.created ? 'monthly' : 'one_time',
         status: result.succeeded ? 'succeeded' : result.status,
         donorName: meta.donorName,
         donorEmail: meta.donorEmail,
@@ -1513,9 +1570,14 @@ async function main(): Promise<void> {
           const don = store.getDonationByPaymentIntent(id);
           if (don) {
             void sendDonationReceipt(don)
-              .then((r) => {
-                if (r.sent) store.setDonationReceipt(id, 'sent');
-                else if (!r.retry) store.setDonationReceipt(id, 'skipped');
+              .then(async (r) => {
+                if (r.sent) return store.setDonationReceipt(id, 'sent');
+                if (r.retry) return; // stays 'pending' for the outbox
+                // Permanently unsendable, and we suppressed Stripe's receipt at intent — so the
+                // donor currently has NOTHING. Hand it back to Stripe rather than leave them with
+                // no record of their gift. Only then mark it settled.
+                await handReceiptBackToStripe(don);
+                store.setDonationReceipt(id, 'skipped');
               })
               .catch(() => {});
           }
@@ -1980,11 +2042,23 @@ async function main(): Promise<void> {
     const RECEIPT_MIN_AGE_MS = 120_000; // 2 min
     const receiptOutbox = async () => {
       try {
+        // Rows that have run out of road. Before this they simply stopped being selected once they
+        // passed RECEIPT_MAX_AGE_MS and were abandoned at 'pending' for ever — and since we had
+        // silenced Stripe at intent, those donors never received anything at all. Give the receipt
+        // back to Stripe and close the row out.
+        for (const don of store.listExpiredPendingReceipts(RECEIPT_MAX_AGE_MS)) {
+          await handReceiptBackToStripe(don);
+          store.setDonationReceipt(don.paymentIntentId, 'skipped');
+        }
         for (const don of store.listPendingReceipts(RECEIPT_MAX_AGE_MS, RECEIPT_MIN_AGE_MS)) {
           const r = await sendDonationReceipt(don);
           if (r.sent) store.setDonationReceipt(don.paymentIntentId, 'sent');
-          else if (!r.retry) store.setDonationReceipt(don.paymentIntentId, 'skipped');
-          else break; // email provider down / rate-limited — try again next tick
+          else if (!r.retry) {
+            // Permanent here too — same reasoning as at /complete: never close a branded row
+            // without making sure the donor gets *a* receipt from somewhere.
+            await handReceiptBackToStripe(don);
+            store.setDonationReceipt(don.paymentIntentId, 'skipped');
+          } else break; // email provider down / rate-limited — try again next tick
         }
       } catch { /* fail soft — never let the receipt outbox crash the app */ }
     };

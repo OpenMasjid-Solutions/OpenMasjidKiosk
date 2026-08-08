@@ -19,21 +19,25 @@ val appVersionName: String = runCatching {
 }.getOrNull()?.takeIf { it.isNotEmpty() } ?: "0.1.0"
 
 // --- Update-channel suffix ------------------------------------------------------------
-// CI passes APP_VERSION_SUFFIX=-dev when building from the `dev` branch, so a dev APK reports
-// "0.10.1-dev" where a release reports "0.10.1". Empty (and therefore a no-op) on the stable
-// channel and for any local build, so a release is exactly what it was before this existed.
+// CI no longer passes one, on either channel: VERSION itself now carries a real prerelease on the
+// dev branch (X.Y.Z-dev.N), and that is what distinguishes a dev APK from a release. The hook stays
+// for local builds, but it is fenced.
 //
-// The SERVER is built with the same value (Dockerfile ARG -> ENV -> config.ts applyVersionSuffix),
-// and that pairing is the point: the heartbeat sends the server's version as `latestAppVersion`,
-// and the tablet decides an update is available by plain string inequality against this
-// versionName. Suffixing only one side would leave a dev tablet permanently reporting "update
-// available" against its own dev server, including straight after updating.
+// The fence matters. The SERVER bundled in the same image reports VERSION too, the heartbeat sends
+// it to the tablet as `latestAppVersion`, and the tablet decides an update is available by plain
+// string inequality against this versionName. If the two halves ever disagree, every kiosk shows
+// "update available" for ever and installing never clears it — which is exactly what happened:
+// build-image.yml stopped passing a suffix while build-apk.yml kept appending "-dev", so the
+// 0.11.0-dev.1 image shipped an APK calling itself "0.11.0-dev.1-dev".
 //
-// VERSION itself is untouched — it is release-managed and identical on both branches.
+// So this mirrors server/src/config.ts applyVersionSuffix, including its rule that a version which
+// ALREADY carries a prerelease is left alone: there is nothing left to disambiguate, and appending
+// would produce a string no comparison can order.
 val appVersionSuffix: String =
     ((project.findProperty("APP_VERSION_SUFFIX") as String?) ?: System.getenv("APP_VERSION_SUFFIX") ?: "")
         .trim()
         .takeIf { Regex("^-[A-Za-z0-9][A-Za-z0-9.-]{0,19}$").matches(it) }
+        ?.takeIf { !appVersionName.contains("-") }
         ?: ""
 
 // --- Release signing (CI only) -------------------------------------------------------

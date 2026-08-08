@@ -280,6 +280,31 @@ export async function completeCardPresentPaymentIntent(secretKey: string, id: st
   };
 }
 
+/**
+ * Ask Stripe to email its own built-in receipt for a charge we had suppressed.
+ *
+ * The branded-receipt path deliberately omits `receipt_email` at intent so Stripe stays quiet and
+ * our own message is the only one the donor gets. When that message then proves permanently
+ * unsendable, the donor would be left with NOTHING — so hand the job back: setting `receipt_email`
+ * on the charge is what makes Stripe send, and it works after the fact, not just at intent.
+ *
+ * Idempotent in the way that matters: Stripe sends one receipt per charge for a given address, so a
+ * retried fallback does not produce a second email. Never throws — a failed fallback must not
+ * disturb a donation that has already succeeded and been recorded.
+ *
+ * (Stripe only actually delivers receipts in live mode; in test mode the call succeeds and no mail
+ * is sent, which is Stripe's behaviour and not something this can work around.)
+ */
+export async function sendStripeReceipt(secretKey: string, chargeId: string, email: string): Promise<boolean> {
+  if (!chargeId || !email.trim()) return false;
+  try {
+    await client(secretKey).charges.update(chargeId, { receipt_email: email.trim() });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ── Monthly donations: Customer + Subscription from the card-present charge (slice 7) ──────
 export interface MonthlySubscriptionInput {
   amountMinor: number;
