@@ -36,8 +36,10 @@ import {
   renameDevice,
   revokeDevice,
   setDeviceOrientation,
+  setDeviceNfcSide,
   setRemoteAdoption,
   type DeviceOrientation,
+  type DeviceNfcSide,
   setKioskPin,
   type Campaign,
   type Device,
@@ -470,6 +472,16 @@ function DeviceRow({ device, campaigns, serverVersion, onChange }: { device: Dev
     }
   };
 
+  const changeNfcSide = async (nfcSide: DeviceNfcSide) => {
+    setErr('');
+    try {
+      await setDeviceNfcSide(device.id, nfcSide);
+      onChange();
+    } catch (e) {
+      setErr(errMsg(e));
+    }
+  };
+
   const identify = async () => {
     setErr('');
     setNote('');
@@ -551,6 +563,18 @@ function DeviceRow({ device, campaigns, serverVersion, onChange }: { device: Dev
             <option value="90">90° ↻</option>
             <option value="180">180°</option>
             <option value="270">270° (−90°) ↺</option>
+          </select>
+        </label>
+        <label className="device-orient" title="Which side of the tablet the card reader sits on. The kiosk points donors to it during payment. Left/right are in landscape; on a portrait mount they become top/bottom.">
+          Reader side:
+          <select
+            className="device-orient-select"
+            value={device.nfcSide || 'off'}
+            onChange={(e) => void changeNfcSide(e.target.value as DeviceNfcSide)}
+          >
+            <option value="off">No hint</option>
+            <option value="left">Left ←</option>
+            <option value="right">Right →</option>
           </select>
         </label>
         {outOfDate && (

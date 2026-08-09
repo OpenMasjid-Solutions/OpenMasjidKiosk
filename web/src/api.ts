@@ -316,11 +316,18 @@ export interface Device {
   online: boolean;
   /** Forced screen orientation set from here (not the tablet's auto-rotate). */
   orientation: DeviceOrientation;
+  /** Which side of the tablet the card reader sits on, so the kiosk can point donors to it during the
+   *  card step. 'off' = no hint. */
+  nfcSide: DeviceNfcSide;
 }
 
 /** Kiosk UI rotation in degrees ('0' = as mounted). The tablet rotates its own UI by this angle, so it
  *  works even on tablets that ignore system orientation requests. */
 export type DeviceOrientation = '0' | '90' | '180' | '270';
+
+/** Which side the card reader sits on, relative to the app's LOGICAL landscape screen. Left/right map
+ *  to top/bottom when the tablet is rotated to portrait. 'off' shows no reader hint. */
+export type DeviceNfcSide = 'off' | 'left' | 'right';
 
 /** One structured log line from a kiosk (payments, reader events, errors). */
 export interface DeviceLog {
@@ -362,6 +369,10 @@ export const renameDevice = (id: string, name: string) =>
 /** Set a kiosk's forced screen orientation (delivered to the tablet on its next check-in). */
 export const setDeviceOrientation = (id: string, orientation: DeviceOrientation) =>
   request<Device>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ orientation }) });
+
+/** Set which side of the tablet the card reader sits on (delivered to the tablet on its next check-in). */
+export const setDeviceNfcSide = (id: string, nfcSide: DeviceNfcSide) =>
+  request<Device>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ nfcSide }) });
 
 export const revokeDevice = (id: string) =>
   request<{ ok: true }>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });

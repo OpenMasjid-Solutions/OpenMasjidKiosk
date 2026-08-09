@@ -89,6 +89,10 @@ data class KioskConfig(
      *  rotates its own content by this angle (RotatedRoot), so it works even on tablets that ignore
      *  system orientation requests. Legacy named values are still accepted + mapped by orientationDegrees. */
     val orientation: String = "0",
+    /** Which side of the tablet the card reader sits on: "off" | "left" | "right". Drives the on-screen
+     *  reader hint (pulsing NFC symbol + arrows) during the card step. Left/right are in the app's
+     *  LOGICAL landscape space, so RotatedRoot maps them to top/bottom in a portrait mount. */
+    val nfcSide: String = "off",
     /** Large-donation alternative: at/above this many MINOR units the kiosk suggests a cheaper way
      *  to give (bank transfer / Zelle QR) before the card. 0 disables it. */
     val largeAmountThresholdMinor: Long = 0,

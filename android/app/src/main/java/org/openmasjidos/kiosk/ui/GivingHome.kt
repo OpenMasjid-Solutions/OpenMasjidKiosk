@@ -171,6 +171,15 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                 }
             }
         }
+        // Reader hint: a pulsing NFC symbol + arrows pinned to the reader's side (set per tablet in
+        // Admin → Devices). Shown while the donor is at the card step; turns green when it clears. It
+        // rides inside RotatedRoot with everything else, so "left/right" follow the mount into portrait.
+        NfcReaderHint(
+            side = cfg?.nfcSide ?: "off",
+            active = ui.giving.step == GivingStep.Card || ui.giving.step == GivingStep.Processing,
+            cleared = ui.giving.step == GivingStep.Thanks,
+            accent = accent,
+        )
         // Visual-only countdown ring (no numbers/words): shown while a non-main tab idles OR while a
         // donation is under way (returns to the menu on inactivity).
         (ui.autoReturnStartedMs ?: ui.idleReturnStartedMs)?.let { started ->

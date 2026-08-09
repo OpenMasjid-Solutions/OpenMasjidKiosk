@@ -243,6 +243,7 @@ class KioskApi(private val client: OkHttpClient) {
             footerText = cfg.optString("footerText", "OpenMasjid Solutions"),
             tabSize = cfg.optString("tabSize", "medium"),
             orientation = cfg.optString("orientation", "0"),
+            nfcSide = cfg.optString("nfcSide", "off"),
             largeAmountThresholdMinor = cfg.optLong("largeAmountThresholdMinor", 0L),
             largeAmountNote = cfg.optString("largeAmountNote", ""),
             largeAmountImage = cfg.optString("largeAmountImage", ""),
