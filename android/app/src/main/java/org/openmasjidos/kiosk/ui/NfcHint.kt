@@ -132,14 +132,14 @@ private fun MarchingArrows(pointLeft: Boolean, color: Color, active: Boolean) {
     val groupAlpha by animateFloatAsState(if (active) 1f else 0f, tween(400), label = "nfc-arrows-fade")
     Canvas(
         modifier = Modifier
-            .size(width = 104.dp, height = 60.dp)
+            .size(width = 168.dp, height = 96.dp)
             .graphicsLayer { alpha = groupAlpha },
     ) {
         val n = 3
         val slotW = size.width / n
-        val halfW = slotW * 0.30f
-        val halfH = size.height * 0.30f
-        val stroke = size.height * 0.11f
+        val halfW = slotW * 0.34f
+        val halfH = size.height * 0.38f
+        val stroke = size.height * 0.13f
         val cy = size.height / 2f
         for (k in 0 until n) {
             // k ranks chevrons by distance from the symbol (0 = nearest). Place the nearest on the
