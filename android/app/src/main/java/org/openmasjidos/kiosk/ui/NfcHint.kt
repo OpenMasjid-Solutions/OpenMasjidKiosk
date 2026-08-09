@@ -5,6 +5,11 @@ package org.openmasjidos.kiosk.ui
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+// InfiniteTransition.animateFloat is an EXTENSION (androidx.compose.animation.core.InfiniteTransitionKt),
+// so it needs its own import — unlike the top-level animateFloatAsState below. Missing it is what broke
+// the build: `t.animateFloat(...)` didn't resolve, `pulse`/`phase` got an error type, and that cascaded
+// into the sin() overload ambiguity and the Double-vs-Float mismatch further down this file.
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
