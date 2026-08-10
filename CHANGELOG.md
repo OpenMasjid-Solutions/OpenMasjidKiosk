@@ -4,6 +4,15 @@
 # Changelog
 
 ## Unreleased
+- **Fixed: "Open Android Settings" didn't work on a locked-down kiosk.** From the tablet's
+  maintenance screen, opening Android Settings (and the permission-checklist buttons, and the "allow
+  installs" screen during an update) could do nothing at all, or flash Settings up for a moment before
+  the kiosk snatched itself back. The kiosk's own defences were fighting the maintainer: it re-pins
+  itself whenever it regains focus and hauls itself back to the front whenever it's left, and both were
+  firing on the way *into* Settings — and a pinned app isn't allowed to open another app, silently. The
+  tablet now recognises a maintenance trip out and stands those defences down until you come back, then
+  re-locks itself. If a button can't open anything at all it re-locks straight away instead of leaving
+  the kiosk unpinned. **(Requires updating the tablet app.)**
 - **Refund a donation from the Donations page.** Open any donation and press **Refund** — the whole
   gift, or part of it, with a reason recorded in Stripe. The money goes back to the donor's card
   automatically (most banks show it in 5–10 working days).

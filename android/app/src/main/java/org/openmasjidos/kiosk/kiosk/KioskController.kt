@@ -128,6 +128,22 @@ object KioskController {
                     pm.resolveActivity(view, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName?.let { pkgs.add(it) }
                     pm.queryIntentActivities(view, 0).forEach { it.activityInfo?.packageName?.let { p -> pkgs.add(p) } }
                 }
+                // Allow-list SETTINGS and the package installer too. Maintenance drops Lock Task before
+                // opening either, so this is not the primary mechanism — it is the safety net for the
+                // case that made "Open Android Settings" look broken: if the unpin hasn't taken effect
+                // by the time we start the activity, a non-allow-listed package is refused SILENTLY,
+                // with no error and no visible change. Allow-listing costs nothing in security terms —
+                // these can only be launched from behind the maintenance PIN, never by a donor.
+                runCatching {
+                    val pm = activity.packageManager
+                    pm.resolveActivity(Intent(android.provider.Settings.ACTION_SETTINGS), PackageManager.MATCH_DEFAULT_ONLY)
+                        ?.activityInfo?.packageName?.let { pkgs.add(it) }
+                    val install = Intent(Intent.ACTION_VIEW).setDataAndType(
+                        android.net.Uri.parse("file:///dummy.apk"),
+                        "application/vnd.android.package-archive",
+                    )
+                    pm.resolveActivity(install, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName?.let { pkgs.add(it) }
+                }
                 dpm.setLockTaskPackages(admin, pkgs.toTypedArray())
             }
             // Lock EVERYTHING down: Home, recents, the notification shade, the power menu and system
