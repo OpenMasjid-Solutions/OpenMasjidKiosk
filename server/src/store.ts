@@ -260,6 +260,16 @@ export interface DonationRecord {
    *  permanently un-sendable (no/invalid donor email, or the provider rejected it). */
   receipt: 'stripe' | 'pending' | 'sent' | 'skipped';
   chargeId: string;
+  /** How much of this donation has been given back, in the SAME minor units as `amountMinor`.
+   *  0 = untouched. Partial refunds accumulate here, so `amountMinor - refundedMinor` is always what
+   *  the masjid actually kept — which is what every total on the Donations screen is summed from. */
+  refundedMinor: number;
+  /** The most recent Stripe refund id (`re_…`), for tracing a row back to the dashboard. */
+  refundId: string;
+  /** When the latest refund was issued (UTC ISO), or '' if never. */
+  refundedAt: string;
+  /** Stripe's reason code for the latest refund: 'requested_by_customer' | 'duplicate' | 'fraudulent'. */
+  refundReason: string;
   createdAt: string;
 }
 
@@ -578,6 +588,16 @@ export class Store {
     {
       const has = (this.db.prepare(`PRAGMA table_info(donations)`).all() as { name: string }[]).some((c) => c.name === 'receipt');
       if (!has) this.db.exec("ALTER TABLE donations ADD COLUMN receipt TEXT NOT NULL DEFAULT 'stripe'");
+    }
+    // Refunds (added when the admin gained a Refund button). Legacy rows default to "nothing given
+    // back", which is true of every donation taken before refunds existed. refunded_minor is INTEGER
+    // and the rest TEXT, so they can't share the TEXT loop above.
+    {
+      const dc = (this.db.prepare(`PRAGMA table_info(donations)`).all() as { name: string }[]).map((c) => c.name);
+      if (!dc.includes('refunded_minor')) this.db.exec('ALTER TABLE donations ADD COLUMN refunded_minor INTEGER NOT NULL DEFAULT 0');
+      for (const col of ['refund_id', 'refunded_at', 'refund_reason']) {
+        if (!dc.includes(col)) this.db.exec(`ALTER TABLE donations ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`);
+      }
     }
     // Now that campaign_id is guaranteed to exist, its index is safe to create.
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_donations_campaign ON donations(campaign_id)');
@@ -1497,8 +1517,48 @@ export class Store {
         ? (String(r.receipt) as DonationRecord['receipt'])
         : 'stripe',
       chargeId: String(r.charge_id),
+      refundedMinor: Number(r.refunded_minor ?? 0),
+      refundId: String(r.refund_id ?? ''),
+      refundedAt: String(r.refunded_at ?? ''),
+      refundReason: String(r.refund_reason ?? ''),
       createdAt: String(r.created_at),
     };
+  }
+
+  /**
+   * Add a refund to a donation. ACCUMULATES, so several partial refunds add up rather than the last
+   * one overwriting the others — the running total is what every figure on the Donations screen is
+   * netted against, so an overwrite would quietly re-inflate the totals.
+   *
+   * Clamped to the donation's own amount: Stripe already refuses to refund more than was charged, but
+   * a clamp here means a bug or a racing double-click can never drive `amountMinor - refundedMinor`
+   * negative and start SUBTRACTING from the masjid's totals.
+   *
+   * Returns the new refunded total, or null if there is no such donation.
+   */
+  recordRefund(
+    donationId: string,
+    r: { refundId: string; amountMinor: number; reason?: string; at?: string },
+  ): number | null {
+    const row = this.db.prepare('SELECT amount_minor, refunded_minor FROM donations WHERE id = ?').get(donationId) as
+      | { amount_minor: number; refunded_minor: number }
+      | undefined;
+    if (!row) return null;
+    const already = Number(row.refunded_minor ?? 0);
+    const add = Math.max(0, Math.round(r.amountMinor));
+    const total = Math.min(Number(row.amount_minor), already + add);
+    this.db
+      .prepare('UPDATE donations SET refunded_minor = ?, refund_id = ?, refunded_at = ?, refund_reason = ? WHERE id = ?')
+      .run(total, r.refundId, r.at ?? new Date().toISOString(), r.reason ?? '', donationId);
+    return total;
+  }
+
+  /** One donation by our own row id (the Refund route's handle on it). */
+  getDonation(id: string): DonationRecord | null {
+    const r = this.db
+      .prepare('SELECT d.*, dev.name AS device_name FROM donations d LEFT JOIN devices dev ON dev.id = d.device_id WHERE d.id = ?')
+      .get(id) as Record<string, unknown> | undefined;
+    return r ? this.rowToDonation(r) : null;
   }
 
   /** Recorded donations, newest first, with the kiosk name resolved (LEFT JOIN, so a removed
@@ -1537,19 +1597,28 @@ export class Store {
     const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
     // created_at is a UTC ISO string; ISO sorts lexicographically = chronologically, so a `>=` string
     // compare against a UTC-ISO cutoff gives correct local-day/week/month windows.
+    // NET OF REFUNDS. Every sum is `amount_minor - refunded_minor`, so a refunded gift stops counting
+    // the moment it is given back. Showing gross here would have the Donations screen state a figure
+    // the bank account cannot back — the number an admin repeats to a committee. The COUNT is left
+    // gross on purpose: a refunded donation still happened, and "2 donations" going to "1" would look
+    // like a lost record rather than returned money. Refunds are visible per row and in the CSV.
     const sumSince = (iso: string): number =>
       Number(
         (this.db
-          .prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS s FROM donations WHERE status = 'succeeded' AND currency = ? AND created_at >= ?`)
+          .prepare(
+            `SELECT COALESCE(SUM(amount_minor - refunded_minor), 0) AS s FROM donations WHERE status = 'succeeded' AND currency = ? AND created_at >= ?`,
+          )
           .get(currency, iso) as { s: number }).s,
       );
     const all = this.db
-      .prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS s, COUNT(*) AS n FROM donations WHERE status = 'succeeded' AND currency = ?`)
+      .prepare(
+        `SELECT COALESCE(SUM(amount_minor - refunded_minor), 0) AS s, COUNT(*) AS n FROM donations WHERE status = 'succeeded' AND currency = ?`,
+      )
       .get(currency) as { s: number; n: number };
     const rows = this.db
       .prepare(
         `SELECT d.device_id AS deviceId, COALESCE(dev.name, '') AS deviceName,
-                COALESCE(SUM(d.amount_minor), 0) AS amountMinor, COUNT(*) AS count
+                COALESCE(SUM(d.amount_minor - d.refunded_minor), 0) AS amountMinor, COUNT(*) AS count
          FROM donations d LEFT JOIN devices dev ON dev.id = d.device_id
          WHERE d.status = 'succeeded' AND d.currency = ?
          GROUP BY d.device_id ORDER BY amountMinor DESC`,

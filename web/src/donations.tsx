@@ -8,8 +8,8 @@
  *  webhooks) — these totals are what the kiosks collected directly. Polls ~20s; fails soft. */
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { CalendarDays, Coins, Download, MonitorSmartphone, ReceiptText, TrendingUp, X } from 'lucide-react';
-import { fetchDonationsCsv, getDonations, type Donation, type DonationsData } from './api';
+import { CalendarDays, CheckCircle2, Coins, Download, Loader2, MonitorSmartphone, ReceiptText, TrendingUp, Undo2, X } from 'lucide-react';
+import { fetchDonationsCsv, getDonations, refundDonation, type Donation, type DonationsData, type RefundResult } from './api';
 import { formatMoney } from './money';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
@@ -157,7 +157,16 @@ export function DonationsSection() {
         )}
       </section>
 
-      {selected && <DonationModal d={selected} money={money} onClose={() => setSelected(null)} />}
+      {selected && (
+        <DonationModal
+          d={selected}
+          money={money}
+          onClose={() => setSelected(null)}
+          // Refetch so the row, the badges and above all the TOTALS reflect the refund at once —
+          // otherwise the tiles keep showing money the masjid has just given back until the next poll.
+          onRefunded={() => { void load(); }}
+        />
+      )}
     </section>
   );
 }
@@ -165,12 +174,18 @@ export function DonationsSection() {
 function DonationRow({ d, money, onOpen }: { d: Donation; money: (m: number) => string; onOpen: () => void }) {
   const succeeded = d.status === 'succeeded';
   const who = d.donorName || d.donorEmail;
+  const refunded = d.refundedMinor > 0;
+  const fully = refunded && d.refundedMinor >= d.amountMinor;
   return (
     <li>
       <button type="button" className="donation-row donation-row--btn" onClick={onOpen}>
         <div className="donation-row__main">
-          <span className="donation-amt">{money(d.amountMinor)}</span>
+          {/* Struck through once fully given back, so a glance down the list never reads a refunded
+              gift as money the masjid still has. A partial keeps its amount and says how much went. */}
+          <span className={`donation-amt${fully ? ' donation-amt--refunded' : ''}`}>{money(d.amountMinor)}</span>
           {d.kind === 'monthly' && <span className="badge badge--monthly">Monthly</span>}
+          {fully && <span className="badge badge--refunded">Refunded</span>}
+          {refunded && !fully && <span className="badge badge--refunded">{money(d.refundedMinor)} refunded</span>}
           {!succeeded && <span className="status-pill">{d.status || 'unknown'}</span>}
         </div>
         <div className="donation-row__meta muted">
@@ -181,11 +196,53 @@ function DonationRow({ d, money, onOpen }: { d: Donation; money: (m: number) => 
   );
 }
 
-/** A macOS-window-style detail popup for one donation (time, donor name/email, amount, campaign…). */
-function DonationModal({ d, money, onClose }: { d: Donation; money: (m: number) => string; onClose: () => void }) {
+/** A macOS-window-style detail popup for one donation (time, donor name/email, amount, campaign…),
+ *  and the one place a donation can be given back. */
+function DonationModal({
+  d: initial,
+  money,
+  onClose,
+  onRefunded,
+}: {
+  d: Donation;
+  money: (m: number) => string;
+  onClose: () => void;
+  onRefunded: (d: Donation) => void;
+}) {
+  const [d, setD] = useState(initial);
+  const [stage, setStage] = useState<'view' | 'confirm'>('view');
+  const [partial, setPartial] = useState(false);
+  const [amountText, setAmountText] = useState('');
+  const [reason, setReason] = useState('requested_by_customer');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState<RefundResult | null>(null);
+  /** How much THIS action gave back — the running total minus whatever had already been refunded
+   *  when the window opened. Reporting the running total would tell an admin refunding the second
+   *  half of a gift that they had just refunded the whole thing. */
+  const justRefunded = done ? Math.max(0, done.refundedMinor - initial.refundedMinor) : 0;
+
   const succeeded = d.status === 'succeeded';
+  const remaining = d.amountMinor - d.refundedMinor;
+  const refunded = d.refundedMinor > 0;
+  const canRefund = succeeded && remaining > 0;
+
+  // Minor units from what was typed, using the SAME decimal rule as the display formatter — a
+  // zero-decimal currency (JPY) must not be multiplied by 100.
+  const decimals = money(0).replace(/[^0-9.,]/g, '').includes('.') ? 2 : 0;
+  const typedMinor = Math.round(parseFloat(amountText.replace(/[^0-9.]/g, '')) * 10 ** decimals);
+  const wanted = partial ? typedMinor : remaining;
+  const amountValid = !partial || (Number.isFinite(typedMinor) && typedMinor > 0 && typedMinor <= remaining);
+
   const rows: { k: string; v: ReactNode }[] = [
     { k: 'Amount', v: <strong>{money(d.amountMinor)}</strong> },
+    ...(refunded
+      ? [
+          { k: 'Refunded', v: <strong className="text-warn">{money(d.refundedMinor)}</strong> },
+          { k: 'Kept', v: <strong>{money(remaining)}</strong> },
+          { k: 'Refunded on', v: d.refundedAt ? fullDateTime(d.refundedAt) : '—' },
+        ]
+      : []),
     { k: 'Type', v: d.kind === 'monthly' ? 'Monthly' : 'One-time' },
     { k: 'Status', v: succeeded ? 'Succeeded' : (d.status || 'unknown') },
     { k: 'When', v: fullDateTime(d.createdAt) },
@@ -194,7 +251,28 @@ function DonationModal({ d, money, onClose }: { d: Donation; money: (m: number) 
     { k: 'Email', v: d.donorEmail || '—' },
     { k: 'Kiosk', v: d.deviceName || 'Kiosk' },
     { k: 'Payment ID', v: <code className="mono">{d.paymentIntentId}</code> },
+    ...(d.refundId ? [{ k: 'Refund ID', v: <code className="mono">{d.refundId}</code> }] : []),
   ];
+
+  const doRefund = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      const res = await refundDonation(d.id, {
+        ...(partial ? { amountMinor: wanted } : {}),
+        reason,
+      });
+      setD(res.donation);
+      setDone(res);
+      setStage('view');
+      onRefunded(res.donation); // refresh the list + totals behind the modal
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return createPortal(
     <div className="modal-scrim" onClick={onClose} role="presentation">
       <div className="modal glass-raised" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Donation details">
@@ -210,7 +288,7 @@ function DonationModal({ d, money, onClose }: { d: Donation; money: (m: number) 
           </div>
         </div>
         <div className="modal-body">
-          <div className="detail-amt">{money(d.amountMinor)}</div>
+          <div className={`detail-amt${refunded && remaining <= 0 ? ' detail-amt--refunded' : ''}`}>{money(d.amountMinor)}</div>
           <div className="kv">
             {rows.map((r) => (
               <div className="kv-row" key={r.k}>
@@ -218,6 +296,127 @@ function DonationModal({ d, money, onClose }: { d: Donation; money: (m: number) 
                 <span className="kv-v">{r.v}</span>
               </div>
             ))}
+          </div>
+
+          <div className="plan-actions">
+            {/* What actually happened, once. Spells out the two things an admin cannot see from the
+                row: whether the donor was actually told, and that a monthly plan keeps running. */}
+            {done && (
+              <div className="plan-act" role="status">
+                <p className="plan-note">
+                  <CheckCircle2 size={15} aria-hidden="true" />
+                  <span>
+                    <strong>{money(justRefunded)} refunded.</strong> It goes back to the donor’s card automatically — most
+                    banks show it within 5–10 working days.
+                  </span>
+                </p>
+                {done.donorEmailAddress ? (
+                  <p className="hint">
+                    {done.donorEmailed
+                      ? `We emailed ${done.donorEmailAddress}.`
+                      : `We could NOT email ${done.donorEmailAddress} — please contact them yourself.`}
+                  </p>
+                ) : (
+                  <p className="hint">This donor didn’t leave an email address, so they haven’t been told.</p>
+                )}
+                {done.monthlyStillLive && (
+                  <p className="note-amber">
+                    This donor has a <strong>monthly plan and it is still running</strong> — refunding a payment doesn’t
+                    cancel it. End it on the Recurring page if they asked to stop.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {err && <p className="form-error" role="alert">{err}</p>}
+
+            {stage === 'view' && canRefund && !done && (
+              <div className="plan-act">
+                <p className="plan-act__title">Refund</p>
+                <p className="hint">
+                  {refunded
+                    ? `${money(d.refundedMinor)} of this donation has already been given back.`
+                    : 'Gives the money back to the donor’s card.'}
+                </p>
+                <div className="plan-act__row">
+                  <button type="button" className="btn btn--sm device-danger" onClick={() => { setStage('confirm'); setErr(''); }}>
+                    <Undo2 size={14} aria-hidden="true" /> {refunded ? `Refund the remaining ${money(remaining)}` : 'Refund this donation'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {stage === 'view' && succeeded && remaining <= 0 && !done && (
+              <p className="hint">This donation has been refunded in full.</p>
+            )}
+            {stage === 'view' && !succeeded && <p className="hint">Only a successful donation can be refunded.</p>}
+
+            {stage === 'confirm' && (
+              <div className="plan-act">
+                <p className="plan-act__title">Give this donation back?</p>
+                <p className="note-danger">
+                  <strong>{money(amountValid ? wanted : remaining)}</strong> returns to the donor’s card. This can’t be undone
+                  from here.
+                </p>
+                <label className="toggle-row">
+                  <span className="toggle-text">
+                    <span className="toggle-label">Refund only part of it</span>
+                    <span className="hint">Otherwise the whole {money(remaining)} goes back.</span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={partial}
+                    aria-label="Refund only part of it"
+                    className={`switch${partial ? ' switch--on' : ''}`}
+                    onClick={() => { setPartial((p) => !p); setAmountText(''); }}
+                  >
+                    <span className="switch-knob" />
+                  </button>
+                </label>
+                {partial && (
+                  <div className="field">
+                    <label className="label" htmlFor="refund-amt">Amount to refund (up to {money(remaining)})</label>
+                    <input
+                      id="refund-amt"
+                      className="input"
+                      inputMode="decimal"
+                      value={amountText}
+                      onChange={(e) => setAmountText(e.target.value)}
+                      placeholder={(remaining / 10 ** decimals).toFixed(decimals)}
+                      aria-invalid={!amountValid}
+                    />
+                  </div>
+                )}
+                <div className="field">
+                  <label className="label" htmlFor="refund-reason">Reason (recorded in Stripe)</label>
+                  <select id="refund-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)}>
+                    <option value="requested_by_customer">The donor asked for it back</option>
+                    <option value="duplicate">Duplicate payment</option>
+                    <option value="fraudulent">Fraudulent</option>
+                  </select>
+                </div>
+                {d.kind === 'monthly' && (
+                  <p className="note-amber">
+                    This is a <strong>monthly</strong> donation. Refunding this payment does <strong>not</strong> cancel the
+                    standing order — end it on the Recurring page too, or they’ll be charged again next month.
+                  </p>
+                )}
+                <div className="plan-act__row">
+                  <button type="button" className="btn btn--ghost btn--sm" onClick={() => setStage('view')} disabled={busy}>
+                    Cancel
+                  </button>
+                  <button type="button" className="btn btn--sm device-danger" onClick={doRefund} disabled={busy || !amountValid}>
+                    {busy ? (
+                      <>
+                        <Loader2 size={14} className="spin" aria-hidden="true" /> Refunding…
+                      </>
+                    ) : (
+                      `Refund ${money(amountValid ? wanted : remaining)}`
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -583,10 +583,17 @@ export interface Donation {
   donorName: string;
   donorEmail: string;
   chargeId: string;
+  /** How much has been given back, in the same minor units as `amountMinor`. 0 = untouched;
+   *  equal to `amountMinor` = refunded in full; anything between = a partial. */
+  refundedMinor: number;
+  refundId: string;
+  refundedAt: string;
+  refundReason: string;
   createdAt: string;
 }
 
-/** Succeeded-donation totals (integer minor units) + a per-kiosk breakdown. */
+/** Succeeded-donation totals (integer minor units) + a per-kiosk breakdown. NET OF REFUNDS — a
+ *  refunded gift stops counting toward the amounts, though it still counts in `count`. */
 export interface DonationTotals {
   today: number;
   thisWeek: number;
@@ -604,6 +611,25 @@ export interface DonationsData {
 }
 
 export const getDonations = () => request<DonationsData>('/api/admin/donations');
+
+/** What the server did after a refund — enough for the UI to tell the admin the whole truth in one
+ *  go, including the two things they'd otherwise have to guess: whether the donor actually got an
+ *  email, and whether a monthly plan is still running. */
+export interface RefundResult {
+  donation: Donation;
+  refundedMinor: number;
+  fullyRefunded: boolean;
+  donorEmailed: boolean;
+  donorEmailAddress: string;
+  /** True when this donation was a monthly — refunding a payment does NOT cancel the standing order. */
+  monthlyStillLive: boolean;
+  /** Stripe's refund status: usually 'succeeded', occasionally 'pending' for slower methods. */
+  status: string;
+}
+
+/** Refund a donation. `amountMinor` omitted = give back everything not already refunded. */
+export const refundDonation = (id: string, body: { amountMinor?: number; reason?: string } = {}) =>
+  request<RefundResult>(`/api/admin/donations/${encodeURIComponent(id)}/refund`, { method: 'POST', body: JSON.stringify(body) });
 
 /** Fetch the donations CSV as a Blob. Uses fetch (not a plain <a download>) so an expired session
  *  surfaces an error instead of silently saving the 401 JSON body as "donations.csv". */

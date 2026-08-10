@@ -5,7 +5,7 @@ id: kiosk
 name: OpenMasjid Kiosk
 tagline: Tap-to-donate kiosk for a wall-mounted tablet with a Stripe card reader
 category: donations
-version: 0.11.0-dev.9
+version: 0.11.0-dev.10
 author: OpenMasjid-Solutions
 license: AGPL-3.0-only
 icon: icon.svg
@@ -70,6 +70,9 @@ alerts:
   - id: monthly-failed
     label: A monthly donation couldn't be set up
     description: A donor asked to give monthly and was charged once, but the standing order could not be created — so nothing will be collected again and they may need telling.
+  - id: donation-refunded
+    label: A donation was refunded
+    description: An admin gave a donation back from the Donations screen — says how much, to whom, whether the donor was emailed, and whether a monthly plan is still running.
   - id: test
     label: Test message
     description: A test you trigger from the app to confirm OpenMasjidOS is reaching you.

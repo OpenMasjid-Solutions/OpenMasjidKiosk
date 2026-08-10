@@ -164,7 +164,14 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
   `/new`, the APK, `/api/app`/appearance, and `/api/kiosk/*` are internet-reachable; the admin panel
   stays LAN-only. Remote pairing uses the real Cloudflare cert (system trust) — the LAN path still uses
   self-signed + trust-on-first-use pinning. See `docs/REMOTE_ADOPTION.md`.
-- Gift Aid, refunds in-app (point admins at the Stripe dashboard), donor accounts, printed receipts, iOS, non-Stripe processors, offline payments (Terminal offline mode is a later feature).
+- ~~refunds in-app (point admins at the Stripe dashboard)~~ — **now supported.** Opening a donation in
+  Admin → Donations offers **Refund** (full or partial, with a Stripe reason). The server refunds the
+  PaymentIntent, records the running refunded total on the row, emails the donor a branded refund note
+  when they left an address, and raises the `donation-refunded` alert (which OpenMasjidOS fans out to
+  the admin's email and/or webhook). **Every donation total is netted** (`amount - refunded`) so the
+  headline figures never overstate what the masjid kept; the CSV gains Refunded/Net/Refund ID columns.
+  Refunding a monthly's payment does **not** cancel the plan — the UI and the alert both say so.
+- Gift Aid, donor accounts, printed receipts, iOS, non-Stripe processors, offline payments (Terminal offline mode is a later feature).
 - Play Store distribution (sideload via `/new` is the model; Play listing is a later decision).
 
 ### 🔭 Later (design for, don't build)

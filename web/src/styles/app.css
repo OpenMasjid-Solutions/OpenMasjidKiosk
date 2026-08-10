@@ -642,6 +642,13 @@ button.status-pill:hover { filter: brightness(1.08); }
 .donation-amt { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-ink); }
 .donation-row__meta { font-size: 0.82rem; }
 .badge--monthly { background: var(--color-primary-subtle); color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary-subtle); }
+/* Refunded money. Struck through rather than hidden or recoloured on its own: the donation still
+   happened and stays in the log, but scanning the list must never read a returned gift as income.
+   The strike is what carries the meaning, so the colour is a reinforcement and not the only signal
+   (it still reads on a mono display, and to anyone who can't distinguish the two colours). */
+.badge--refunded { background: color-mix(in srgb, var(--color-danger) 12%, transparent); color: var(--color-danger); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent); }
+.donation-amt--refunded,
+.detail-amt--refunded { text-decoration: line-through; text-decoration-thickness: 2px; color: var(--color-ink-muted); }
 .device-remove-btn:hover { color: var(--color-danger); }
 .device-danger { background: var(--color-danger); color: var(--color-on-primary); }
 .device-danger:hover { background: var(--color-danger); filter: brightness(1.06); }

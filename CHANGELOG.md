@@ -4,6 +4,20 @@
 # Changelog
 
 ## Unreleased
+- **Refund a donation from the Donations page.** Open any donation and press **Refund** — the whole
+  gift, or part of it, with a reason recorded in Stripe. The money goes back to the donor's card
+  automatically (most banks show it in 5–10 working days).
+  - **The donor is told**, if they left an email: a branded refund note in your masjid's colours,
+    saying how much is coming back and when. No email address, or the message couldn't be sent? The
+    page and the alert both say so, so nobody is left assuming the donor knows.
+  - **You are told too** — a new **"A donation was refunded"** alert, which OpenMasjidOS sends to your
+    email, your webhook, or both, exactly as you've set it up in Settings → Alerts.
+  - **Your totals stay honest.** Today / this week / this month / all time now show what you actually
+    kept, so a refunded gift stops counting the moment it's given back. The donation itself stays in
+    the log (struck through and badged) rather than disappearing, and the CSV gains **Refunded**,
+    **Net** and **Refund ID** columns.
+  - **Monthly donations:** refunding a payment does **not** cancel the standing order — you're warned
+    before and after, and can end the plan on the Recurring page.
 - **Fixed: a monthly donation could be missing from the Recurring page.** A donor's standing order
   could show as **Monthly** in Donations while Recurring said "No recurring plans yet" — so there was
   nothing to pause or cancel, even though Stripe was still collecting. The Recurring page used to

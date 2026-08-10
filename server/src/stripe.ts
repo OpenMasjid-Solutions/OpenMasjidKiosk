@@ -305,6 +305,51 @@ export async function sendStripeReceipt(secretKey: string, chargeId: string, ema
   }
 }
 
+// ── Refunds: giving a donation back ────────────────────────────────────────────────────────
+export type RefundReason = 'requested_by_customer' | 'duplicate' | 'fraudulent';
+
+export interface RefundResult {
+  refundId: string;
+  /** What Stripe actually gave back, in minor units — trust THIS over what we asked for. */
+  amountMinor: number;
+  /** 'succeeded' | 'pending' | 'failed' | 'canceled'. Card refunds are usually 'succeeded' at once;
+   *  some methods settle asynchronously, which is why the caller must not assume success. */
+  status: string;
+}
+
+/**
+ * Refund a donation, in full or in part.
+ *
+ * Refunds the PAYMENT INTENT rather than the charge: one PaymentIntent has exactly one successful
+ * charge here, and naming the intent means we never have to have stored a charge id (older rows
+ * predate that column) and can never refund the wrong charge on a retried intent.
+ *
+ * `amountMinor` omitted = refund everything not already refunded. Stripe itself enforces that the
+ * total can't exceed the charge, so a double-submit gets `charge_already_refunded` rather than money
+ * leaving twice — and the idempotency key makes an identical retry return the SAME refund instead of
+ * creating a second one.
+ *
+ * Throws on failure. Unlike the receipt helpers this must NOT fail soft: refusing loudly is the only
+ * way the admin learns the money did not move, and a silent failure here means telling a donor they
+ * have been refunded when they have not.
+ */
+export async function refundPayment(
+  secretKey: string,
+  input: { paymentIntentId: string; amountMinor?: number; reason?: RefundReason; idempotencyKey?: string; metadata?: Record<string, string> },
+): Promise<RefundResult> {
+  const c = client(secretKey);
+  const refund = await c.refunds.create(
+    {
+      payment_intent: input.paymentIntentId,
+      ...(typeof input.amountMinor === 'number' ? { amount: input.amountMinor } : {}),
+      ...(input.reason ? { reason: input.reason } : {}),
+      metadata: { app: 'kiosk', ...(input.metadata ?? {}) },
+    },
+    input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined,
+  );
+  return { refundId: refund.id, amountMinor: refund.amount ?? 0, status: refund.status ?? 'unknown' };
+}
+
 // ── Monthly donations: Customer + Subscription from the card-present charge (slice 7) ──────
 export interface MonthlySubscriptionInput {
   amountMinor: number;
