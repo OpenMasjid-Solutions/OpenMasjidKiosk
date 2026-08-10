@@ -31,7 +31,7 @@ import { formatMoney } from './money';
 import { useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
 import { PaymentsSection } from './payments';
 import { DevicesSection } from './devices';
-import { CampaignsSection } from './campaigns';
+import { CampaignEditorPage, CampaignsSection } from './campaigns';
 import { DonationsSection } from './donations';
 import { PlansSection } from './plans';
 import { EmailReceiptSection } from './email';
@@ -137,6 +137,14 @@ const TABS: { id: Tab; label: string; Icon: typeof LayoutDashboard }[] = [
   { id: 'settings', label: 'Settings', Icon: Settings },
 ];
 
+/** The campaign id in a "#campaign/<id>" hash (or "new"), else ''. That route is a PAGE of its own —
+ *  the campaign editor opens in its own browser tab, so the hash has to survive a fresh load. */
+function campaignFromHash(): string {
+  const h = typeof location !== 'undefined' ? location.hash.replace(/^#/, '') : '';
+  const m = /^campaign\/(.+)$/.exec(h);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
 /** Which tab a URL hash like "#settings" selects (defaults to dashboard). */
 function tabFromHash(): Tab {
   const h = typeof location !== 'undefined' ? location.hash.replace(/^#/, '') : '';
@@ -170,14 +178,21 @@ function AdminShell({ app, session }: { app: AppInfo | null; session: Session })
   // Tab is reflected in the URL hash so the profile menu's "Settings" (→ #settings), the
   // brand mark (→ #dashboard) and refresh/back all land on the right section.
   const [tab, setTabState] = useState<Tab>(() => tabFromHash());
+  // "#campaign/<id>" is a page rather than a tab — the campaign editor is a big two-column form with a
+  // live kiosk preview, so it opens in its own browser tab instead of a dialog over the list.
+  const [campaignId, setCampaignId] = useState<string>(() => campaignFromHash());
   useEffect(() => {
-    const onHash = () => setTabState(tabFromHash());
+    const onHash = () => {
+      setTabState(tabFromHash());
+      setCampaignId(campaignFromHash());
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
   const setTab = (t: Tab) => {
     if (typeof location !== 'undefined') history.replaceState(null, '', `${location.pathname}#${t}`);
     setTabState(t);
+    setCampaignId(''); // replaceState fires no hashchange, so leave the editor page explicitly
   };
 
   const meta: Record<Tab, { title: string; sub: string }> = {
@@ -199,16 +214,19 @@ function AdminShell({ app, session }: { app: AppInfo | null; session: Session })
       </header>
       <main className="admin">
         <div className="page-head">
-          <h1 className="page-title">{meta[tab].title}</h1>
-          <p className="page-sub">{meta[tab].sub}</p>
+          <h1 className="page-title">{campaignId ? 'Campaign' : meta[tab].title}</h1>
+          <p className="page-sub">
+            {campaignId ? 'Design one appeal — the giving screen your kiosks show for it.' : meta[tab].sub}
+          </p>
         </div>
 
-        {tab === 'dashboard' && <DashboardTab session={session} embedded={embedded} />}
-        {tab === 'devices' && <DevicesTab />}
-        {tab === 'giving' && <CampaignsSection />}
-        {tab === 'analytics' && <DonationsSection />}
-        {tab === 'recurring' && <PlansSection />}
-        {tab === 'settings' && <SettingsTab app={app} session={session} embedded={embedded} />}
+        {campaignId && <CampaignEditorPage key={campaignId} campaignId={campaignId} />}
+        {!campaignId && tab === 'dashboard' && <DashboardTab session={session} embedded={embedded} />}
+        {!campaignId && tab === 'devices' && <DevicesTab />}
+        {!campaignId && tab === 'giving' && <CampaignsSection />}
+        {!campaignId && tab === 'analytics' && <DonationsSection />}
+        {!campaignId && tab === 'recurring' && <PlansSection />}
+        {!campaignId && tab === 'settings' && <SettingsTab app={app} session={session} embedded={embedded} />}
       </main>
       <Dock tab={tab} setTab={setTab} />
     </div>

@@ -21,9 +21,21 @@ export interface StripeKeys {
 
 export type StripeMode = 'test' | 'live' | 'unknown';
 
-/** A Stripe client with a sane network timeout + one retry (the SDK default is 80s). */
+/**
+ * A Stripe client tuned for a kiosk with a donor standing in front of it.
+ *
+ * A masjid's uplink is often the weak link in this whole system, and a single dropped request means
+ * "Sorry — couldn't start the payment" with someone's card already in their hand. ONE retry was not
+ * enough: intermittent "hit or miss" failures on ordinary one-off donations were the symptom.
+ *
+ * Three retries with a shorter per-attempt timeout is the better trade for this shape of failure —
+ * a blip costs a second, not a lost donation, and total worst-case latency is similar to the old
+ * single 20s attempt. The SDK only retries on network errors, 5xx and 429 (never on a card decline
+ * or a 4xx), and it attaches its own idempotency key to each retry, so a retried create can never
+ * charge twice.
+ */
 export function client(secretKey: string): Stripe {
-  return new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, timeout: 20_000, maxNetworkRetries: 1 });
+  return new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, timeout: 12_000, maxNetworkRetries: 3 });
 }
 
 const PK_RE = /^pk_(test|live)_[A-Za-z0-9]+$/;

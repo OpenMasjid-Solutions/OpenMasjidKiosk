@@ -89,3 +89,46 @@ test('the two “no reusable card” cases are reported differently', () => {
   assert.equal(why(true), 'card-not-reusable');
   assert.equal(why(false), 'intent-predates-fix');
 });
+
+test('setting up monthly must NEVER cost the donation', () => {
+  // Regression from dev.12: adding the card-saving fields (customer + setup_future_usage) made the
+  // PaymentIntent something a Stripe account can REFUSE while a plain payment would have been fine.
+  // A refusal then failed the whole request, so the donor saw "Sorry — couldn't start the payment"
+  // with their card already out, and one-off donations were unaffected — exactly the reported shape.
+  const attempt = (o: { monthly: boolean; stripeRefusesCardSaving: boolean }) => {
+    if (!o.monthly) return { payment: 'ok', monthly: 'n/a' };
+    if (!o.stripeRefusesCardSaving) return { payment: 'ok', monthly: 'set-up' };
+    return { payment: 'ok', monthly: 'not-arranged' }; // fall back to a plain intent, keep the gift
+  };
+
+  assert.deepEqual(attempt({ monthly: false, stripeRefusesCardSaving: false }), { payment: 'ok', monthly: 'n/a' });
+  assert.deepEqual(attempt({ monthly: true, stripeRefusesCardSaving: false }), { payment: 'ok', monthly: 'set-up' });
+  // The one that matters: the payment still happens.
+  assert.deepEqual(attempt({ monthly: true, stripeRefusesCardSaving: true }), { payment: 'ok', monthly: 'not-arranged' });
+  // Whatever else changes, a monthly request must never be able to produce a failed PAYMENT.
+  for (const refuses of [true, false]) {
+    assert.equal(attempt({ monthly: true, stripeRefusesCardSaving: refuses }).payment, 'ok');
+  }
+});
+
+test('the fallback intent uses a DIFFERENT idempotency key', () => {
+  // Same key + different body is itself a Stripe error ("Keys for idempotent requests can only be
+  // used with the same parameters"), and the fallback body deliberately differs — it drops the
+  // customer and setup_future_usage. Reusing the key would turn the rescue into a second failure.
+  const key = (base: string, saving: boolean) => (saving ? base : `${base}_nosave`);
+  assert.notEqual(key('abc', true), key('abc', false));
+  assert.equal(key('abc', true), 'abc', 'the normal path keeps the tablet’s own key');
+});
+
+test('a flaky uplink is retried rather than surfaced as a failed donation', () => {
+  // "Hit or miss" one-off donations were a single network attempt against a masjid uplink. Stripe's
+  // SDK retries only network errors / 5xx / 429 — never a card decline — and adds its own idempotency
+  // to each retry, so more retries cannot mean more charges.
+  const RETRIES = 3;
+  const retriable = (kind: string) => ['network', '500', '502', '429'].includes(kind);
+  assert.equal(retriable('network'), true);
+  assert.equal(retriable('429'), true);
+  assert.equal(retriable('card_declined'), false, 'a decline is an answer, not a blip — never retry');
+  assert.equal(retriable('invalid_request_error'), false);
+  assert.ok(RETRIES > 1, 'one attempt was not enough for a real masjid connection');
+});

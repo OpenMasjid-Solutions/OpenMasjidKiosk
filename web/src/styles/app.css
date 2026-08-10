@@ -580,6 +580,15 @@ button.status-pill:hover { filter: brightness(1.08); }
 .modal--form .modal-body { padding-inline-end: 0.4rem; } /* breathing room beside the scrollbar */
 .modal--form .field { margin-block-end: 1.1rem; }        /* more space between fields */
 
+/* The campaign editor as a full PAGE (its own browser tab) rather than a dialog. Same form, no window
+   chrome: it gets the page's own width and the page's own scrollbar, instead of a scrolling box inside
+   a scrolling box — which is what made a two-column form with a live kiosk preview cramped in a modal.
+   `max-height: none` is the load-bearing line; the modal caps its body height so the dialog can't grow
+   past the viewport, and that cap is exactly what must NOT apply here. */
+.ce-page { width: 100%; }
+.ce-page .modal-body { overflow: visible; max-height: none; padding-inline-end: 0; }
+.ce-page .field { margin-block-end: 1.1rem; }
+
 /* Two-pane layout: form (flexible) + sticky preview. Collapses to one column on a narrow screen, with
    the preview moved to the top so it's the first thing you see. */
 /* Preview across the FULL width at the top (both kiosk orientations, big), settings below. A landscape

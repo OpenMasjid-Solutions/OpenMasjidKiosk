@@ -1630,9 +1630,44 @@ async function main(): Promise<void> {
       // otherwise a card-present PaymentIntent the M2 reader collects. Both are verified server-side
       // in /complete before a donation is recorded. The tablet needs the publishable key for the
       // manual (Stripe SDK) form — it's public and safe to return.
-      const pi = manual
-        ? await createCardPaymentIntent(acct.keys.secretKey, piInput, idempotencyKey)
-        : await createCardPresentPaymentIntent(acct.keys.secretKey, piInput, idempotencyKey);
+      const create = (input: typeof piInput, key?: string) =>
+        manual
+          ? createCardPaymentIntent(acct.keys.secretKey, input, key)
+          : createCardPresentPaymentIntent(acct.keys.secretKey, input, key);
+      let pi: { id: string; clientSecret: string };
+      try {
+        pi = await create(piInput, idempotencyKey);
+      } catch (err) {
+        // SETTING UP MONTHLY MUST NEVER COST US THE DONATION. The card-saving fields (customer +
+        // setup_future_usage) are the only thing here that a Stripe account can refuse while a plain
+        // payment would have been accepted — an account without card-present saving enabled, a
+        // restricted key, a currency or reader configuration Stripe won't save against. Failing the
+        // whole request turns "we couldn't arrange monthly" into "Sorry — couldn't start the payment"
+        // with the donor's card already out, which is what happened after dev.12.
+        //
+        // So on a monthly, fall back ONCE to the ordinary intent. The gift goes through as a one-off,
+        // /complete reports that the standing order couldn't be created, and the real Stripe reason is
+        // in the device log instead of being swallowed by a dead-end error screen.
+        if (!monthlyCustomer) throw err;
+        const e = err as { code?: string; type?: string; message?: string };
+        const why = `${e.code ?? e.type ?? ''} ${e.message ?? ''}`.trim().slice(0, 300);
+        log.warn(`monthly intent rejected, retrying as one-off: ${why}`);
+        store.addLogs(d.id, [
+          { level: 'warn', event: 'monthly_intent_rejected', detail: `Stripe refused the card-saving payment; taking it as a one-off instead · ${why}` },
+        ]);
+        void fabricAlert(
+          'monthly-failed',
+          'Monthly donations are not being set up',
+          `Stripe refused to set up a repeat payment at ${d.name || 'the kiosk'}, so this gift was taken as a ONE-OFF instead. Donors choosing "Monthly" are being charged once and no standing order is created. Reason: ${why}`,
+          'warning',
+        ).catch(() => {});
+        // A DIFFERENT idempotency key: same key + different body is itself a Stripe error, and this
+        // body deliberately differs (no customer, no setup_future_usage).
+        pi = await create(
+          { ...piInput, customerId: undefined, setupFutureUsage: undefined },
+          idempotencyKey ? `${idempotencyKey}_nosave` : undefined,
+        );
+      }
       store.rememberPiAccount(pi.id, acct.id); // so /complete verifies with the same account
       return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, chargeMinor, coverFees, publishableKey: manual ? acct.keys.publishableKey : undefined } };
     } catch (err) {

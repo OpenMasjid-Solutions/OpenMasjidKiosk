@@ -4,6 +4,16 @@
 # Changelog
 
 ## Unreleased
+- **Fixed: payments could fail to start.** Monthly donations stopped starting at all, and one-off
+  donations failed now and then — "Sorry, we couldn't start the payment" with a donor's card already
+  out. Two causes, both fixed: setting up a monthly is now allowed to fail *without* taking the
+  donation down with it (the gift goes through as a one-off and you get told the plan wasn't created,
+  instead of nothing happening at all), and the kiosk now retries a payment that stumbles on a slow or
+  patchy internet connection rather than giving up on the first try. The retry can never double-charge.
+- **The campaign editor is now a full page in its own browser tab.** Editing an appeal opens a proper
+  page instead of a window-in-a-window, so the live kiosk preview and the settings both get real
+  room — and you can keep several appeals open side by side to compare them. The address is
+  shareable and survives a refresh. Saving or cancelling returns to the campaign list.
 - **Fixed: monthly donations took the money but never set up the standing order.** This is the real
   cause of the problem reported since 0.11.0-dev.2, and it affected **every** monthly gift on every
   card and every reader — not just some cards, as the kiosk had been reporting. Saving a donor's card

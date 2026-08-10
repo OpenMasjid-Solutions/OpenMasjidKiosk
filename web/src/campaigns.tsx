@@ -9,8 +9,7 @@
  *  live: kiosks pick the change up on their next check-in. Amounts are edited in whole/decimal
  *  currency units but stored as integer MINOR units. Non-optimistic — every change re-hydrates
  *  from the server's response. */
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
@@ -122,13 +121,19 @@ const CAMPAIGN_TABS: { id: CampaignTabId; label: string }[] = [
 ];
 
 // ── The section ─────────────────────────────────────────────────────────────────
+/**
+ * Link to the campaign editor's own page. Includes the current path so the href works when the panel
+ * is served under a `/<basePath>` prefix (OpenMasjidOS remote access) — a bare "#campaign/x" would
+ * resolve against the wrong root once opened in a fresh tab.
+ */
+export const campaignEditorHref = (id: string) =>
+  `${typeof location === 'undefined' ? '' : location.pathname}#campaign/${encodeURIComponent(id)}`;
+
 export function CampaignsSection() {
   const [data, setData] = useState<CampaignsData | null>(null);
   const [loadErr, setLoadErr] = useState('');
   const [actErr, setActErr] = useState('');
   const [pending, setPending] = useState(''); // id of the campaign a list action is mutating
-  // Editor: `undefined` = closed, `null` = a new campaign, a Campaign = editing that one.
-  const [editor, setEditor] = useState<Campaign | null | undefined>(undefined);
 
   const reload = useCallback(async () => {
     try {
@@ -181,9 +186,15 @@ export function CampaignsSection() {
             <p className="muted">Each appeal is its own giving screen (a tab on the kiosk). Your main campaign always shows first.</p>
           </div>
           {data && (
-            <button className="btn btn--primary btn--sm" style={{ marginInlineStart: 'auto' }} onClick={() => setEditor(null)}>
+            <a
+              className="btn btn--primary btn--sm"
+              style={{ marginInlineStart: 'auto' }}
+              href={campaignEditorHref('new')}
+              target="_blank"
+              rel="noopener"
+            >
               <Plus size={15} /> New campaign
-            </button>
+            </a>
           )}
         </div>
 
@@ -204,7 +215,7 @@ export function CampaignsSection() {
                   busy={pending === c.id}
                   canUp={!c.isMain && nonMain.length > 1 && nonMain[0].id !== c.id}
                   canDown={!c.isMain && nonMain.length > 1 && nonMain[nonMain.length - 1].id !== c.id}
-                  onEdit={() => setEditor(c)}
+                  editHref={campaignEditorHref(c.id)}
                   onMakeMain={() => void runAction(c.id, () => setMainCampaign(c.id))}
                   onMoveUp={() => move(c.id, -1)}
                   onMoveDown={() => move(c.id, 1)}
@@ -216,23 +227,6 @@ export function CampaignsSection() {
         )}
       </section>
 
-      {editor !== undefined && data && (
-        <CampaignEditor
-          key={editor ? editor.id : 'new'}
-          campaign={editor}
-          currency={data.currency}
-          accounts={data.accounts}
-          devices={data.devices}
-          primaryAccountId={data.primaryAccountId}
-          hasLocal={data.hasLocal}
-          footerText={data.footerText}
-          onClose={() => setEditor(undefined)}
-          onSaved={() => {
-            setEditor(undefined);
-            void reload();
-          }}
-        />
-      )}
     </>
   );
 }
@@ -521,7 +515,7 @@ function CampaignRow({
   busy,
   canUp,
   canDown,
-  onEdit,
+  editHref,
   onMakeMain,
   onMoveUp,
   onMoveDown,
@@ -531,7 +525,9 @@ function CampaignRow({
   busy: boolean;
   canUp: boolean;
   canDown: boolean;
-  onEdit: () => void;
+  /** Where the editor lives — a real link, so the browser can open it in a new tab (and the admin
+   *  can middle-click / open several appeals side by side). */
+  editHref: string;
   onMakeMain: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
@@ -573,9 +569,9 @@ function CampaignRow({
             <Star size={14} aria-hidden="true" /> Make main
           </button>
         )}
-        <button className="btn btn--ghost btn--sm" onClick={onEdit}>
+        <a className="btn btn--ghost btn--sm" href={editHref} target="_blank" rel="noopener">
           <Pencil size={14} aria-hidden="true" /> Edit
-        </button>
+        </a>
         {!c.isMain &&
           (confirming ? (
             <>
@@ -755,22 +751,25 @@ function CampaignEditor({
     }
   };
 
-  return createPortal(
-    <div className="modal-scrim" role="dialog" aria-modal="true" aria-label={editing ? 'Edit campaign' : 'New campaign'} onClick={onClose}>
-      <div className="modal modal--form glass-raised" onClick={(e) => e.stopPropagation()}>
-        <div className="tl-bar">
-          <button className="tl tl--red" onClick={onClose} aria-label="Close">
-            <X size={9} strokeWidth={3} />
-          </button>
-          <span className="tl tl--amber" aria-hidden="true" />
-        </div>
-        <div className="modal-head">
-          <div className="card-head__main">
-            <h3 className="section-title-inline">{editing ? 'Edit campaign' : 'New campaign'}</h3>
-            <p className="muted">A live preview of the giving screen your kiosks will show.</p>
-          </div>
-        </div>
+  const head = (
+    <div className="modal-head">
+      <div className="card-head__main">
+        <h3 className="section-title-inline">{editing ? 'Edit campaign' : 'New campaign'}</h3>
+        <p className="muted">A live preview of the giving screen your kiosks will show.</p>
+      </div>
+    </div>
+  );
 
+  // One frame now: the editor is always a page. It used to be a dialog over the campaign list, which
+  // meant a two-column form with a live kiosk preview scrolled inside a box inside a box.
+  const shell = (inner: ReactNode) => (
+    <div className="ce-page">
+      {head}
+      {inner}
+    </div>
+  );
+
+  return shell(
         <div className="modal-body">
           <div className="ce-grid">
             <aside className="ce-preview">
@@ -1139,10 +1138,72 @@ function CampaignEditor({
               </div>
             </div>
           </div>
-        </div>
-      </div>
-    </div>,
-    document.body,
+        </div>,
+  );
+}
+
+/**
+ * The campaign editor as a PAGE, for its own browser tab (`#campaign/<id>`, or `#campaign/new`).
+ *
+ * A new tab starts with no React state, so this loads the campaign list itself and picks its one
+ * campaign out of it — which also means the URL is shareable and survives a refresh, and an admin can
+ * keep several appeals open side by side while comparing them.
+ */
+export function CampaignEditorPage({ campaignId }: { campaignId: string }) {
+  const [data, setData] = useState<CampaignsData | null>(null);
+  const [err, setErr] = useState('');
+  const isNew = campaignId === 'new';
+
+  useEffect(() => {
+    let alive = true;
+    getCampaigns()
+      .then((d) => alive && setData(d))
+      .catch((e) => alive && setErr(errMsg(e)));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Closing or saving returns this tab to the campaign list. window.close() only works for a tab the
+  // page opened itself, so it is never relied on — navigating always works, whether this is a second
+  // tab or the admin followed the link in place.
+  const backToList = () => {
+    location.hash = 'giving';
+  };
+
+  if (err) {
+    return (
+      <section className="panel glass">
+        <p className="form-error">{err}</p>
+        <button className="btn btn--ghost btn--sm" onClick={backToList}>Back to campaigns</button>
+      </section>
+    );
+  }
+  if (!data) return <section className="panel glass"><p className="muted">Loading…</p></section>;
+
+  const campaign = isNew ? null : data.campaigns.find((c) => c.id === campaignId) ?? null;
+  if (!isNew && !campaign) {
+    return (
+      <section className="panel glass">
+        <p className="empty-title">That campaign no longer exists</p>
+        <p className="muted">It may have been deleted in another tab.</p>
+        <button className="btn btn--ghost btn--sm" onClick={backToList}>Back to campaigns</button>
+      </section>
+    );
+  }
+
+  return (
+    <CampaignEditor
+      campaign={campaign}
+      currency={data.currency}
+      accounts={data.accounts}
+      devices={data.devices}
+      primaryAccountId={data.primaryAccountId}
+      hasLocal={data.hasLocal}
+      footerText={data.footerText}
+      onClose={backToList}
+      onSaved={backToList}
+    />
   );
 }
 
