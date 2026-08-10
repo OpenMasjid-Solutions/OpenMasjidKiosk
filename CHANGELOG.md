@@ -4,6 +4,14 @@
 # Changelog
 
 ## Unreleased
+- **Fixed: a monthly donation could be missing from the Recurring page.** A donor's standing order
+  could show as **Monthly** in Donations while Recurring said "No recurring plans yet" — so there was
+  nothing to pause or cancel, even though Stripe was still collecting. The Recurring page used to
+  build its list by searching your Stripe account for subscriptions it recognised; if that search
+  couldn't reach the account, or the subscription had been edited in the Stripe dashboard, the plan
+  quietly disappeared from the one screen that can stop it. **Every monthly plan this app sets up is
+  now remembered here and always listed**, and if one can't be found in Stripe the page says so
+  plainly instead of showing an empty list. Plans set up before this release are picked up too.
 - **On-screen pointer to your card reader.** When a donor reaches the "Tap, insert or swipe" step, the
   kiosk can now show a **pulsing contactless symbol with arrows pointing to it**, on the side of the
   screen where your reader is mounted. When the payment goes through it turns **green**. Set it per

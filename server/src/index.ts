@@ -845,6 +845,12 @@ async function main(): Promise<void> {
 
   const SUB_ID_RE = /^sub_[A-Za-z0-9_]+$/;
 
+  /** How many locally-recorded plans the Recurring list will look up one-by-one when the account scan
+   *  didn't return them. Only ever spent on plans the scan MISSED, so on a healthy install it is zero
+   *  requests; the cap just stops a pathological data volume from turning one page load into a
+   *  thousand Stripe calls. Well above any real masjid's number of standing orders. */
+  const PLAN_RECORD_LOOKUP_CAP = 300;
+
   /** Every Stripe account a plan could live on: the primary, any campaign's own, and any we have
    *  recorded. Deduped by resolved account id — '' and 'local' can be the very same keys. */
   const planAccounts = async (): Promise<ResolvedAccount[]> => {
@@ -894,10 +900,14 @@ async function main(): Promise<void> {
   ): Promise<{ ok: true; value: T } | { ok: false; reason: 'not-found' | 'no-account' }> => {
     const accounts = await planAccounts();
     if (!accounts.length) return { ok: false, reason: 'no-account' };
-    const recorded = store.getPlanRecord(id)?.stripeAccountId ?? '';
+    const rec = store.getPlanRecord(id);
+    const recorded = rec?.stripeAccountId ?? '';
     const ordered = recorded ? [...accounts].sort((a, b) => (a.id === recorded ? -1 : b.id === recorded ? 1 : 0)) : accounts;
     for (const acct of ordered) {
-      const found = await retrievePlan(acct.keys.secretKey, id).catch(() => null);
+      // Holding a local row for this id is proof it is ours, so don't also demand the metadata tag —
+      // otherwise a plan the list can now show would still refuse to pause or cancel, which is the
+      // worse half of the same bug (an admin can see the standing order but not stop it).
+      const found = await retrievePlan(acct.keys.secretKey, id, { ownedLocally: !!rec }).catch(() => null);
       if (!found) continue;
       return { ok: true, value: await fn(acct.keys, acct.id) };
     }
@@ -924,6 +934,43 @@ async function main(): Promise<void> {
         log.warn(`plans list failed for one account: ${e instanceof Error ? e.message : 'error'}`);
       }
     }
+    // THE INDEX IS LOCAL, the state is live. Everything above discovers plans by SCANNING each Stripe
+    // account and keeping those tagged `app=kiosk` — good for finding a plan we have no row for (a
+    // restored volume, a rebuilt box), but it cannot be the index: a scan reaches an account we can
+    // resolve today, filters on metadata that must still be intact, and a full page cuts the oldest
+    // off the end. Miss on any of those and a live standing order silently disappears from the only
+    // screen that can cancel it, under the words "No recurring plans yet".
+    //
+    // So every plan WE recorded is also fetched directly by id — one call, no scan, no metadata gate
+    // (see retrievePlan's ownedLocally). This is how OpenMasjidDonations has always done it: the index
+    // is the local rows, Stripe supplies each plan's live state. In the healthy case the scan already
+    // returned these, so this loop makes no calls at all; it only spends a request on a plan the scan
+    // failed to bring back — exactly the case that was broken.
+    let unconfirmed = 0;
+    for (const rec of store.listPlanRecords().slice(0, PLAN_RECORD_LOOKUP_CAP)) {
+      if (byId.has(rec.subscriptionId)) continue;
+      const ordered = rec.stripeAccountId
+        ? [...accounts].sort((a, b) => (a.id === rec.stripeAccountId ? -1 : b.id === rec.stripeAccountId ? 1 : 0))
+        : accounts;
+      let found = false;
+      for (const acct of ordered) {
+        let sp: StripePlan | null = null;
+        try {
+          sp = await retrievePlan(acct.keys.secretKey, rec.subscriptionId, { ownedLocally: true });
+        } catch (e) {
+          // A bad key or an unreachable Stripe — NOT "this plan is gone". Counting it as missing would
+          // tell the admin a live plan had vanished; count it as a failure so the list says it's short.
+          failures++;
+          log.warn(`plan lookup failed for one account: ${e instanceof Error ? e.message : 'error'}`);
+          continue;
+        }
+        if (!sp) continue; // resource_missing on this account — try the next one
+        byId.set(sp.id, toPlan(sp, acct.id));
+        found = true;
+        break;
+      }
+      if (!found) unconfirmed++;
+    }
     // A capped invoice scan means every total on this screen is a floor. Mark them all partial so
     // the list uses the footnote it already has, rather than showing a confident number that is
     // quietly short — opening a plan re-totals it exactly.
@@ -937,9 +984,15 @@ async function main(): Promise<void> {
         ? 'Couldn’t reach Stripe just now — please try again.'
         : failures
           ? 'Some plans couldn’t be loaded — this list may be incomplete.'
-          : truncated
-            ? 'This Stripe account has more subscriptions than we can scan at once, so this list may be incomplete.'
-            : '';
+          : // We hold a row saying we set this plan up, and Stripe says it does not exist on any account
+            // we can reach. Never silent: either it was deleted in the dashboard (fine, but the admin
+            // should know the record is stale) or it lives on an account this app can no longer resolve,
+            // in which case a donor is still being charged somewhere this screen cannot show or cancel.
+            unconfirmed
+            ? `${unconfirmed} plan${unconfirmed === 1 ? '' : 's'} we set up couldn’t be found in Stripe — ${unconfirmed === 1 ? 'it was' : 'they were'} either cancelled in the Stripe dashboard, or ${unconfirmed === 1 ? 'it lives' : 'they live'} on a Stripe account this app can no longer reach.`
+            : truncated
+              ? 'This Stripe account has more subscriptions than we can scan at once, so this list may be incomplete.'
+              : '';
     return { data: { plans, unavailable } };
   });
 
@@ -1482,8 +1535,14 @@ async function main(): Promise<void> {
         monthlyProblem = 'Stripe returned no reusable card for this charge, so no standing order could be created. Some cards and networks cannot be reused.';
       }
       if (result.succeeded && wantsMonthly && result.generatedCard) {
+        // Two failure domains, deliberately not sharing a try. Stripe creating the plan and us writing
+        // our note of it fail for unrelated reasons and mean opposite things: the first means no plan
+        // exists, the second means one DOES exist that we have lost our pointer to. Sharing a catch
+        // reported a database error as "Stripe refused to create the standing order" — the exact
+        // opposite of the truth, sending an admin to look for a plan they'd have been told wasn't there.
+        let sub: Awaited<ReturnType<typeof createMonthlySubscription>> | null = null;
         try {
-          const sub = await createMonthlySubscription(acct.keys.secretKey, {
+          sub = await createMonthlySubscription(acct.keys.secretKey, {
             amountMinor: result.amountMinor,
             currency: result.currency,
             paymentMethod: result.generatedCard,
@@ -1496,29 +1555,46 @@ async function main(): Promise<void> {
             anchorSec: result.createdSec, // deterministic across retries (idempotency-safe)
             idempotencyKey: id,
           });
-          monthly = { requested: true, created: sub.created };
-          // Remember the half of this plan Stripe will never know: the campaign, the account it
-          // lives on, and THIS charge — month one is card-present, so it is not an invoice and
-          // adding up invoices alone under-reports what the plan has raised.
-          if (sub.subscriptionId) {
-            store.recordPlan({
-              subscriptionId: sub.subscriptionId,
-              customerId: sub.customerId,
-              stripeAccountId: acct.id,
-              campaignId: meta.campaignId || '',
-              campaignTitle: meta.campaign || '',
-              deviceId: d.id,
-              firstPaymentIntentId: id,
-              firstAmountMinor: result.amountMinor,
-              currency: result.currency,
-              donorName: meta.donorName || '',
-              donorEmail: meta.donorEmail || '',
-            });
-          }
         } catch (e) {
           const why = e instanceof Error ? e.message : String(e);
           log.warn('monthly subscription failed: ' + why);
           monthlyProblem = `Stripe refused to create the standing order: ${why.slice(0, 200)}`;
+        }
+        if (sub?.created) {
+          monthly = { requested: true, created: true };
+          // Remember the half of this plan Stripe will never know: the campaign, the account it
+          // lives on, and THIS charge — month one is card-present, so it is not an invoice and
+          // adding up invoices alone under-reports what the plan has raised.
+          if (sub.subscriptionId) {
+            try {
+              store.recordPlan({
+                subscriptionId: sub.subscriptionId,
+                customerId: sub.customerId,
+                stripeAccountId: acct.id,
+                campaignId: meta.campaignId || '',
+                campaignTitle: meta.campaign || '',
+                deviceId: d.id,
+                firstPaymentIntentId: id,
+                firstAmountMinor: result.amountMinor,
+                currency: result.currency,
+                donorName: meta.donorName || '',
+                donorEmail: meta.donorEmail || '',
+              });
+            } catch (e) {
+              // The donor HAS a standing order — this only lost our local note of it. Never silent and
+              // never dressed up as a Stripe failure: the plan still reaches the Recurring screen via
+              // the account scan, but the campaign, the account and month one are now unknown to us.
+              const why = e instanceof Error ? e.message : String(e);
+              log.error(`plan created at Stripe but not recorded locally (${sub.subscriptionId}): ${why}`);
+              store.addLogs(d.id, [
+                {
+                  level: 'warn',
+                  event: 'plan_record_failed',
+                  detail: `The monthly plan ${sub.subscriptionId} was created at Stripe but could not be saved here: ${why.slice(0, 200)}`,
+                },
+              ]);
+            }
+          }
         }
       }
       // A monthly gift the donor asked for and did NOT get is the one outcome here that must never

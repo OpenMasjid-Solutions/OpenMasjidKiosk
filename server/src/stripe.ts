@@ -618,7 +618,11 @@ export async function listPlans(secretKey: string, opts?: { limit?: number }): P
 /** One plan in full, or null when Stripe has never heard of it (or it isn't ours). A plan that has
  *  simply gone is a 404 for the admin; anything else — a bad key, Stripe unreachable — is thrown, so
  *  the caller can tell "deleted" from "we couldn't ask" and say so honestly. */
-export async function retrievePlan(secretKey: string, subscriptionId: string): Promise<StripePlan | null> {
+export async function retrievePlan(
+  secretKey: string,
+  subscriptionId: string,
+  opts?: { ownedLocally?: boolean },
+): Promise<StripePlan | null> {
   assertSubscriptionId(subscriptionId);
   const c = client(secretKey);
   let sub: Stripe.Subscription | null = null;
@@ -631,7 +635,13 @@ export async function retrievePlan(secretKey: string, subscriptionId: string): P
     if ((err as { code?: string }).code !== 'resource_missing') throw err;
   }
   if (!sub) return null;
-  if (((sub.metadata ?? {}) as Record<string, string>).app !== 'kiosk') return null;
+  // The metadata tag is how we DISCOVER our plans when scanning an account we may share with other
+  // apps — it is a discovery filter, not the definition of ownership. When the caller already holds a
+  // local `plans` row for this id, that row is the stronger proof: we wrote it when we created the
+  // subscription. Gating those on metadata too meant a plan created before the tag existed (added in
+  // v0.10.0 with the Recurring screen), or one whose metadata was edited in the dashboard, was
+  // invisible AND uncancellable — the screen said "no recurring plans" while Stripe kept billing.
+  if (!opts?.ownedLocally && ((sub.metadata ?? {}) as Record<string, string>).app !== 'kiosk') return null;
   return toPlan(sub, await paidTally(c, sub.id));
 }
 
