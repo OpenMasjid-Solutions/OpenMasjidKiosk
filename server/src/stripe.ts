@@ -178,6 +178,50 @@ export interface CreatePaymentIntentInput {
   description?: string;
   receiptEmail?: string;
   metadata?: Record<string, string>;
+  /**
+   * The Customer this payment belongs to. Only set for a MONTHLY donation, where the card has to
+   * survive the transaction — see [setupFutureUsage].
+   */
+  customerId?: string;
+  /**
+   * SAVE THE CARD FOR LATER. Required for monthly, and the reason monthly never once worked:
+   *
+   * Stripe only produces a reusable payment method from a charge when the PaymentIntent asked for
+   * one. For `card_present` that reusable method is `payment_method_details.card_present
+   * .generated_card`, and Stripe's own API docs are explicit that it exists only "if setup_future_usage
+   * is set". We were reading generated_card without ever setting it, so it was ALWAYS null — every
+   * monthly donation took the money and then found no card to build the standing order from.
+   *
+   * For keyed entry there is no generated_card at all: the PaymentIntent's own `payment_method` is
+   * already reusable, and setup_future_usage is what attaches it to the customer.
+   */
+  setupFutureUsage?: 'off_session';
+}
+
+/**
+ * Create the Stripe Customer a monthly donation will belong to, BEFORE the payment.
+ *
+ * Up-front because that is what `setup_future_usage` needs: Stripe attaches the saved card (the
+ * card-present `generated_card`, or the keyed PaymentMethod) to the customer named ON THE
+ * PaymentIntent, at the moment the charge succeeds. Creating the customer afterwards, as we used to,
+ * leaves nothing for Stripe to attach the card to.
+ *
+ * Monthly always has a name and an email (enforced on the tablet AND server-side), so this is never
+ * an anonymous customer.
+ */
+export async function createDonorCustomer(
+  secretKey: string,
+  input: { name?: string; email?: string; deviceId?: string; campaignId?: string; idempotencyKey?: string },
+): Promise<string> {
+  const customer = await client(secretKey).customers.create(
+    {
+      name: input.name || undefined,
+      email: input.email || undefined,
+      metadata: { app: 'kiosk', deviceId: input.deviceId || '', campaignId: input.campaignId || '' },
+    },
+    input.idempotencyKey ? { idempotencyKey: `${input.idempotencyKey}_cust` } : undefined,
+  );
+  return customer.id;
 }
 
 /** Create a card-present PaymentIntent for the reader to collect + confirm. Manual capture:
@@ -197,6 +241,10 @@ export async function createCardPresentPaymentIntent(
       capture_method: 'manual',
       description: input.description || undefined,
       receipt_email: input.receiptEmail || undefined,
+      // Monthly only. Together these are what make Stripe mint `generated_card` on the resulting
+      // charge and attach it to this customer — the card the standing order is then built from.
+      ...(input.customerId ? { customer: input.customerId } : {}),
+      ...(input.setupFutureUsage ? { setup_future_usage: input.setupFutureUsage } : {}),
       metadata: input.metadata,
     },
     idempotencyKey ? { idempotencyKey } : undefined,
@@ -225,6 +273,11 @@ export async function createCardPaymentIntent(
       payment_method_types: ['card'],
       description: input.description || undefined,
       receipt_email: input.receiptEmail || undefined,
+      // Monthly only. There is no `generated_card` for a keyed card — the PaymentIntent's own
+      // payment_method IS the reusable one, and setup_future_usage is what attaches it to the
+      // customer so a subscription can charge it later.
+      ...(input.customerId ? { customer: input.customerId } : {}),
+      ...(input.setupFutureUsage ? { setup_future_usage: input.setupFutureUsage } : {}),
       metadata: input.metadata,
     },
     idempotencyKey ? { idempotencyKey } : undefined,
@@ -240,6 +293,10 @@ export interface CompletedPaymentIntent {
   chargeId?: string;
   /** The reusable PaymentMethod Stripe derives from a card-present charge (monthly, slice 7). */
   generatedCard?: string;
+  /** The PaymentIntent's own payment method — the reusable one for a KEYED card. */
+  paymentMethodId?: string;
+  /** The customer the PaymentIntent was created against (monthly only). */
+  customerId?: string;
   /** Card brand + last 4 from the charge (for the emailed receipt's "payment method" line). */
   cardBrand?: string;
   cardLast4?: string;
@@ -272,6 +329,12 @@ export async function completeCardPresentPaymentIntent(secretKey: string, id: st
     currency: pi.currency.toUpperCase(),
     chargeId: charge?.id,
     generatedCard: cardPresent?.generated_card ?? undefined,
+    // The KEYED-entry equivalent of generated_card. A typed card has no generated_card — the
+    // PaymentIntent's own payment_method is already reusable, and setup_future_usage attached it to
+    // the customer. Without this, monthly could never work by typed card even once generated_card
+    // was fixed, which is half of "it can't set up monthly anywhere".
+    paymentMethodId: typeof pi.payment_method === 'string' ? pi.payment_method : pi.payment_method?.id,
+    customerId: typeof pi.customer === 'string' ? pi.customer : pi.customer?.id,
     cardBrand: cardPresent?.brand ?? card?.brand ?? undefined,
     cardLast4: cardPresent?.last4 ?? card?.last4 ?? undefined,
     receiptUrl: charge?.receipt_url ?? undefined,
@@ -354,8 +417,14 @@ export async function refundPayment(
 export interface MonthlySubscriptionInput {
   amountMinor: number;
   currency: string;
-  /** The reusable PaymentMethod Stripe derived from the card-present charge (generated_card). */
+  /** The reusable PaymentMethod: `generated_card` for a reader tap, or the PaymentIntent's own
+   *  payment_method for a keyed card. Either way it exists only because the PaymentIntent was created
+   *  with setup_future_usage. */
   paymentMethod: string;
+  /** The Customer created BEFORE the payment (see createDonorCustomer) that Stripe attached the saved
+   *  card to. Empty falls back to creating one here — the pre-setup_future_usage behaviour, kept so an
+   *  in-flight PaymentIntent from an older build can still complete. */
+  customerId?: string;
   name?: string;
   email?: string;
   /** Human product name shown on the donor's Stripe invoices, e.g. "Monthly donation — Al-Noor". */
@@ -392,16 +461,33 @@ export interface MonthlySubscriptionResult {
 export async function createMonthlySubscription(secretKey: string, input: MonthlySubscriptionInput): Promise<MonthlySubscriptionResult> {
   const c = client(secretKey);
   const idem = input.idempotencyKey;
-  const customer = await c.customers.create(
-    {
-      name: input.name || undefined,
-      email: input.email || undefined,
-      payment_method: input.paymentMethod, // attaches the generated_card to the customer
-      invoice_settings: { default_payment_method: input.paymentMethod },
-      metadata: { app: 'kiosk', deviceId: input.deviceId || '' },
-    },
-    idem ? { idempotencyKey: `${idem}_cust` } : undefined,
-  );
+  // The customer normally already exists: monthly creates it BEFORE the payment so that
+  // setup_future_usage has something to attach the saved card to (see createDonorCustomer). Reuse it
+  // — creating a second one here would leave the saved card on one customer and the subscription
+  // billing another, which is a subscription that can never collect.
+  const existing = (input.customerId ?? '').trim();
+  const customer = existing
+    ? await (async () => {
+        // The card is already attached by setup_future_usage; attach again only as a no-op safety net
+        // for an odd flow, ignoring the "already attached" error. Then make it the DEFAULT, which is
+        // what the subscription's invoices actually charge.
+        await c.paymentMethods.attach(input.paymentMethod, { customer: existing }).catch(() => undefined);
+        return c.customers.update(existing, {
+          name: input.name || undefined,
+          email: input.email || undefined,
+          invoice_settings: { default_payment_method: input.paymentMethod },
+        });
+      })()
+    : await c.customers.create(
+        {
+          name: input.name || undefined,
+          email: input.email || undefined,
+          payment_method: input.paymentMethod, // attaches the generated_card to the customer
+          invoice_settings: { default_payment_method: input.paymentMethod },
+          metadata: { app: 'kiosk', deviceId: input.deviceId || '' },
+        },
+        idem ? { idempotencyKey: `${idem}_cust` } : undefined,
+      );
   // A recurring monthly Price for this amount. Subscription `price_data` requires an existing
   // product id, whereas `prices.create` accepts an inline `product_data` (auto-creating the
   // product) — account-agnostic and idempotent, so we build the price here then subscribe to it.

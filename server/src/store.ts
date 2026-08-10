@@ -380,7 +380,12 @@ export function normalizeOrientation(v: unknown): DeviceOrientation {
 
 /** Valid NFC-reader sides — where the reader sits relative to the kiosk's LOGICAL landscape screen,
  *  so it can point donors to it. 'off' = show no hint (the default; existing kiosks are unchanged). */
-export const DEVICE_NFC_SIDES = ['off', 'left', 'right'] as const;
+// Where the reader physically sits, relative to the giving screen as the donor sees it. Left/right
+// suit a landscape mount; TOP/BOTTOM exist because a portrait-mounted tablet usually has the reader
+// above or below the screen, and "left" on a tall narrow screen points at a bezel nobody's card is
+// near. The kiosk lays the hint out along the matching axis — arrows march sideways for left/right
+// and up/down for top/bottom.
+export const DEVICE_NFC_SIDES = ['off', 'left', 'right', 'top', 'bottom'] as const;
 export type DeviceNfcSide = (typeof DEVICE_NFC_SIDES)[number];
 
 /** Normalise any stored/incoming NFC side to a valid value (default 'off'). */

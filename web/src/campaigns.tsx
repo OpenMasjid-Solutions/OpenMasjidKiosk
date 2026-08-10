@@ -347,7 +347,7 @@ function GlobalSettingsCard() {
             reader connected. (Your Stripe account must have online card payments enabled.)
           </p>
 
-          <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
+          <div className="row row--top" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
             <PolicyField id="g-name" label="Ask for a name" value={namePolicy} onChange={setNamePolicy} />
             <PolicyField id="g-email" label="Ask for an email" value={emailPolicy} onChange={setEmailPolicy} hint="An email lets Stripe send a receipt." />
           </div>
@@ -366,7 +366,7 @@ function GlobalSettingsCard() {
               cheaper way to give (like a bank transfer or a Zelle QR code) before the card — the donor
               can still choose to pay by card.
             </p>
-            <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap', marginBlockStart: '0.4rem' }}>
+            <div className="row row--top" style={{ gap: '0.8rem', flexWrap: 'wrap', marginBlockStart: '0.4rem' }}>
               <div className="field" style={{ flex: 1, minWidth: '10rem' }}>
                 <label className="label" htmlFor="g-large">Show it at or above <span className="faint">({currency})</span></label>
                 <div className="preset-input">
@@ -930,7 +930,7 @@ function CampaignEditor({
 
                     <Toggle label="Allow donors to enter their own amount" hint="Shows a “Choose your own amount” number pad on the kiosk." checked={allowCustom} onChange={setAllowCustom} />
                     {allowCustom && (
-                      <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
+                      <div className="row row--top" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
                         <div className="field" style={{ flex: 1, minWidth: '8rem' }}>
                           <label className="label" htmlFor="c-min">Minimum custom amount</label>
                           <input id="c-min" className="input" value={customMin} inputMode="decimal" onChange={(e) => setCustomMin(e.target.value.replace(/[^\d.]/g, ''))} />

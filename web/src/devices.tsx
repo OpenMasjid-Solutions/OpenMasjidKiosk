@@ -565,7 +565,7 @@ function DeviceRow({ device, campaigns, serverVersion, onChange }: { device: Dev
             <option value="270">270° (−90°) ↺</option>
           </select>
         </label>
-        <label className="device-orient" title="Which side of the tablet the card reader sits on. The kiosk points donors to it during payment. Left/right are in landscape; on a portrait mount they become top/bottom.">
+        <label className="device-orient" title="Which side of the giving screen the card reader sits on, as the donor sees it. The kiosk points donors to it during payment — arrows march sideways for left/right, and up/down for top/bottom (usually what a portrait-mounted tablet needs).">
           Reader side:
           <select
             className="device-orient-select"
@@ -575,6 +575,8 @@ function DeviceRow({ device, campaigns, serverVersion, onChange }: { device: Dev
             <option value="off">No hint</option>
             <option value="left">Left ←</option>
             <option value="right">Right →</option>
+            <option value="top">Top ↑</option>
+            <option value="bottom">Bottom ↓</option>
           </select>
         </label>
         {outOfDate && (

@@ -116,12 +116,12 @@
     <string name="accessibility_service_description">Optional. While the kiosk is locked, this closes the notification shade / quick-settings the moment it is pulled down, so a donor can\'t reach settings from it. It reads no screen content and does nothing when the kiosk is unlocked (maintenance) or unpaired. Turn it on for the strongest lock without a computer.</string>
 
     <!-- Kiosk mode banner -->
-    <string name="kiosk_pinning_hint">Once the list above is green this tablet is locked down without a computer: the kiosk pins itself, so the notification shade and the Home and Recents buttons are all blocked, and leaving needs the tablet\'s own screen lock. Set a screen lock (PIN or pattern) as well, and turn ON \"Ask for PIN before unpinning\" in Settings → Security — without those two, anyone can unpin by holding Back and Recents together. An even stronger, fully un-leavable lock is available with the one-time device-owner setup in docs/TABLET_SETUP.md, but it is optional.</string>
+    <string name="kiosk_pinning_hint">Once the list above is green this tablet is set up without needing a computer: the kiosk is the Home app, so Home returns to the giving screen, and it reopens itself if anything sends it to the background. Hide the navigation bar in the tablet\'s own Settings (see below) to take away the Back, Home and Recents buttons, and turn on the shade lock above to keep the notification shade shut. An even stronger, fully un-leavable lock is available with the one-time device-owner setup in docs/TABLET_SETUP.md, but it is optional.</string>
 
     <!-- Permissions &amp; lockdown checklist (maintenance screen) -->
     <string name="maintenance_permissions_title">Permissions &amp; lockdown</string>
     <string name="perm_summary">%1$d of %2$d set</string>
-    <string name="perm_intro">Everything this kiosk asks the tablet for. Tap a button and Android opens the right dialog or settings page — the kiosk unpins itself first, then re-locks as soon as you come back.</string>
+    <string name="perm_intro">Everything this kiosk asks the tablet for. Tap a button and Android opens the right dialog or settings page, then the kiosk carries on where it left off when you come back.</string>
     <string name="perm_state_set">Set</string>
     <string name="perm_state_missing">Not set</string>
     <string name="perm_state_unknown">Can\'t tell</string>
@@ -148,8 +148,6 @@
     <string name="perm_home_title">Home app</string>
     <string name="perm_home_detail">Makes this the tablet\'s Home app, so pressing Home returns to the giving screen instead of an Android desktop, and the kiosk starts itself again after a reboot or a power cut.</string>
 
-    <string name="perm_pinning_title">Screen pinning</string>
-    <string name="perm_pinning_detail">In Settings → Security turn on \"Screen pinning\" (some tablets say \"App pinning\"). The kiosk then pins itself whenever it is showing the giving screen, which blocks the notification shade, Home and Recents.</string>
 
     <string name="perm_shade_title">Shade lock (Accessibility)</string>
     <string name="perm_shade_detail">Optional extra: shuts the notification shade again if it is ever pulled down. Enable \"OpenMasjid Kiosk — shade lock\" under Settings → Accessibility → Installed apps.</string>
@@ -159,6 +157,6 @@
     <string name="perm_owner_detail_off">Not set up, and not required — everything above works without it. This is the strongest lock and it removes the status bar entirely, but it needs a one-time setup from a computer on a factory-reset tablet. See docs/TABLET_SETUP.md.</string>
 
     <!-- The two system bars Android will not let an ordinary app remove. -->
-    <string name="kiosk_bars_note">To finish locking the tablet down, hide the system bars in the tablet\'s own Settings. The wording differs by manufacturer:\n\n• BOTTOM NAVIGATION BAR — Settings → Display → Navigation bar (or System → Gestures), and choose \"Gesture navigation\" / \"Swipe gestures\". That removes the Back, Home and Recents buttons. Some tablets also offer a small pin icon that keeps the bar hidden until you swipe.\n\n• TOP NOTIFICATION BAR — Android gives an ordinary app no way to remove this, and no tablet setting hides it. Screen pinning blocks the shade while the kiosk is running, and the optional shade lock above closes it if it ever opens. Removing the bar completely needs the one-time device-owner setup in docs/TABLET_SETUP.md, which the kiosk then does for you automatically.</string>
+    <string name="kiosk_bars_note">To finish locking the tablet down, hide the system bars in the tablet\'s own Settings. The wording differs by manufacturer:\n\n• BOTTOM NAVIGATION BAR — Settings → Display → Navigation bar (or System → Gestures), and choose \"Gesture navigation\" / \"Swipe gestures\". That removes the Back, Home and Recents buttons. Some tablets also offer a small pin icon that keeps the bar hidden until you swipe.\n\n• TOP NOTIFICATION BAR — Android gives an ordinary app no way to remove this, and no tablet setting hides it. The optional shade lock above closes it the moment it is pulled down. Removing the bar completely needs the one-time device-owner setup in docs/TABLET_SETUP.md, which the kiosk then does for you automatically.</string>
     <string name="kiosk_bars_note_owner">This tablet is device owner, so the kiosk already removes the status bar and blocks Home and Recents itself whenever the giving screen is showing — there is nothing to turn off in Settings. If you would also like the navigation bar gone outside the kiosk, set Settings → Display → Navigation bar to \"Gesture navigation\".</string>
 </resources>

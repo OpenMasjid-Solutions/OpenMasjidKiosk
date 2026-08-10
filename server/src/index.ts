@@ -35,6 +35,7 @@ import {
   cancelPlan,
   createConnectionToken,
   createLocation,
+  createDonorCustomer,
   createMonthlySubscription,
   listLocations,
   listPlanInvoices,
@@ -1574,7 +1575,7 @@ async function main(): Promise<void> {
     // must actually be sendable. The "never zero receipts" guarantee now lives at /complete, where a
     // permanently failed branded send hands the job back to Stripe.
     const branded = looksLikeEmail(donorEmail) && store.getEmailReceipt().enabled && ssoConfigured() && emailCanSend();
-    const metadata = {
+    const metadata: Record<string, string> = {
       app: 'kiosk',
       deviceId: d.id,
       campaignId: campaign.id,
@@ -1589,6 +1590,29 @@ async function main(): Promise<void> {
       donorEmail,
       brandedReceipt: branded ? '1' : '0',
     };
+    // MONTHLY NEEDS THE CARD TO SURVIVE THE PAYMENT, and that has to be arranged BEFORE it, not after.
+    // Stripe only saves a card when the PaymentIntent asks (`setup_future_usage`), and it attaches the
+    // saved card to the customer named ON THAT INTENT. We used to ask for neither and then look for
+    // `generated_card` afterwards — which is why every monthly donation took the money and then found
+    // no card to build the plan from. If making the customer fails we still take the donation as a
+    // one-off rather than losing the gift; /complete then reports that monthly couldn't be arranged.
+    let monthlyCustomer = '';
+    if (monthly) {
+      try {
+        monthlyCustomer = await createDonorCustomer(acct.keys.secretKey, {
+          name: donorName || undefined,
+          email: donorEmail || undefined,
+          deviceId: d.id,
+          campaignId: campaign.id,
+          idempotencyKey,
+        });
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err);
+        log.warn(`monthly customer create failed: ${why}`);
+        store.addLogs(d.id, [{ level: 'warn', event: 'monthly_customer_failed', detail: why.slice(0, 200) }]);
+      }
+    }
+    if (monthlyCustomer) metadata.monthlyCustomer = monthlyCustomer;
     const piInput = {
       amountMinor: chargeMinor,
       currency,
@@ -1596,6 +1620,9 @@ async function main(): Promise<void> {
       // Stripe emails its built-in receipt on success (if enabled) — UNLESS we're sending our own
       // branded one, in which case we suppress Stripe's so the donor doesn't get two.
       receiptEmail: branded ? undefined : donorEmail || undefined,
+      // Only ever set for monthly. A one-off donation stays anonymous to Stripe and saves nothing.
+      customerId: monthlyCustomer || undefined,
+      setupFutureUsage: monthlyCustomer ? ('off_session' as const) : undefined,
       metadata,
     };
     try {
@@ -1657,12 +1684,22 @@ async function main(): Promise<void> {
       // branch reached only the container log — so an admin saw a donation badged "Monthly", no plan
       // on the Recurring screen, and nothing anywhere saying why.
       let monthlyProblem = '';
-      if (result.succeeded && wantsMonthly && !result.generatedCard) {
-        // Stripe returns no reusable card for some cards and networks (and for anything that isn't a
-        // card-present charge). The gift stands; the standing order cannot be created from it.
-        monthlyProblem = 'Stripe returned no reusable card for this charge, so no standing order could be created. Some cards and networks cannot be reused.';
+      // The reusable card, whichever way it was taken: `generated_card` for a reader tap, or the
+      // PaymentIntent's own payment_method for a keyed card (which has no generated_card at all).
+      // Both exist only because the intent was created with setup_future_usage against a customer.
+      const reusableCard = result.generatedCard || result.paymentMethodId || '';
+      // Prefer the customer Stripe actually recorded on the PaymentIntent over our metadata copy —
+      // metadata can be stale on a retried/duplicated intent, the PI cannot.
+      const monthlyCustomer = result.customerId || meta.monthlyCustomer || '';
+      if (result.succeeded && wantsMonthly && !reusableCard) {
+        // Stripe returns no reusable card for some cards and networks (notably digital wallets, which
+        // are excluded from generated_card by design). The gift stands; the standing order cannot be
+        // created from it. Say which half is missing — this line is the whole diagnosis in the log.
+        monthlyProblem = monthlyCustomer
+          ? 'Stripe saved no reusable card for this charge, so no standing order could be created. Some cards, networks and digital wallets cannot be reused.'
+          : 'This donation was taken before the card could be set up for reuse, so no standing order could be created. If the tablet was mid-donation during an update, the next monthly gift will work.';
       }
-      if (result.succeeded && wantsMonthly && result.generatedCard) {
+      if (result.succeeded && wantsMonthly && reusableCard) {
         // Two failure domains, deliberately not sharing a try. Stripe creating the plan and us writing
         // our note of it fail for unrelated reasons and mean opposite things: the first means no plan
         // exists, the second means one DOES exist that we have lost our pointer to. Sharing a catch
@@ -1673,7 +1710,8 @@ async function main(): Promise<void> {
           sub = await createMonthlySubscription(acct.keys.secretKey, {
             amountMinor: result.amountMinor,
             currency: result.currency,
-            paymentMethod: result.generatedCard,
+            paymentMethod: reusableCard,
+            customerId: monthlyCustomer,
             name: meta.donorName || undefined,
             email: meta.donorEmail || undefined,
             productName: `Monthly donation — ${campaignLabel}`,

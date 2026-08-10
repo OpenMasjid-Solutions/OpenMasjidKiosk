@@ -4,6 +4,32 @@
 # Changelog
 
 ## Unreleased
+- **Fixed: monthly donations took the money but never set up the standing order.** This is the real
+  cause of the problem reported since 0.11.0-dev.2, and it affected **every** monthly gift on every
+  card and every reader — not just some cards, as the kiosk had been reporting. Saving a donor's card
+  for next month has to be requested when the payment is set up, and we never asked; we then looked
+  for the saved card afterwards and of course never found one. The kiosk now asks properly, and sets
+  the donor up with Stripe **before** taking the payment so there is something for the card to be
+  saved against. Typed-in cards work too — they were a separate gap in the same feature. Refunds of a
+  monthly still don't cancel it; use the Recurring page for that.
+- **The kiosk no longer uses Android's screen pinning.** It was only ever there to block the Back,
+  Home and Recents buttons, which hiding the navigation bar does properly — and it quietly broke
+  everything else, because Android forbids a pinned app from opening any other app and says nothing
+  when it refuses. Android Settings, the permission buttons and the self-updater all appeared dead.
+  The tablet is still held on the giving screen by being the Home app, by reopening itself if it is
+  sent to the background, by the optional shade lock, and by the bars staying hidden. Nothing to
+  change on your tablets; the "Screen pinning" item has simply gone from the setup checklist.
+  **(Requires updating the tablet app.)**
+- **Updating the tablet app no longer needs a browser.** "Update app" downloads the new version over
+  the kiosk's own connection and hands it straight to Android. The first time, Android asks you to
+  allow installs from the kiosk — granting it and coming back now **finishes the update** instead of
+  making you download it again.
+- **Reader hint now works on portrait mounts.** "Reader side" adds **Top** and **Bottom** alongside
+  Left and Right, and the pointer lays itself out along whichever axis you pick — arrows marching up
+  or down for a reader above or below the screen, which is where a portrait-mounted tablet usually
+  has it. Left/Right are unchanged.
+- **Fixed: "Ask for a name" and "Ask for an email" didn't line up.** The email field's helper line
+  made it taller, which nudged its neighbour out of alignment. Fields in a row now share a top edge.
 - **Fixed: "Open Android Settings" didn't work on a locked-down kiosk.** From the tablet's
   maintenance screen, opening Android Settings (and the permission-checklist buttons, and the "allow
   installs" screen during an update) could do nothing at all, or flash Settings up for a moment before

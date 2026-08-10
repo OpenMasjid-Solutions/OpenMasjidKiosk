@@ -43,16 +43,20 @@ down it until it reads *"n of n set"*. It covers:
 | Location turned on | The tablet's own location switch, needed alongside the permission. |
 | Bluetooth turned on | Only for a wireless reader. |
 | Home app | Home returns to the giving screen, and the kiosk restarts itself after a reboot. |
-| Screen pinning | The kiosk then pins itself: shade, Home and Recents all blocked. |
 | Shade lock (Accessibility) | Optional backstop that shuts the notification shade if it's ever pulled down. |
 | Full kiosk lock (device owner) | Status only — see the ADB step below. Not required. |
 
-Each button **unpins the kiosk first** and re-locks the moment you come back, because Android
-won't show a permission dialog or open a settings screen over a pinned app.
+Each button steps the kiosk out of the way, opens the right screen, and picks the kiosk back up
+when you return — so nothing has to be done twice. If a button needs a permission you haven't
+granted yet (self-update is the usual one), granting it and coming back finishes the job rather
+than starting over.
 
-Two things the checklist can't do for you, both in **Settings → Security**: set a **screen
-lock** (PIN or pattern), and turn on **"Ask for PIN before unpinning"**. Without those, anyone
-can unpin by holding Back and Recents together.
+**The app no longer uses Android's screen pinning.** It was only ever there to block the Back,
+Home and Recents buttons, which hiding the navigation bar (below) does properly. Pinning also
+stopped a pinned app from opening *any* other app, silently — so Android Settings, the permission
+prompts and the self-updater all looked broken from the tablet. If you previously turned on
+"Screen pinning" or "Ask for PIN before unpinning" in **Settings → Security**, you can leave them
+on or off; the kiosk ignores both.
 
 **Hiding the two system bars.** The maintenance screen states this too:
 
@@ -60,8 +64,7 @@ can unpin by holding Back and Recents together.
   → choose **Gesture navigation** / **Swipe gestures**. That removes the Back, Home and Recents
   buttons. Naming is OEM-specific; some tablets add a pin icon that keeps the bar hidden.
 - **Top notification bar** — Android gives an ordinary app **no way** to remove this, and no
-  tablet setting hides it. Screen pinning blocks the shade while the kiosk runs, and the shade
-  lock closes it if it opens. Removing the bar outright needs **device owner** (below), which the
+  tablet setting hides it. The shade lock closes it the moment it is pulled down. Removing the bar outright needs **device owner** (below), which the
   kiosk then does for you automatically.
 
 That's a strong, self-contained kiosk with nothing but the tablet.
@@ -80,7 +83,8 @@ with **no Google or other accounts added**:
 adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver
 ```
 
-The app then enters true **Lock Task Mode** automatically (no screen-pinning setup needed).
+The app then enters true **Lock Task Mode** automatically — the only mode that makes the
+notification shade genuinely unreachable.
 This is optional — the soft-kiosk steps above are enough for most masjids.
 
 ## 4. Keep it running

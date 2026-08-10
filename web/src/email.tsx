@@ -269,7 +269,7 @@ export function EmailReceiptSection() {
               <label className="label" htmlFor="er-cemail">Contact email <span className="faint">(optional)</span></label>
               <input id="er-cemail" className="input" value={cEmail} maxLength={200} placeholder="info@yourmasjid.org" onChange={(e) => setCEmail(e.target.value)} />
             </div>
-            <div className="row" style={{ gap: '0.6rem', flexWrap: 'wrap' }}>
+            <div className="row row--top" style={{ gap: '0.6rem', flexWrap: 'wrap' }}>
               <div className="field" style={{ flex: 1, minWidth: '10rem' }}>
                 <label className="label" htmlFor="er-cphone">Contact phone <span className="faint">(optional)</span></label>
                 <input id="er-cphone" className="input" value={cPhone} maxLength={60} onChange={(e) => setCPhone(e.target.value)} />

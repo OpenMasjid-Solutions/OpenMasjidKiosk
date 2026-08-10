@@ -16,6 +16,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
@@ -41,9 +42,14 @@ import kotlin.math.sin
  * pulsing contactless (NFC) symbol pinned to the reader's side of the screen, with arrows marching
  * toward it. When the payment clears the symbol turns green and the arrows fade away.
  *
- * `side` is the reader's position in the app's LOGICAL landscape space ("left" / "right" / "off").
- * The whole kiosk UI is drawn inside [RotatedRoot], so on a portrait mount left/right naturally become
- * top/bottom — the admin sets it once per tablet and it follows the mount.
+ * `side` is where the reader physically sits, as the donor sees the giving screen: "left", "right",
+ * "top", "bottom", or "off". Set once per tablet in Admin → Devices.
+ *
+ * TOP/BOTTOM exist for portrait mounts. The claim that rotation made left/right "naturally become"
+ * top/bottom was wrong: [RotatedRoot] rotates the whole UI by the angle the admin chose, so on a
+ * tablet that is simply portrait (no rotation applied) "left" stays the left of a tall narrow screen —
+ * a bezel no donor's hand goes near, while the reader is above or below. So the axis is chosen
+ * explicitly instead of inferred, and the hint lays itself out along it.
  *
  * Called from within a full-screen Box (see GivingHome); it aligns itself to the chosen edge.
  */
@@ -55,34 +61,67 @@ fun BoxScope.NfcReaderHint(
     accent: Color,
     modifier: Modifier = Modifier,
 ) {
-    val onLeft = side == "left"
-    val show = (onLeft || side == "right") && (active || cleared)
-    if (!show) return
-
+    if (!(active || cleared)) return
     val color = if (cleared) SuccessDark else accent
-    Row(
-        modifier = modifier
-            .align(if (onLeft) Alignment.CenterStart else Alignment.CenterEnd)
-            .padding(horizontal = 18.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        // Symbol hugs the edge; arrows sit inboard of it and point back toward it.
-        if (onLeft) {
-            NfcSymbol(color = color, faceInboardLeft = true, pulsing = !cleared)
-            MarchingArrows(pointLeft = true, color = color, active = active && !cleared)
-        } else {
-            MarchingArrows(pointLeft = false, color = color, active = active && !cleared)
-            NfcSymbol(color = color, faceInboardLeft = false, pulsing = !cleared)
+    val pulsing = !cleared
+    val arrowsOn = active && !cleared
+
+    // A portrait-mounted tablet almost always has its reader ABOVE or BELOW the screen, not beside it:
+    // on a tall narrow screen "left" points at a bezel no donor's hand is near. So top/bottom lay the
+    // whole hint out on the VERTICAL axis — symbol hugging the top or bottom edge, chevrons marching
+    // up or down toward it — rather than rotating a sideways arrangement into a space too narrow for it.
+    when (side) {
+        "left", "right" -> {
+            val onLeft = side == "left"
+            Row(
+                modifier = modifier
+                    .align(if (onLeft) Alignment.CenterStart else Alignment.CenterEnd)
+                    .padding(horizontal = 18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                // Symbol hugs the edge; arrows sit inboard of it and point back toward it.
+                if (onLeft) {
+                    NfcSymbol(color = color, faceInboard = Edge.Left, pulsing = pulsing)
+                    MarchingArrows(towards = Edge.Left, color = color, active = arrowsOn)
+                } else {
+                    MarchingArrows(towards = Edge.Right, color = color, active = arrowsOn)
+                    NfcSymbol(color = color, faceInboard = Edge.Right, pulsing = pulsing)
+                }
+            }
         }
+        "top", "bottom" -> {
+            val onTop = side == "top"
+            Column(
+                modifier = modifier
+                    .align(if (onTop) Alignment.TopCenter else Alignment.BottomCenter)
+                    .padding(vertical = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                if (onTop) {
+                    NfcSymbol(color = color, faceInboard = Edge.Top, pulsing = pulsing)
+                    MarchingArrows(towards = Edge.Top, color = color, active = arrowsOn)
+                } else {
+                    MarchingArrows(towards = Edge.Bottom, color = color, active = arrowsOn)
+                    NfcSymbol(color = color, faceInboard = Edge.Bottom, pulsing = pulsing)
+                }
+            }
+        }
+        else -> return // "off", or anything a newer admin build sends that this app doesn't know
     }
 }
 
+/** Which edge of the screen the reader is on — and therefore which way everything points. */
+private enum class Edge { Left, Right, Top, Bottom }
+
+private val Edge.isVertical: Boolean get() = this == Edge.Top || this == Edge.Bottom
+
 /** The universal contactless mark — three nested arcs radiating from a dot near the reader edge, so it
  *  reads as waves coming off the reader toward the donor. Pulses gently while waiting; steady green
- *  once cleared. [faceInboardLeft] = reader on the LEFT, so the waves open to the right (inboard). */
+ *  once cleared. [faceInboard] names the reader's edge, so the waves always open toward the screen. */
 @Composable
-private fun NfcSymbol(color: Color, faceInboardLeft: Boolean, pulsing: Boolean) {
+private fun NfcSymbol(color: Color, faceInboard: Edge, pulsing: Boolean) {
     val t = rememberInfiniteTransition(label = "nfc-pulse")
     val pulse by t.animateFloat(
         initialValue = 0.86f,
@@ -97,10 +136,25 @@ private fun NfcSymbol(color: Color, faceInboardLeft: Boolean, pulsing: Boolean) 
             .graphicsLayer { scaleX = scale; scaleY = scale },
     ) {
         val stroke = size.minDimension * 0.085f
-        val cy = size.height / 2f
-        // Source dot near the edge; arcs open toward the screen centre.
-        val cx = if (faceInboardLeft) size.width * 0.14f else size.width * 0.86f
-        val startAngle = if (faceInboardLeft) -55f else 125f // 0° = east; open right vs. open left
+        // The source dot sits near the reader's edge and the arcs open toward the screen centre, so
+        // the waves always read as coming OFF the reader toward the donor. 0° is east and angles run
+        // clockwise, so each edge gets its own start angle; the 110° sweep is the same for all four.
+        val cx = when (faceInboard) {
+            Edge.Left -> size.width * 0.14f
+            Edge.Right -> size.width * 0.86f
+            else -> size.width / 2f
+        }
+        val cy = when (faceInboard) {
+            Edge.Top -> size.height * 0.14f
+            Edge.Bottom -> size.height * 0.86f
+            else -> size.height / 2f
+        }
+        val startAngle = when (faceInboard) {
+            Edge.Left -> -55f // opens right (inboard)
+            Edge.Right -> 125f // opens left
+            Edge.Top -> 35f // opens down
+            Edge.Bottom -> 215f // opens up
+        }
         val sweep = 110f
         for (i in 1..3) {
             val r = size.minDimension * (0.16f + i * 0.13f)
@@ -121,7 +175,7 @@ private fun NfcSymbol(color: Color, faceInboardLeft: Boolean, pulsing: Boolean) 
 /** Three chevrons pointing at the symbol, with a brightness that travels toward it (marching-ants) so
  *  the eye is led to the reader. Fades out when [active] is false (payment done). */
 @Composable
-private fun MarchingArrows(pointLeft: Boolean, color: Color, active: Boolean) {
+private fun MarchingArrows(towards: Edge, color: Color, active: Boolean) {
     val t = rememberInfiniteTransition(label = "nfc-arrows")
     val phase by t.animateFloat(
         initialValue = 0f,
@@ -130,43 +184,66 @@ private fun MarchingArrows(pointLeft: Boolean, color: Color, active: Boolean) {
         label = "nfc-phase",
     )
     val groupAlpha by animateFloatAsState(if (active) 1f else 0f, tween(400), label = "nfc-arrows-fade")
+    // The strip runs ALONG the axis it points down, so a vertical hint is tall and narrow rather than
+    // a wide strip squeezed under a portrait screen's symbol.
+    val vertical = towards.isVertical
     Canvas(
         modifier = Modifier
-            .size(width = 168.dp, height = 96.dp)
+            .size(width = if (vertical) 96.dp else 168.dp, height = if (vertical) 168.dp else 96.dp)
             .graphicsLayer { alpha = groupAlpha },
     ) {
         val n = 3
-        val slotW = size.width / n
-        val halfW = slotW * 0.34f
-        val halfH = size.height * 0.38f
-        val stroke = size.height * 0.13f
-        val cy = size.height / 2f
+        // `along` is the axis the chevrons march down; `across` is the one they span.
+        val along = if (vertical) size.height else size.width
+        val across = if (vertical) size.width else size.height
+        val slot = along / n
+        val halfAlong = slot * 0.34f // half-depth, apex to back
+        val halfAcross = across * 0.38f // half-width of the V
+        val stroke = across * 0.13f
+        val mid = across / 2f
+        // Nearest chevron goes on the symbol's side. For Left and Top the symbol precedes the strip,
+        // so slot 0 is nearest; for Right and Bottom it follows it, so the order reverses.
+        val nearestFirst = towards == Edge.Left || towards == Edge.Top
         for (k in 0 until n) {
-            // k ranks chevrons by distance from the symbol (0 = nearest). Place the nearest on the
-            // symbol's side, and make the bright spot sweep far → near as `phase` grows, so the motion
-            // reads as flowing toward the reader.
-            val slot = if (pointLeft) k else (n - 1 - k)
-            val cx = slotW * (slot + 0.5f)
+            val index = if (nearestFirst) k else (n - 1 - k)
+            val centre = slot * (index + 0.5f)
+            // The bright spot sweeps far → near as `phase` grows, so the motion reads as flowing
+            // toward the reader rather than away from it.
             val wave = 0.5f + 0.5f * sin(2f * PI.toFloat() * (phase - (n - 1 - k) / n.toFloat()))
             val a = 0.28f + 0.72f * wave
-            drawChevron(cx, cy, halfW, halfH, pointLeft, color.copy(alpha = a), stroke)
+            drawChevron(centre, mid, halfAlong, halfAcross, towards, color.copy(alpha = a), stroke)
         }
     }
 }
 
-/** One "<" (pointLeft) or ">" chevron, apex on the side it points to. */
+/** One chevron — "<" ">" "^" or "v" — with its apex on the side it points to. [alongPos] is the
+ *  position down the marching axis and [acrossPos] the centre of the other one. */
 private fun DrawScope.drawChevron(
-    cx: Float,
-    cy: Float,
-    halfW: Float,
-    halfH: Float,
-    pointLeft: Boolean,
+    alongPos: Float,
+    acrossPos: Float,
+    halfAlong: Float,
+    halfAcross: Float,
+    towards: Edge,
     color: Color,
     stroke: Float,
 ) {
-    val apexX = if (pointLeft) cx - halfW else cx + halfW
-    val backX = if (pointLeft) cx + halfW else cx - halfW
-    val apex = Offset(apexX, cy)
-    drawLine(color, apex, Offset(backX, cy - halfH), strokeWidth = stroke, cap = StrokeCap.Round)
-    drawLine(color, apex, Offset(backX, cy + halfH), strokeWidth = stroke, cap = StrokeCap.Round)
+    // Apex sits toward the reader; the two tails fan back and out across the other axis.
+    val forward = if (towards == Edge.Left || towards == Edge.Top) -1f else 1f
+    val apexAlong = alongPos + forward * halfAlong
+    val backAlong = alongPos - forward * halfAlong
+    val (apex, tail1, tail2) = if (towards.isVertical) {
+        Triple(
+            Offset(acrossPos, apexAlong),
+            Offset(acrossPos - halfAcross, backAlong),
+            Offset(acrossPos + halfAcross, backAlong),
+        )
+    } else {
+        Triple(
+            Offset(apexAlong, acrossPos),
+            Offset(backAlong, acrossPos - halfAcross),
+            Offset(backAlong, acrossPos + halfAcross),
+        )
+    }
+    drawLine(color, apex, tail1, strokeWidth = stroke, cap = StrokeCap.Round)
+    drawLine(color, apex, tail2, strokeWidth = stroke, cap = StrokeCap.Round)
 }

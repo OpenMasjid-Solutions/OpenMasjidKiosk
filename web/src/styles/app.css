@@ -129,6 +129,12 @@ h1, h2, h3, p, ul { margin: 0; }
 .muted { color: var(--color-ink-muted); }
 .faint { color: var(--color-ink-faint); }
 .row { display: flex; align-items: center; gap: 0.6rem; }
+/* A row of FORM FIELDS rather than controls. `.row` centres its children, which is right for buttons
+   and pills but wrong for label+input stacks: the moment one field carries a hint line it becomes
+   taller, and centring then pushes its neighbour's label and input DOWN by half the difference, so
+   two fields side by side visibly fail to line up. Align to the top so the labels share a baseline
+   and the inputs sit level, however much helper text hangs underneath either one. */
+.row--top { align-items: flex-start; }
 .stack { display: flex; flex-direction: column; gap: 0.9rem; }
 
 /* ── /new setup page ──────────────────────────────────────────────────────── */

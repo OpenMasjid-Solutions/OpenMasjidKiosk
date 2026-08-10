@@ -262,8 +262,28 @@ class MainActivity : ComponentActivity() {
         return opened
     }
 
+    /**
+     * An APK that finished downloading but couldn't be installed yet, because "install unknown apps"
+     * hadn't been granted. Held so that granting it and coming back FINISHES the update, rather than
+     * silently dropping it and making the maintainer download the whole thing again.
+     */
+    private var pendingApkPath: String? = null
+
+    /** Finish an update that was waiting on the install permission. True if we started one. */
+    private fun resumePendingInstall(): Boolean {
+        val path = pendingApkPath ?: return false
+        if (exiting) return false
+        if (!runCatching { packageManager.canRequestPackageInstalls() }.getOrDefault(false)) return false
+        pendingApkPath = null
+        installApk(path) // manages the excursion itself
+        return true
+    }
+
     override fun onResume() {
         super.onResume()
+        // Back from granting the install permission → hand the already-downloaded APK straight to the
+        // installer. Before the re-lock, because installApk starts its own excursion.
+        if (resumePendingInstall()) return
         // Idempotent: enters lock task (device owner) / screen-pins when PAIRED (soft kiosk) / re-
         // applies immersive. Skipped once we've ended kiosk mode for an update (exiting) so the
         // browser/installer isn't yanked away, and while an excursion is still settling so Settings
@@ -316,9 +336,14 @@ class MainActivity : ComponentActivity() {
         // (the launch is silently suppressed while pinned). Marked as an excursion (NOT `exiting`) so
         // the focus/leave watchdogs don't re-pin us mid-launch or bounce the installer away; the next
         // resume re-locks, and a successful install relaunches the new version into the kiosk.
-        if (!packageManager.canRequestPackageInstalls()) {
+        if (!runCatching { packageManager.canRequestPackageInstalls() }.getOrDefault(false)) {
             // First in-app update: our package hasn't been granted "install unknown apps" yet (the
-            // browser held it at first sideload). Send the maintainer to grant it, then re-tap Update.
+            // browser held it at first sideload). Send the maintainer to grant it — and KEEP the
+            // downloaded APK, so coming back finishes the update instead of making them tap Update and
+            // wait for the whole download a second time. That re-download was most of the reason this
+            // felt like it "needed Chrome": the grant screen was unreachable behind screen pinning, and
+            // even once reached the update didn't resume.
+            pendingApkPath = path
             openSystemScreen(
                 Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")),
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")),

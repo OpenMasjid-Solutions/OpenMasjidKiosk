@@ -327,7 +327,9 @@ export type DeviceOrientation = '0' | '90' | '180' | '270';
 
 /** Which side the card reader sits on, relative to the app's LOGICAL landscape screen. Left/right map
  *  to top/bottom when the tablet is rotated to portrait. 'off' shows no reader hint. */
-export type DeviceNfcSide = 'off' | 'left' | 'right';
+/** Where the reader sits relative to the giving screen. Left/right suit a landscape mount; top/bottom
+ *  are for a portrait one, where the reader is usually above or below rather than beside the screen. */
+export type DeviceNfcSide = 'off' | 'left' | 'right' | 'top' | 'bottom';
 
 /** One structured log line from a kiosk (payments, reader events, errors). */
 export interface DeviceLog {

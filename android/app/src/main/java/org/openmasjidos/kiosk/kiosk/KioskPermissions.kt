@@ -4,7 +4,6 @@
 package org.openmasjidos.kiosk.kiosk
 
 import android.Manifest
-import android.app.ActivityManager
 import android.bluetooth.BluetoothManager
 import android.content.ComponentName
 import android.content.Context
@@ -31,8 +30,9 @@ import org.openmasjidos.kiosk.R
  *  - Read this fresh on every RESUME. Everything here can be changed outside the app, so a cached
  *    list goes stale the moment the maintainer walks through a settings screen.
  *  - DROP KIOSK LOCKDOWN BEFORE ACTING ON A ROW. Both runtime-permission dialogs and settings
- *    screens are separate system tasks/windows, and screen pinning or Lock Task suppresses them —
- *    the tap would look like it did nothing. See PermissionChecklist's fix().
+ *    screens are separate system tasks/windows, and a device-owner Lock Task suppresses them — the
+ *    tap would look like it did nothing. See PermissionChecklist's fix(). (Screen pinning used to do
+ *    this on ordinary tablets too, which is why it was removed.)
  *
  * Every OS read is wrapped: an unreadable value becomes [PermState.Unknown] (we still offer the
  * button) rather than a crash or a confident lie.
@@ -73,7 +73,7 @@ data class PermRow(
  * Build the live checklist for this tablet. Rows that can't apply are omitted rather than shown as
  * permanently unsatisfiable: the Bluetooth rows are dropped on a tablet with no Bluetooth radio, the
  * runtime-Bluetooth row is dropped below API 31 (there those permissions are granted at install),
- * and screen pinning / the shade helper are dropped on a device-owner tablet, where Lock Task Mode
+ * and the shade helper is dropped on a device-owner tablet, where Lock Task Mode
  * already does both jobs properly.
  */
 fun kioskPermissionRows(context: Context): List<PermRow> {
@@ -163,24 +163,17 @@ fun kioskPermissionRows(context: Context): List<PermRow> {
         fix = PermFix.HomeRole,
     )
 
+    // No "Screen pinning" row any more — the app no longer pins itself (see KioskController). Asking a
+    // volunteer to switch on a setting nothing uses would be a checklist item they can never satisfy
+    // usefully, and pinning is what made every other row's button appear dead.
     if (!owner) {
-        rows += PermRow(
-            id = "pinning",
-            title = R.string.perm_pinning_title,
-            detail = R.string.perm_pinning_detail,
-            action = R.string.perm_action_open_settings,
-            state = screenPinningState(context),
-            required = true,
-            fix = PermFix.OpenSettings,
-            settings = Intent(Settings.ACTION_SECURITY_SETTINGS),
-        )
         rows += PermRow(
             id = "shade",
             title = R.string.perm_shade_title,
             detail = R.string.perm_shade_detail,
             action = R.string.perm_action_open_settings,
             state = boolState(shadeGuardEnabled(context)),
-            required = false, // belt-and-braces on top of pinning, not a prerequisite
+            required = false, // a helpful extra, not a prerequisite
             fix = PermFix.OpenSettings,
             settings = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
         )
@@ -242,25 +235,6 @@ private fun isDefaultHome(context: Context): Boolean? = runCatching {
         .resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY)
         ?.activityInfo?.packageName == context.packageName
 }.getOrNull()
-
-/**
- * Whether Settings → Security → Screen pinning is on. Android exposes no public API for this, so:
- * if we are pinned RIGHT NOW that settles it; otherwise read the framework's own secure setting,
- * and report [PermState.Unknown] (rather than a confident "off") when the key is absent — several
- * OEM builds rename or drop it.
- */
-private fun screenPinningState(context: Context): PermState {
-    val pinnedNow = runCatching {
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-        am?.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_PINNED
-    }.getOrDefault(false)
-    if (pinnedNow) return PermState.Granted
-    return when (runCatching { Settings.Secure.getInt(context.contentResolver, "lock_to_app_enabled", -1) }.getOrDefault(-1)) {
-        1 -> PermState.Granted
-        0 -> PermState.Missing
-        else -> PermState.Unknown
-    }
-}
 
 /** Whether the volunteer has switched our (opt-in) shade-closing accessibility service on. */
 private fun shadeGuardEnabled(context: Context): Boolean? = runCatching {
