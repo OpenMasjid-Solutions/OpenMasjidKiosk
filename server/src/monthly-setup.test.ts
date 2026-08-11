@@ -132,3 +132,38 @@ test('a flaky uplink is retried rather than surfaced as a failed donation', () =
   assert.equal(retriable('invalid_request_error'), false);
   assert.ok(RETRIES > 1, 'one attempt was not enough for a real masjid connection');
 });
+
+test('the server must answer before the tablet stops listening', () => {
+  // THE dev.13 MISTAKE, pinned. Raising Stripe retries to 3 x 12s made the server's worst case ~50s
+  // PER CALL while the tablet gave up on the whole request at 12s — so the "rescue" guaranteed the
+  // tablet timed out first. A monthly needs two sequential Stripe calls (customer, then intent) plus a
+  // possible fallback, so it was 2-3x more exposed than a one-off: "monthly can't even start, one-offs
+  // are hit and miss", and a tap prompt flashing when the timeout landed just after the intent existed.
+  const PAY_TIMEOUT_MS = 8_000;
+  const PAY_RETRIES = 1;
+  const QUICK_TIMEOUT_MS = 5_000; // the optional customer step
+  const BACKOFF_MS = 2_000; // generous allowance for the SDK's retry backoff
+
+  // Worst case for one Stripe call, and for a whole monthly (customer + intent + no-save fallback).
+  const perCall = PAY_TIMEOUT_MS * (1 + PAY_RETRIES) + BACKOFF_MS;
+  const worstMonthly = QUICK_TIMEOUT_MS + perCall + perCall;
+
+  // The tablet's PAYMENT client (KioskApi.payClient) — deliberately far more patient than the
+  // ordinary 8s/12s one used for heartbeats.
+  const TABLET_CALL_TIMEOUT_MS = 60_000;
+
+  assert.ok(worstMonthly < TABLET_CALL_TIMEOUT_MS, `monthly worst case ${worstMonthly}ms must fit in ${TABLET_CALL_TIMEOUT_MS}ms`);
+  assert.ok(perCall < TABLET_CALL_TIMEOUT_MS, 'a one-off must fit with room to spare');
+  // And the old numbers must NOT fit — proving this test would have caught dev.13.
+  const oldPerCall = 12_000 * (1 + 3) + BACKOFF_MS;
+  assert.ok(oldPerCall + oldPerCall > 12_000, 'the old budget blew the tablet’s old 12s call timeout');
+});
+
+test('the optional monthly customer must not spend the payment’s budget', () => {
+  // Losing monthly is recoverable; a donation the tablet gave up waiting for is not. So the customer
+  // step gets a short, non-retrying client — it is allowed to fail fast.
+  const budget = (step: 'customer' | 'intent') => (step === 'customer' ? { timeout: 5_000, retries: 0 } : { timeout: 8_000, retries: 1 });
+  assert.ok(budget('customer').timeout < budget('intent').timeout);
+  assert.equal(budget('customer').retries, 0, 'never retry something we are willing to lose');
+  assert.ok(budget('intent').retries >= 1, 'the payment itself still gets a retry');
+});

@@ -35,7 +35,35 @@ export type StripeMode = 'test' | 'live' | 'unknown';
  * charge twice.
  */
 export function client(secretKey: string): Stripe {
-  return new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, timeout: 12_000, maxNetworkRetries: 3 });
+  return new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, timeout: PAY_TIMEOUT_MS, maxNetworkRetries: PAY_RETRIES });
+}
+
+/**
+ * THE BUDGET HAS TO FIT INSIDE THE TABLET'S PATIENCE. This is the mistake that made dev.13 worse
+ * rather than better: retries were raised to 3 × 12s ≈ 50s per call, while the tablet gives up on the
+ * whole request after 20s (read) / 30s (call). So a retry that was supposed to rescue a blip instead
+ * guaranteed the tablet timed out first — and a MONTHLY, which needs two sequential Stripe calls
+ * (customer, then intent) plus a possible fallback, was two to three times more exposed than a
+ * one-off. Which is exactly the reported shape: "monthly can't even start, one-offs are hit and miss".
+ *
+ * So: one retry, a short per-attempt timeout, and a worst case of roughly 8s + 1s backoff + 8s ≈ 17s
+ * per call. The tablet's payment timeouts are raised to comfortably exceed the worst case for a whole
+ * monthly (see PinnedHttp), so whichever side is slow, the SERVER is the one that decides the outcome
+ * and can report a real reason — instead of the tablet hanging up and showing "couldn't start".
+ */
+const PAY_TIMEOUT_MS = 8_000;
+const PAY_RETRIES = 1;
+
+/**
+ * A deliberately impatient client for work that is OPTIONAL to the payment.
+ *
+ * Creating the monthly Customer is the only such step: if it fails or is slow we simply don't set up
+ * the standing order, and the donation itself is unaffected. Spending the full retry budget on it
+ * would push the payment past the tablet's timeout to protect something we are willing to lose —
+ * exactly the wrong trade with a donor waiting at the reader.
+ */
+export function quickClient(secretKey: string): Stripe {
+  return new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, timeout: 5_000, maxNetworkRetries: 0 });
 }
 
 const PK_RE = /^pk_(test|live)_[A-Za-z0-9]+$/;
@@ -225,7 +253,9 @@ export async function createDonorCustomer(
   secretKey: string,
   input: { name?: string; email?: string; deviceId?: string; campaignId?: string; idempotencyKey?: string },
 ): Promise<string> {
-  const customer = await client(secretKey).customers.create(
+  // quickClient: this step is optional to the payment, so it must never eat the budget the PAYMENT
+  // needs. Losing monthly is recoverable; a donation the tablet gave up waiting for is not.
+  const customer = await quickClient(secretKey).customers.create(
     {
       name: input.name || undefined,
       email: input.email || undefined,

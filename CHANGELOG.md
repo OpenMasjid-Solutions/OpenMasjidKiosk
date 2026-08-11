@@ -4,6 +4,17 @@
 # Changelog
 
 ## Unreleased
+- **Fixed: the tablet gave up on payments too early.** Monthly donations often couldn't start at all,
+  and the card prompt sometimes flashed up for a split second before "Sorry, we couldn't start the
+  payment". The tablet was only willing to wait **8 seconds** for the server to set a payment up —
+  but setting one up means the server talking to Stripe over your internet connection, and a *monthly*
+  needs two of those conversations, so it ran out of patience two to three times more often than a
+  one-off. The tablet now waits properly for a payment (and only for a payment — everything else still
+  fails fast), and the server keeps its own work comfortably inside that. **(Requires updating the
+  tablet app.)**
+- **Payment failures now say why.** The tablet was recording that a payment failed but not the reason,
+  which is why this took several attempts to pin down. Admin → Devices → Logs now shows the actual
+  cause for both "couldn't start" and a card prompt that disappears.
 - **Fixed: payments could fail to start.** Monthly donations stopped starting at all, and one-off
   donations failed now and then — "Sorry, we couldn't start the payment" with a donor's card already
   out. Two causes, both fixed: setting up a monthly is now allowed to fail *without* taking the

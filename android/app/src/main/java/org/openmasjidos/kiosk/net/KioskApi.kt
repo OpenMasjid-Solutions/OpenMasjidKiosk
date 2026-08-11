@@ -14,6 +14,7 @@ import org.openmasjidos.kiosk.local.CampaignJson
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.local.LogEntry
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /** Raised on a non-2xx response; [status] lets callers map codes to friendly messages. */
 class ApiException(val status: Int, message: String) : IOException(message)
@@ -154,6 +155,30 @@ data class HeartbeatResponse(
  */
 class KioskApi(private val client: OkHttpClient) {
 
+    /**
+     * A more patient client for the two calls that go through our server to STRIPE.
+     *
+     * The ordinary client is deliberately impatient (8s read / 12s call) so heartbeats and config
+     * polls fail soft against an absent server. That is wrong for a payment: creating a
+     * PaymentIntent means our server making one or two round trips to Stripe over the masjid's
+     * uplink, and a MONTHLY needs two (a customer, then the intent). Giving up at 8s there doesn't
+     * "fail soft" — it shows a donor "Sorry, we couldn't start the payment" while the server was
+     * still going, and it hit monthly two to three times more often than a one-off. That is the
+     * exact reported symptom, including the tap prompt appearing for a split second when the
+     * timeout landed just after the intent was created.
+     *
+     * The server bounds its own Stripe work well inside this (see stripe.ts PAY_TIMEOUT_MS), so the
+     * SERVER is always the one that decides the outcome and can report a real reason. Sharing the
+     * connection pool via newBuilder keeps the pinned trust and costs nothing.
+     */
+    private val payClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(45, TimeUnit.SECONDS)
+            .writeTimeout(45, TimeUnit.SECONDS)
+            .callTimeout(60, TimeUnit.SECONDS)
+            .build()
+    }
+
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     /** `POST /api/kiosk/pair` — no token; returns the device token exactly once. */
@@ -284,7 +309,7 @@ class KioskApi(private val client: OkHttpClient) {
         if (!campaignId.isNullOrBlank()) body.put("campaignId", campaignId)
         if (!donorName.isNullOrBlank()) body.put("donorName", donorName)
         if (!donorEmail.isNullOrBlank()) body.put("donorEmail", donorEmail)
-        val json = post(baseUrl, "/api/kiosk/payment-intents", body, token)
+        val json = post(baseUrl, "/api/kiosk/payment-intents", body, token, patient = true)
         return CreatedPaymentIntent(
             json.getString("paymentIntentId"),
             json.getString("clientSecret"),
@@ -297,7 +322,7 @@ class KioskApi(private val client: OkHttpClient) {
     /** `POST /api/kiosk/payment-intents/{id}/complete` — the server verifies + captures with Stripe
      *  and records the donation only if it truly succeeded. Returns the verified outcome. */
     fun completePaymentIntent(baseUrl: String, token: String, id: String): CompletedDonation {
-        val json = post(baseUrl, "/api/kiosk/payment-intents/$id/complete", JSONObject(), token)
+        val json = post(baseUrl, "/api/kiosk/payment-intents/$id/complete", JSONObject(), token, patient = true)
         val monthly = json.optJSONObject("monthly")
         return CompletedDonation(
             status = json.optString("status"),
@@ -443,14 +468,14 @@ class KioskApi(private val client: OkHttpClient) {
 
     // ---- transport helpers -------------------------------------------------------------
 
-    private fun post(baseUrl: String, path: String, body: JSONObject, token: String?): JSONObject {
+    private fun post(baseUrl: String, path: String, body: JSONObject, token: String?, patient: Boolean = false): JSONObject {
         val req = Request.Builder()
             .url(url(baseUrl, path))
             .post(body.toString().toRequestBody(jsonMedia))
             .apply { if (token != null) header("X-Device-Token", token) }
             .header("Accept", "application/json")
             .build()
-        return execute(req)
+        return execute(req, patient)
     }
 
     private fun get(baseUrl: String, path: String, token: String): JSONObject {
@@ -463,8 +488,8 @@ class KioskApi(private val client: OkHttpClient) {
         return execute(req)
     }
 
-    private fun execute(req: Request): JSONObject {
-        client.newCall(req).execute().use { resp ->
+    private fun execute(req: Request, patient: Boolean = false): JSONObject {
+        (if (patient) payClient else client).newCall(req).execute().use { resp ->
             val raw = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
                 throw ApiException(resp.code, extractError(raw) ?: "HTTP ${resp.code}")
