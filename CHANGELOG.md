@@ -4,6 +4,13 @@
 # Changelog
 
 ## Unreleased
+- **Fixed: a monthly donation was labelled "Free trial".** There is no such thing as a free trial on a
+  donation — the donor had already paid at the kiosk. It happened because the first month is collected
+  on the reader, so Stripe is told not to charge again for another month, and Stripe files "nothing due
+  yet" as a trial. The Recurring page now simply calls these plans **Active**, which is what they are;
+  the next charge date sits beside it as before. (Stripe's own dashboard may still use the word
+  "trialing" for the first month — that is Stripe's wording for the mechanism, not a real trial, and
+  nothing is owed until the date shown.)
 - **Fixed: monthly donations were refused by the card reader before it even asked for a card.** With
   everything else finally in place, Stripe's reader software turned the payment down on the spot,
   because saving a donor's card for future months has to say *how* the donor allows that card to be
