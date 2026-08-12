@@ -751,7 +751,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             updateGiving { it.copy(serverChargeMinor = pi.chargeMinor) }
             var collectWhy = ""
             val piId = try {
-                PaymentController.collectAndConfirm(pi.clientSecret)
+                PaymentController.collectAndConfirm(pi.clientSecret, savingCard = monthly)
             } catch (c: CancellationException) {
                 ReaderManager.clearPrompt()
                 throw c

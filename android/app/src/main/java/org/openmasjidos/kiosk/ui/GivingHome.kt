@@ -17,8 +17,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -171,6 +175,19 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                 }
             }
         }
+        // Card reader firmware update, on the DONOR-FACING screen. The progress bar already existed in
+        // maintenance, but that is behind the exit PIN — so from the floor an updating reader looked
+        // exactly like a broken one, and the natural reaction (unplug it, power-cycle the tablet) is
+        // the one thing that can leave an M2 needing a service visit. Stripe's updates are required,
+        // arrive on connect and can take several minutes, so this says plainly what is happening, how
+        // far along it is, and not to touch it.
+        if (ui.reader.conn == ReaderConn.Updating) {
+            ReaderUpdatingBanner(
+                percent = ui.reader.updateProgress,
+                accent = accent,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp),
+            )
+        }
         // Reader hint: a pulsing NFC symbol + arrows pinned to the reader's side (set per tablet in
         // Admin → Devices). Shown while the donor is at the card step; turns green when it clears. It
         // rides inside RotatedRoot with everything else, so "left/right" follow the mount into portrait.
@@ -213,6 +230,53 @@ private fun tabMetricsFor(size: String?): TabMetrics = when (size) {
     "large" -> TabMetrics(22.sp, 34.dp, 22.dp)
     "xlarge" -> TabMetrics(28.sp, 46.dp, 30.dp)
     else -> TabMetrics(16.sp, 26.dp, 16.dp) // "medium" (and any unknown value) → the original size
+}
+
+/**
+ * "Card reader is updating — 42%", on the giving screen.
+ *
+ * Deliberately calm and non-alarming: a donor may well be standing there, and this is a normal,
+ * temporary state rather than a fault. The percentage is the point — a bar that only spins gives a
+ * volunteer no way to tell "nearly done" from "stuck", which is what makes people pull the plug.
+ * [percent] is null while the reader hasn't reported progress yet, and then the bar is indeterminate.
+ */
+@Composable
+private fun ReaderUpdatingBanner(percent: Int?, accent: Color, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.widthIn(max = 460.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = Color.Black.copy(alpha = 0.55f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
+    ) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
+            Text(
+                text = if (percent != null) "Card reader is updating — $percent%" else "Card reader is updating…",
+                style = MaterialTheme.typography.titleSmall,
+                color = Color.White,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "This happens automatically and can take a few minutes. Please leave the reader switched on.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.75f),
+            )
+            Spacer(Modifier.height(10.dp))
+            if (percent != null) {
+                LinearProgressIndicator(
+                    progress = { percent / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = accent,
+                    trackColor = Color.White.copy(alpha = 0.18f),
+                )
+            } else {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = accent,
+                    trackColor = Color.White.copy(alpha = 0.18f),
+                )
+            }
+        }
+    }
 }
 
 @Composable

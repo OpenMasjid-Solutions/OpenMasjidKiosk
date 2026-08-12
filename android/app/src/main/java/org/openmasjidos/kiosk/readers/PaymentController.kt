@@ -7,6 +7,8 @@ import com.stripe.stripeterminal.Terminal
 import com.stripe.stripeterminal.external.callable.Callback
 import com.stripe.stripeterminal.external.callable.Cancelable
 import com.stripe.stripeterminal.external.callable.PaymentIntentCallback
+import com.stripe.stripeterminal.external.models.AllowRedisplay
+import com.stripe.stripeterminal.external.models.CollectPaymentIntentConfiguration
 import com.stripe.stripeterminal.external.models.PaymentIntent
 import com.stripe.stripeterminal.external.models.TerminalException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -24,12 +26,26 @@ object PaymentController {
 
     @Volatile private var collectCancelable: Cancelable? = null
 
-    /** retrieve(clientSecret) → collectPaymentMethod (reader prompts tap/insert/swipe) →
-     *  confirmPaymentIntent. Returns the confirmed PaymentIntent id; throws [TerminalException]
-     *  on failure or cancellation. */
-    suspend fun collectAndConfirm(clientSecret: String): String {
+    /**
+     * retrieve(clientSecret) → collectPaymentMethod (reader prompts tap/insert/swipe) →
+     * confirmPaymentIntent. Returns the confirmed PaymentIntent id; throws [TerminalException]
+     * on failure or cancellation.
+     *
+     * [savingCard] must be true whenever the PaymentIntent was created with `setup_future_usage`,
+     * i.e. a MONTHLY donation. Terminal then requires the collect to state how the donor allows the
+     * saved card to be shown again, and refuses the command outright without it:
+     *
+     *     TerminalException: This command requires allow_redisplay to be set as always or limited
+     *                        when saving payment methods with Terminal.
+     *
+     * That refusal is immediate, so the reader never prompts at all — which is exactly the reported
+     * "monthly errors without even asking to tap". It is a CLIENT-side requirement: nothing the
+     * server puts on the intent can satisfy it, which is why fixing setup_future_usage server-side
+     * (dev.12) got us a correctly-configured intent that the tablet then couldn't collect.
+     */
+    suspend fun collectAndConfirm(clientSecret: String, savingCard: Boolean = false): String {
         val pi = retrieve(clientSecret)
-        val collected = collect(pi)
+        val collected = collect(pi, savingCard)
         val confirmed = confirm(collected)
         // The SDK types the id as nullable; a confirmed PI always has one. Treat a null as failure
         // (the caller runCatching { … } maps the thrown error to the "try again" path).
@@ -59,8 +75,14 @@ object PaymentController {
             })
         }
 
-    private suspend fun collect(pi: PaymentIntent): PaymentIntent =
+    private suspend fun collect(pi: PaymentIntent, savingCard: Boolean): PaymentIntent =
         suspendCancellableCoroutine { cont ->
+            // ALWAYS rather than LIMITED: the donor has deliberately chosen to give monthly, so this
+            // masjid may charge the card again off-session for as long as the plan runs. LIMITED
+            // restricts reuse to flows the customer starts themselves, which a standing order is not.
+            val config = CollectPaymentIntentConfiguration.Builder()
+                .setAllowRedisplay(if (savingCard) AllowRedisplay.ALWAYS else AllowRedisplay.UNSPECIFIED)
+                .build()
             collectCancelable = Terminal.getInstance().collectPaymentMethod(pi, object : PaymentIntentCallback {
                 override fun onSuccess(paymentIntent: PaymentIntent) {
                     collectCancelable = null
@@ -70,7 +92,7 @@ object PaymentController {
                     collectCancelable = null
                     cont.resumeWithException(e)
                 }
-            })
+            }, config)
             cont.invokeOnCancellation { cancelCollect() }
         }
 

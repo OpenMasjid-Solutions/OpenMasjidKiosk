@@ -4,6 +4,20 @@
 # Changelog
 
 ## Unreleased
+- **Fixed: monthly donations were refused by the card reader before it even asked for a card.** With
+  everything else finally in place, Stripe's reader software turned the payment down on the spot,
+  because saving a donor's card for future months has to say *how* the donor allows that card to be
+  used again — and the tablet wasn't saying. It now does, so a monthly reaches the reader like any
+  other donation. **(Requires updating the tablet app.)**
+- **Fixed: a donation could fail with "unexpected end of stream".** After a quiet spell the tablet
+  reused a connection the server had already closed, and the donation was simply lost — so the very
+  first donation after a lull was the one most likely to fail. It now opens a fresh connection and
+  retries instead. **(Requires updating the tablet app.)**
+- **The giving screen now shows card-reader updates.** When Stripe pushes firmware to the reader, the
+  kiosk says so with a progress percentage and asks you to leave it switched on. Previously this was
+  only visible behind the maintenance PIN, so from the floor an updating reader looked like a broken
+  one — and unplugging it mid-update is the one thing that can leave it needing a repair.
+  **(Requires updating the tablet app.)**
 - **Fixed: the tablet gave up on payments too early.** Monthly donations often couldn't start at all,
   and the card prompt sometimes flashed up for a split second before "Sorry, we couldn't start the
   payment". The tablet was only willing to wait **8 seconds** for the server to set a payment up —
