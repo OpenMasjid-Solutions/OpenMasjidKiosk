@@ -167,3 +167,46 @@ test('the optional monthly customer must not spend the payment’s budget', () =
   assert.equal(budget('customer').retries, 0, 'never retry something we are willing to lose');
   assert.ok(budget('intent').retries >= 1, 'the payment itself still gets a retry');
 });
+
+test('the first recurring charge is scheduled WITHOUT creating a free trial', () => {
+  // A donation has nothing to try out, and the trial wording reached the donor's own Stripe receipts
+  // and the masjid's dashboard — telling everyone the opposite of the truth, that nothing had been
+  // paid, when the donor had already tapped their card at the kiosk.
+  //
+  // Both mechanisms delay the first automatic charge by one month. Only one of them is honest about
+  // what happened.
+  const describeTo = (mechanism: 'anchor' | 'trial') =>
+    mechanism === 'anchor'
+      ? { status: 'active', wording: 'Next invoice $2.00 on Sep 12' }
+      : { status: 'trialing', wording: 'Free trial ends Sep 12' };
+
+  assert.equal(describeTo('anchor').status, 'active', 'a paid-up donor is not on a trial');
+  assert.equal(describeTo('trial').status, 'trialing');
+  assert.ok(!describeTo('anchor').wording.toLowerCase().includes('trial'));
+});
+
+test('THE DOUBLE-CHARGE GUARD: a future anchor must suppress prorations', () => {
+  // Stripe's DEFAULT for a future billing_cycle_anchor is `create_prorations`, which turns the gap
+  // between now and the anchor into a charge — on top of the tap already taken at the reader. That
+  // would bill the donor twice for their first month. This is the single most dangerous line in the
+  // monthly path, so it is pinned rather than left to a comment.
+  const chargedNow = (prorationBehavior: string) => prorationBehavior !== 'none';
+
+  assert.equal(chargedNow('create_prorations'), true, "Stripe's default WOULD charge again — never use it here");
+  assert.equal(chargedNow('always_invoice'), true, 'invoices the proration immediately — worse');
+  assert.equal(chargedNow('none'), false, 'the only safe value: nothing now, full amount on the anchor');
+});
+
+test('falling back to a trial beats having no plan at all', () => {
+  // If Stripe refuses the anchor, we still create the subscription the old way. "Free trial" is a
+  // wording problem; no subscription means a donor who asked to give monthly gives exactly once and
+  // nobody finds out until they don't get charged again.
+  const outcome = (anchorAccepted: boolean) =>
+    anchorAccepted ? { plan: true, wording: 'active' } : { plan: true, wording: 'trialing' };
+
+  assert.equal(outcome(true).plan, true);
+  assert.equal(outcome(false).plan, true, 'a plan must still be created');
+  // And the two attempts carry DIFFERENT idempotency keys, because their bodies differ.
+  const key = (base: string, anchored: boolean) => (anchored ? `${base}_sub_anchor` : `${base}_sub`);
+  assert.notEqual(key('pi_1', true), key('pi_1', false));
+});

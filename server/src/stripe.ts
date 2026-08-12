@@ -544,24 +544,54 @@ export async function createMonthlySubscription(secretKey: string, input: Monthl
   );
   // Anchor the first recurring charge to the same day next month (first month already collected).
   // Derived from a FIXED timestamp (the PI's created) so a retried /complete recomputes the exact
-  // same trial_end — otherwise the `_sub` idempotency key would carry a different body and Stripe
+  // same anchor — otherwise the `_sub` idempotency key would carry a different body and Stripe
   // would reject it. Clamp the day so a month-end signup (e.g. Jan 31) doesn't overflow past Feb.
   const anchor = new Date(input.anchorSec * 1000);
   const daysInNextMonth = new Date(anchor.getFullYear(), anchor.getMonth() + 2, 0).getDate();
   anchor.setDate(1);
   anchor.setMonth(anchor.getMonth() + 1);
   anchor.setDate(Math.min(new Date(input.anchorSec * 1000).getDate(), daysInNextMonth));
-  const trialEnd = Math.floor(anchor.getTime() / 1000);
-  const sub = await c.subscriptions.create(
-    {
-      customer: customer.id,
-      items: [{ price: price.id }],
-      default_payment_method: input.paymentMethod,
-      trial_end: trialEnd,
-      metadata: { app: 'kiosk', deviceId: input.deviceId || '', campaignId: input.campaignId || '', campaign: input.campaignTitle || '' },
-    },
-    idem ? { idempotencyKey: `${idem}_sub` } : undefined,
-  );
+  const firstChargeSec = Math.floor(anchor.getTime() / 1000);
+
+  const common = {
+    customer: customer.id,
+    items: [{ price: price.id }],
+    default_payment_method: input.paymentMethod,
+    metadata: { app: 'kiosk', deviceId: input.deviceId || '', campaignId: input.campaignId || '', campaign: input.campaignTitle || '' },
+  };
+
+  /**
+   * A DONATION IS NOT A FREE TRIAL, so don't create one.
+   *
+   * Both mechanisms below achieve the same thing — first automatic charge a month out, because month
+   * one was already taken on the reader — but they say very different things to a human:
+   *
+   *   billing_cycle_anchor  → status `active`, "Next invoice $2.00 on Sep 12"    ← what this is
+   *   trial_end             → status `trialing`, "Free trial ends Sep 12"        ← what it is NOT
+   *
+   * The trial wording reached the donor's own Stripe receipts and the masjid's dashboard, telling
+   * everyone the opposite of the truth: that nothing had been paid yet.
+   *
+   * `proration_behavior: 'none'` is the load-bearing half. Stripe's default for a future
+   * billing_cycle_anchor is `create_prorations` — the gap between now and the anchor becomes a
+   * prorated charge, which on top of the tap already taken at the reader would bill the donor TWICE.
+   * With 'none' there is no proration at all: nothing now, a full amount on the anchor date.
+   */
+  const sub = await c.subscriptions
+    .create(
+      { ...common, billing_cycle_anchor: firstChargeSec, proration_behavior: 'none' },
+      idem ? { idempotencyKey: `${idem}_sub_anchor` } : undefined,
+    )
+    // Fall back to the trial mechanism if Stripe won't take the anchor (it has historically been
+    // fussy about how far ahead one may sit). A plan that reads "Free trial" is a wording problem;
+    // no plan at all means a donor who asked to give monthly gives once. Wording loses that contest.
+    .catch(async (err) => {
+      if ((err as { type?: string }).type !== 'StripeInvalidRequestError') throw err;
+      return c.subscriptions.create(
+        { ...common, trial_end: firstChargeSec },
+        idem ? { idempotencyKey: `${idem}_sub` } : undefined,
+      );
+    });
   return { created: true, subscriptionId: sub.id, customerId: customer.id };
 }
 
