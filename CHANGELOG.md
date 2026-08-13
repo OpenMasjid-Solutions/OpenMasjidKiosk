@@ -4,6 +4,12 @@
 # Changelog
 
 ## Unreleased
+- **Simpler wording at the card step.** It now says **"Tap or insert your card"** instead of listing
+  swiping as well — one shorter instruction at the moment a donor is holding a card and deciding what
+  to do. If a card can only be read by swiping, the reader still says so.
+- **The campaign editor no longer warns that a second Stripe account means typed cards only.** That
+  stopped being true when the reader learned to move between accounts; it now just notes that the
+  first tap on such an appeal takes a moment.
 - **The card reader now works for campaigns that pay into a second Stripe account.** Until now only
   campaigns settling to your main Stripe account could take a card on the reader; the rest quietly
   fell back to typing the card in. The kiosk now moves the reader onto whichever account the campaign

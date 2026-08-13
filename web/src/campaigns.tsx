@@ -697,8 +697,10 @@ function CampaignEditor({
   // Live preview amounts (drop blanks/invalid, cap at 6) — recomputed as you type.
   const previewPresets = useMemo(() => presets.map((p) => toMinor(p, currency)).filter((n) => n > 0).slice(0, MAX_PRESETS), [presets, currency]);
 
-  // A non-primary account can't use the reader (it's registered to the primary account), so that
-  // appeal is taken by keyed card entry. `hasLocal` still lets the picker mean "the reader account".
+  // A non-primary account USED to mean keyed entry only, because a reader is registered to one Stripe
+  // account. The kiosk now re-registers the reader onto the campaign's account when someone donates to
+  // it, so this is no longer a restriction — just a note that the first tap takes a moment.
+  // `hasLocal` still lets the picker mean "the reader account".
   const crossAccount = !!stripeAccountId && stripeAccountId !== primaryAccountId;
   const showAccountPicker = accounts.length > 0 || hasLocal;
 
@@ -958,7 +960,7 @@ function CampaignEditor({
 
                     <Toggle
                       label="Offer a monthly (recurring) option"
-                      hint="Monthly giving is taken on the card reader, so it isn't available on keyed-only or cross-account campaigns."
+                      hint="Monthly giving is taken on the card reader, so a donor needs the reader (not a typed card) to set one up."
                       checked={monthlyEnabled}
                       onChange={setMonthlyEnabled}
                     />
@@ -1032,9 +1034,9 @@ function CampaignEditor({
                           ))}
                         </select>
                         {crossAccount && (
-                          <p className="note-amber">
-                            This appeal uses a different Stripe account, so donations are taken by keyed card entry (typed card), not the reader. The reader only works
-                            for your primary account.
+                          <p className="hint">
+                            The card reader works for this appeal too — it moves onto this account when someone donates,
+                            which takes a few seconds the first time. Your main appeal is unaffected.
                           </p>
                         )}
                       </div>

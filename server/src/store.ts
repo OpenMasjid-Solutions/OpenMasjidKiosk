@@ -1717,7 +1717,9 @@ export class Store {
         thankYouMessage: c.thankYouMessage || g.thankYouMessage,
         theme: c.theme || 'auto',
         isMain: c.isMain,
-        // The reader is bound to the primary account; a campaign on another account is keyed-only.
+        // Only meaningful to OLDER tablets now: they cannot re-register the reader onto another Stripe
+        // account, so they must still route a cross-account campaign to keyed entry. Current builds
+        // ignore this and re-register instead (ReaderManager.registerFor).
         readerCapable: !c.stripeAccountId || c.stripeAccountId === primaryAccountId,
       }));
     return {
