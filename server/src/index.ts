@@ -1515,14 +1515,61 @@ ${body}
 
   // The tablet's ConnectionTokenProvider calls this — the only Stripe credential the tablet
   // ever gets (short-lived). Minted server-side from the resolved account + Location.
+  /**
+   * The Terminal Location for a Stripe account, creating one the first time that account is used.
+   *
+   * A Location belongs to ONE account, so a second account needs its own before a reader can be
+   * registered against it. The admin already names/addresses a Location for the primary account on
+   * the Payments screen; making a donor wait for that to be repeated per account would be a poor
+   * trade, so a secondary account gets one created from the same masjid details, once, and remembered.
+   */
+  const locationForAccount = async (acct: ResolvedAccount): Promise<string> => {
+    const key = acct.id === '' ? '' : acct.id;
+    const existing = store.getLocation(key);
+    if (existing) return existing.id;
+    // Reuse the masjid address the admin already gave for the primary account's Location — the same
+    // building, just registered on a second Stripe account. Without a usable address we throw, and the
+    // caller falls back to whatever Location is stored rather than blocking the donation here.
+    const m = store.getMasjid();
+    const a = m.address;
+    if (!a?.line1 || !a?.country) throw new Error('no masjid address for a Terminal location');
+    const created = await createLocation(acct.keys.secretKey, (m.name || 'Masjid kiosk').slice(0, 160), {
+      line1: a.line1,
+      line2: a.line2,
+      city: a.city,
+      state: a.state,
+      postalCode: a.postalCode,
+      country: a.country,
+    });
+    store.setLocation({ id: created.id, name: created.displayName }, key);
+    return created.id;
+  };
+
+  /**
+   * Mint a Terminal connection token — for a SPECIFIC Stripe account when the tablet names one.
+   *
+   * The token is what binds a reader to an account: connect with the primary account's token and the
+   * reader cannot collect a PaymentIntent belonging to another account, which is why a campaign that
+   * settles elsewhere used to be keyed-entry only. The tablet now asks for a token for the campaign
+   * it is about to take money for, and re-registers the reader when that differs from the last one.
+   *
+   * `campaignId` omitted → the primary account, exactly as before, so an older tablet is unaffected.
+   */
+  const ConnTokenBody = z.object({ campaignId: z.string().max(120).optional() });
   app.post('/api/kiosk/connection-token', async (req, reply) => {
     const d = authDevice(req, reply);
     if (!d) return;
-    const acct = await resolveAccount();
+    const parsed = ConnTokenBody.safeParse(req.body ?? {});
+    const campaignId = parsed.success ? (parsed.data.campaignId ?? '').trim() : '';
+    const campaign = campaignId ? store.getCampaign(campaignId) : null;
+    const acct = campaign?.stripeAccountId ? await resolveAccountById(campaign.stripeAccountId) : await resolveAccount();
     if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     try {
-      const secret = await createConnectionToken(acct.keys.secretKey, store.getLocation()?.id);
-      return { data: { secret } };
+      const locationId = await locationForAccount(acct).catch(() => store.getLocation(acct.id)?.id);
+      const secret = await createConnectionToken(acct.keys.secretKey, locationId);
+      // The tablet needs to know WHICH account this token registers the reader to, so it can tell
+      // when the next donation needs a different one. An account id is not a secret.
+      return { data: { secret, accountId: acct.id, locationId: locationId ?? '' } };
     } catch {
       return reply.code(502).send({ error: 'Couldn’t reach Stripe Terminal. Please try again.' });
     }

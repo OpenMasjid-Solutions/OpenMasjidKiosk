@@ -750,20 +750,46 @@ export class Store {
     return c;
   }
 
-  /** The chosen Terminal Location (readers must connect with a locationId). */
-  getLocation(): TerminalLocationRef | null {
-    const raw = this.getRaw('terminal_location');
-    if (!raw) return null;
-    try {
-      const o = JSON.parse(raw) as TerminalLocationRef;
-      return o.id ? o : null;
-    } catch {
-      return null;
+  /**
+   * The chosen Terminal Location, PER STRIPE ACCOUNT.
+   *
+   * A Location belongs to one Stripe account, and a reader is registered to a Location — which is why
+   * a reader connected for the primary account cannot collect a PaymentIntent belonging to a second
+   * one. Serving a campaign that settles elsewhere means re-registering the reader against a Location
+   * on THAT account, so a single stored Location was never going to be enough.
+   *
+   * `accountId` is '' for the primary/current account, which is also where the original single-value
+   * setting is read from — so an install that predates this keeps its Location without a migration
+   * step, and only ever grows entries as other accounts are actually used.
+   */
+  getLocation(accountId = ''): TerminalLocationRef | null {
+    const key = (accountId || '').trim();
+    if (!key) {
+      const raw = this.getRaw('terminal_location');
+      if (!raw) return null;
+      try {
+        const o = JSON.parse(raw) as TerminalLocationRef;
+        return o.id ? o : null;
+      } catch {
+        return null;
+      }
     }
+    const map = this.getJson<Record<string, TerminalLocationRef>>('terminal_locations', {});
+    const o = map[key];
+    return o && o.id ? o : null;
   }
-  setLocation(loc: TerminalLocationRef | null): void {
-    if (!loc) this.setRaw('terminal_location', '');
-    else this.setRaw('terminal_location', JSON.stringify({ id: loc.id, name: loc.name }));
+
+  setLocation(loc: TerminalLocationRef | null, accountId = ''): void {
+    const key = (accountId || '').trim();
+    if (!key) {
+      if (!loc) this.setRaw('terminal_location', '');
+      else this.setRaw('terminal_location', JSON.stringify({ id: loc.id, name: loc.name }));
+    } else {
+      const map = this.getJson<Record<string, TerminalLocationRef>>('terminal_locations', {});
+      if (!loc) delete map[key];
+      else map[key] = { id: loc.id, name: loc.name };
+      this.setRaw('terminal_locations', JSON.stringify(map));
+    }
     this.bumpConfigVersion(); // kiosks refetch config (locationId) when this changes
   }
 
