@@ -1759,17 +1759,18 @@ ${body}
     // Resolve the campaign's Stripe account (its own, or the primary/reader account when unset).
     const acct = await resolveAccountById(campaign.stripeAccountId);
     if (!acct) return reply.code(400).send({ error: 'This appeal’s Stripe account isn’t available.' });
-    const primary = await resolveAccount();
-    const readerCapable = !campaign.stripeAccountId || (!!primary && campaign.stripeAccountId === primary.id);
-    // The physical reader is locked to the primary account, so a cross-account campaign is keyed-only.
-    if (!manual && !readerCapable) {
-      return reply.code(400).send({ error: 'This appeal is taken by keyed card entry, not the reader.' });
-    }
-    // Monthly giving needs name + email and the card reader (the reusable card comes from a
-    // card-present charge — it can't be set up from keyed entry or a cross-account campaign).
+    // NOTE: a cross-account campaign is no longer refused the reader here. A tablet that supports it
+    // re-registers the reader against THIS campaign's Stripe account before collecting (see
+    // ReaderManager.registerFor), so the old "primary account only" rule would now block something
+    // that works. The campaign's account is already resolved above and 400s if it cannot be — which
+    // is the check that actually matters. (`readerCapable` in the kiosk config is deliberately left
+    // as it was, so an OLDER tablet still routes these to keyed entry rather than meeting a reader
+    // registered to the wrong account.)
+    //
+    // Monthly giving needs name + email and the card reader — the reusable card comes from a
+    // card-present charge, so it can't be set up from keyed entry.
     if (monthly) {
       if (manual) return reply.code(400).send({ error: 'Monthly giving needs the card reader.' });
-      if (!readerCapable) return reply.code(400).send({ error: 'Monthly giving needs the card reader.' });
       if (!campaign.monthlyEnabled) return reply.code(400).send({ error: 'Monthly giving isn’t available for this appeal.' });
       if (!donorName || !donorName.trim()) return reply.code(400).send({ error: 'Monthly giving needs a name.' });
       if (!looksLikeEmail(donorEmail)) return reply.code(400).send({ error: 'Monthly giving needs a valid email for the receipt.' });

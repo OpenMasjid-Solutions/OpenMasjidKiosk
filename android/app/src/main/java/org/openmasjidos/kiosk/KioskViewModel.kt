@@ -700,7 +700,11 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         if (g.monthly) {
             // Monthly needs the reader — the reusable card comes from a card-present charge, so it
             // can't be set up by keyed entry or on a cross-account campaign.
-            if (!campaign.readerCapable || !readerConnected) {
+            // readerCapable is NOT consulted any more: this build re-registers the reader against the
+            // campaign's own Stripe account (startReaderCollect → ReaderManager.registerFor), so a
+            // cross-account campaign can use it too. The server still computes the flag for OLDER
+            // tablets, which cannot do that and must keep routing those campaigns to keyed entry.
+            if (!readerConnected) {
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Monthly giving needs the card reader. Please give a one-time gift, or ask a volunteer.") }
                 return
             }
@@ -709,7 +713,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         }
         // Keyed entry when the campaign can't use the reader (a different Stripe account) OR no reader
         // is connected; otherwise collect on the reader (the keyed button is a fallback on the card step).
-        if (!campaign.readerCapable || !readerConnected) startManualCollect() else startReaderCollect(campaign)
+        if (!readerConnected) startManualCollect() else startReaderCollect(campaign)
     }
 
     /** Collect on the M2 reader (card-present), verify server-side, record, thank the donor. */
@@ -724,6 +728,29 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val email = g.donorEmail.trim().ifBlank { null }
             val idem = UUID.randomUUID().toString()
             repo.log("info", "donation_started", "${g.amountMinor} minor · $kind · ${campaign.title}")
+            // MAKE SURE THE READER ANSWERS TO THIS CAMPAIGN’S STRIPE ACCOUNT before creating the
+            // intent. A reader is registered to one account and is refused a PaymentIntent belonging
+            // to another, so a campaign that settles elsewhere needs the reader re-registered first.
+            // Asking the server for a token scoped to this campaign is also how we learn WHICH account
+            // that is — the tablet never needs to be told the account ids in advance.
+            //
+            // The overwhelmingly common case (the main campaign, already registered) costs one cheap
+            // request and no reader work at all. Only a cross-account campaign pays the re-registration,
+            // and only at the moment someone actually donates to it.
+            val conn = try {
+                repo.getConnectionToken(campaign.id)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                null
+            }
+            if (conn != null && !ReaderManager.registerFor(campaign.id, conn.accountId, conn.locationId)) {
+                // Could not put the reader on that account — fall back to typed entry rather than
+                // failing the donation. The donor still gives; they just type the card.
+                repo.log("warn", "reader_account_switch_failed", campaign.title)
+                startManualCollect()
+                return@launch
+            }
             // NB: rethrow CancellationException on every suspend call below. This job is cancelled
             // when the donor switches to keyed entry (enterManually → startManualCollect); if we
             // swallowed the cancellation we'd fall through and briefly flash the "Sorry" error screen

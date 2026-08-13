@@ -235,7 +235,7 @@ private fun AmountStep(
         )
         // One-time vs monthly (only when the campaign enabled it, the reader can take it, and one is
         // connected right now — monthly needs a card-present charge).
-        if (campaign.monthlyEnabled && campaign.readerCapable && readerConnected) {
+        if (campaign.monthlyEnabled && readerConnected) {
             Spacer(Modifier.height(16.dp))
             SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
                 SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("One-time", maxLines = 1, overflow = TextOverflow.Ellipsis) }

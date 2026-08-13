@@ -28,8 +28,9 @@ data class PairingRecord(
  * amounts, colour, background, thank-you and monthly/cover-fees options — designed in the admin
  * panel. Exactly one is the [isMain] campaign (the always-present first tab the kiosk idles on).
  *
- * [readerCapable] is computed by the server: false means this campaign settles to a DIFFERENT
- * Stripe account than the reader is bound to, so it must be taken by keyed (typed) card entry.
+ * [readerCapable] is computed by the server and is now only meaningful to OLDER tablets: it says
+ *  this campaign settles to a different Stripe account. This build ignores it and re-registers the
+ *  reader onto that account instead (ReaderManager.registerFor), so any campaign can use the reader.
  */
 data class Campaign(
     val id: String,

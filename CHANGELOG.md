@@ -4,6 +4,20 @@
 # Changelog
 
 ## Unreleased
+- **The card reader now works for campaigns that pay into a second Stripe account.** Until now only
+  campaigns settling to your main Stripe account could take a card on the reader; the rest quietly
+  fell back to typing the card in. The kiosk now moves the reader onto whichever account the campaign
+  pays into, so any appeal can be tapped.
+  - **Your main campaign is unaffected and just as fast.** The switch only happens the moment someone
+    actually donates to an appeal on a different account, never while they browse the tabs — and it
+    takes a few seconds while the reader re-registers, which the donor sees as the card step taking a
+    moment to appear.
+  - Each Stripe account gets its own reader Location, created automatically from the masjid address
+    you already entered. If the reader can not be moved for any reason, the kiosk falls back to typed
+    card entry rather than failing the donation.
+  - **Monthly giving now works on those appeals too** — it needs the reader, so it was previously
+    impossible on a second account.
+  **(Requires updating the tablet app.)**
 - **Donors are emailed when their monthly giving starts — with their own link to stop it.** As soon as
   a standing order is set up, the donor gets a message confirming the amount, the date of their next
   payment, and a **"Stop my monthly donation"** button. The email tells them to keep it, because that

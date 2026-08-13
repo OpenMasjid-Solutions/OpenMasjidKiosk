@@ -19,6 +19,9 @@ import java.util.concurrent.TimeUnit
 /** Raised on a non-2xx response; [status] lets callers map codes to friendly messages. */
 class ApiException(val status: Int, message: String) : IOException(message)
 
+/** A Terminal connection token plus the Stripe account (and Location) it binds the reader to. */
+data class ConnToken(val secret: String, val accountId: String, val locationId: String)
+
 /** Parsed result of `POST /api/kiosk/pair`. */
 data class PairResponse(val deviceToken: String, val deviceId: String, val configVersion: Int)
 
@@ -280,10 +283,21 @@ class KioskApi(private val client: OkHttpClient) {
     }
 
     /** `POST /api/kiosk/connection-token` (device token). Returns the short-lived Stripe Terminal
-     *  connection token — the only Stripe credential the tablet ever holds. */
-    fun connectionToken(baseUrl: String, token: String): String {
-        val json = post(baseUrl, "/api/kiosk/connection-token", JSONObject(), token)
-        return json.getString("secret")
+     *  connection token — the only Stripe credential the tablet ever holds — plus WHICH Stripe account
+     *  it registers the reader to. [campaignId] scopes it to that campaign’s account; blank = primary.
+     *
+     *  The account matters because a reader registered to one Stripe account cannot collect a
+     *  PaymentIntent belonging to another. Knowing it is how the tablet tells whether the reader has
+     *  to be re-registered before taking money for a campaign that settles elsewhere. */
+    fun connectionToken(baseUrl: String, token: String, campaignId: String = ""): ConnToken {
+        val body = JSONObject()
+        if (campaignId.isNotBlank()) body.put("campaignId", campaignId)
+        val json = post(baseUrl, "/api/kiosk/connection-token", body, token)
+        return ConnToken(
+            secret = json.getString("secret"),
+            accountId = json.optString("accountId", ""),
+            locationId = json.optString("locationId", ""),
+        )
     }
 
     /** `POST /api/kiosk/payment-intents` — the server validates the amount against the configured
