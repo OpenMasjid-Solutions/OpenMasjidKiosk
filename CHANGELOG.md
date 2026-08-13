@@ -3,6 +3,7 @@
 
 # Changelog
 
+## Unreleased
 - **Donors are emailed when their monthly giving starts — with their own link to stop it.** As soon as
   a standing order is set up, the donor gets a message confirming the amount, the date of their next
   payment, and a **"Stop my monthly donation"** button. The email tells them to keep it, because that

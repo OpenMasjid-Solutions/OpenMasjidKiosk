@@ -9,7 +9,7 @@
  *  live: kiosks pick the change up on their next check-in. Amounts are edited in whole/decimal
  *  currency units but stored as integer MINOR units. Non-optimistic — every change re-hydrates
  *  from the server's response. */
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
@@ -129,6 +129,28 @@ const CAMPAIGN_TABS: { id: CampaignTabId; label: string }[] = [
 export const campaignEditorHref = (id: string) =>
   `${typeof location === 'undefined' ? '' : location.pathname}#campaign/${encodeURIComponent(id)}`;
 
+/**
+ * Open the editor in a new tab VIA SCRIPT, so that tab is allowed to close itself again.
+ *
+ * Browsers only let `window.close()` shut a window a script opened — a tab created by a plain
+ * `target="_blank"` link is refused (silently in Chrome, with a console warning in Firefox). Since
+ * closing the editor should close its tab, the tab has to be opened this way.
+ *
+ * Still rendered as a real <a href>, so middle-click, ⌘/Ctrl-click and "Open link in new tab" all keep
+ * working and the address is copyable. Those routes bypass this handler, and such a tab simply falls
+ * back to showing the campaign list on close (see CampaignEditorPage) rather than failing.
+ *
+ * Deliberately NOT 'noopener': the new tab is our own origin, and severing the opener is what takes
+ * the ability to self-close away again.
+ */
+export function openCampaignEditor(e: ReactMouseEvent<HTMLAnchorElement>, href: string): void {
+  // Let the browser handle anything that already means "somewhere else": a modified click, or a
+  // middle/right button.
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const w = window.open(href, '_blank');
+  if (w) e.preventDefault(); // only swallow the click if the tab actually opened
+}
+
 export function CampaignsSection() {
   const [data, setData] = useState<CampaignsData | null>(null);
   const [loadErr, setLoadErr] = useState('');
@@ -191,7 +213,7 @@ export function CampaignsSection() {
               style={{ marginInlineStart: 'auto' }}
               href={campaignEditorHref('new')}
               target="_blank"
-              rel="noopener"
+              onClick={(e) => openCampaignEditor(e, campaignEditorHref('new'))}
             >
               <Plus size={15} /> New campaign
             </a>
@@ -569,7 +591,7 @@ function CampaignRow({
             <Star size={14} aria-hidden="true" /> Make main
           </button>
         )}
-        <a className="btn btn--ghost btn--sm" href={editHref} target="_blank" rel="noopener">
+        <a className="btn btn--ghost btn--sm" href={editHref} target="_blank" onClick={(e) => openCampaignEditor(e, editHref)}>
           <Pencil size={14} aria-hidden="true" /> Edit
         </a>
         {!c.isMain &&
@@ -1161,7 +1183,14 @@ export function CampaignEditorPage({ campaignId }: { campaignId: string }) {
   // page opened itself, so it is never relied on — navigating always works, whether this is a second
   // tab or the admin followed the link in place.
   const backToList = () => {
-    location.hash = 'giving';
+    // The editor lives in its own tab, so "Cancel"/"Save" should close it rather than leave the admin
+    // staring at a second copy of the dashboard. window.close() is refused for a tab the browser
+    // opened itself (a middle-click, or a pasted URL) — so check whether we are still here a moment
+    // later and fall back to the campaign list, which is the only sensible place left to be.
+    window.close();
+    window.setTimeout(() => {
+      if (!window.closed) location.hash = 'giving';
+    }, 150);
   };
 
   if (err) {
