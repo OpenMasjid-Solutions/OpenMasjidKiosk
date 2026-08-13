@@ -852,33 +852,26 @@ function CampaignEditor({
                       <p className="hint">Pick a preset to fill the two colours below — you can still fine-tune either one.</p>
                     </div>
 
-                    <div className="field">
-                      <span className="label">Primary colour <span className="faint">(background)</span></span>
-                      <div className="accent-row">
-                        <input type="color" className="accent-swatch-input" aria-label="Primary colour" value={primaryColor || DEFAULT_PRIMARY} onChange={(e) => setPrimaryColor(e.target.value)} />
-                        <span className="hint" style={{ margin: 0 }}>{primaryColor ? primaryColor : 'Using the default background'}</span>
-                        {primaryColor && (
-                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPrimaryColor('')}>
-                            Reset to default
-                          </button>
-                        )}
-                      </div>
-                      <p className="hint">Tints the giving screen's background — a soft wash of this colour behind the amount tiles.</p>
-                    </div>
-
-                    <div className="field">
-                      <span className="label">Accent colour <span className="faint">(buttons)</span></span>
-                      <div className="accent-row">
-                        <input type="color" className="accent-swatch-input" aria-label="Accent colour" value={accentColor || DEFAULT_ACCENT} onChange={(e) => setAccentColor(e.target.value)} />
-                        <span className="hint" style={{ margin: 0 }}>{accentColor ? accentColor : 'Using your default accent'}</span>
-                        {accentColor && (
-                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setAccentColor('')}>
-                            Reset to default
-                          </button>
-                        )}
-                      </div>
-                      <p className="hint">The colour of the “Donate” band on each amount tile, and the buttons.</p>
-                    </div>
+                    <ColorField
+                      id="ce-primary"
+                      label="Primary colour"
+                      sub="(background)"
+                      value={primaryColor}
+                      fallback={DEFAULT_PRIMARY}
+                      unsetLabel="Using the default background"
+                      onChange={setPrimaryColor}
+                      hint="Tints the giving screen's background — a soft wash of this colour behind the amount tiles."
+                    />
+                    <ColorField
+                      id="ce-accent"
+                      label="Accent colour"
+                      sub="(buttons)"
+                      value={accentColor}
+                      fallback={DEFAULT_ACCENT}
+                      unsetLabel="Using your default accent"
+                      onChange={setAccentColor}
+                      hint="The colour of the “Donate” band on each amount tile, and the buttons."
+                    />
 
                     <div className="field">
                       <label className="label" htmlFor="c-theme">Appearance</label>
@@ -1204,6 +1197,90 @@ export function CampaignEditorPage({ campaignId }: { campaignId: string }) {
       onClose={backToList}
       onSaved={backToList}
     />
+  );
+}
+
+/**
+ * A colour with a swatch AND a typed hex, so a masjid can use its OWN brand colour.
+ *
+ * The swatch alone was the whole control before, which meant any colour was technically reachable but
+ * only by hunting for it in the OS picker — there was no way to enter the hex a masjid already has
+ * written down, and next to a grid of presets the whole thing read as "presets only".
+ *
+ * The text box is free while you type (you cannot enter "#1f7a5c" without passing through "#1", "#1f"
+ * …), so it keeps its own draft and only commits when the value is a real colour. Leaving it empty
+ * clears back to the default rather than committing a broken value.
+ */
+function ColorField({
+  id,
+  label,
+  sub,
+  value,
+  fallback,
+  unsetLabel,
+  onChange,
+  hint,
+}: {
+  id: string;
+  label: string;
+  sub?: string;
+  value: string;
+  fallback: string;
+  unsetLabel: string;
+  onChange: (v: string) => void;
+  hint: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  // Follow the value when it changes from OUTSIDE this field (a preset was clicked, or Reset).
+  useEffect(() => setDraft(value), [value]);
+
+  const normalise = (raw: string): string | null => {
+    const v = raw.trim().replace(/^#?/, '#');
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) return v.toLowerCase();
+    // Accept the 3-digit shorthand people copy from CSS, expanded to the 6 the picker needs.
+    if (/^#[0-9a-fA-F]{3}$/.test(v)) return `#${v.slice(1).split('').map((c) => c + c).join('')}`.toLowerCase();
+    return null;
+  };
+  const commit = (raw: string) => {
+    if (!raw.trim()) return onChange(''); // cleared → back to the default
+    const hex = normalise(raw);
+    if (hex) onChange(hex);
+    else setDraft(value); // not a colour — snap back rather than keep something unusable
+  };
+  const bad = draft.trim() !== '' && normalise(draft) === null;
+
+  return (
+    <div className="field">
+      <span className="label">{label} {sub && <span className="faint">{sub}</span>}</span>
+      <div className="accent-row">
+        <input
+          type="color"
+          className="accent-swatch-input"
+          aria-label={`${label} — pick`}
+          value={normalise(draft) ?? value ?? fallback ?? '#000000'}
+          onChange={(e) => { setDraft(e.target.value); onChange(e.target.value); }}
+        />
+        <input
+          id={id}
+          className="input color-hex"
+          value={draft}
+          spellCheck={false}
+          placeholder={fallback}
+          aria-label={`${label} — hex code`}
+          aria-invalid={bad}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={(e) => commit(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit((e.target as HTMLInputElement).value); } }}
+        />
+        {value ? (
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => onChange('')}>Reset to default</button>
+        ) : (
+          <span className="hint" style={{ margin: 0 }}>{unsetLabel}</span>
+        )}
+      </div>
+      {bad && <p className="form-error">Use a hex colour like #1f7a5c.</p>}
+      <p className="hint">{hint}</p>
+    </div>
   );
 }
 

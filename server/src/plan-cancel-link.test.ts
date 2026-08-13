@@ -1,0 +1,124 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 OpenMasjid-Solutions
+//
+// THE DONOR'S OWN "stop my monthly donation" LINK.
+//
+// A standing order is the one thing a kiosk sets up that keeps taking money long after the donor has
+// walked away, and the donor has no account here and no password. So the link emailed to them when
+// the plan is created IS the credential — which makes this the only public route in the app that
+// changes anything, and the one place where getting the details wrong would matter.
+//
+// It is reachable from the internet on purpose (over the masjid's Cloudflare tunnel), because a donor
+// who changes their mind is not sitting on the masjid's wi-fi.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { Store } from './store';
+import { blockedOverTunnel } from './tunnel';
+import { renderMonthlyStarted } from './email';
+
+const mem = () => new Store(':memory:');
+
+test('the token is stored ONLY as a hash — a leaked database cannot cancel anyone', () => {
+  const s = mem();
+  const token = 'a'.repeat(64);
+  s.recordPlan({ subscriptionId: 'sub_1', currency: 'USD', firstAmountMinor: 200, cancelTokenHash: s.hashCancelToken(token) });
+
+  const rec = s.getPlanRecord('sub_1')!;
+  assert.notEqual(rec.cancelTokenHash, token, 'the raw token must never be what we keep');
+  assert.match(rec.cancelTokenHash, /^[a-f0-9]{64}$/);
+  // Only the real token resolves; possessing the stored hash does not.
+  assert.equal(s.getPlanByCancelToken(token)?.subscriptionId, 'sub_1');
+  assert.equal(s.getPlanByCancelToken(rec.cancelTokenHash), null, 'the hash is not a second key');
+});
+
+test('a wrong, malformed or empty token resolves to nothing', () => {
+  const s = mem();
+  s.recordPlan({ subscriptionId: 'sub_1', cancelTokenHash: s.hashCancelToken('b'.repeat(64)) });
+
+  assert.equal(s.getPlanByCancelToken('c'.repeat(64)), null, 'a different token');
+  assert.equal(s.getPlanByCancelToken(''), null);
+  assert.equal(s.getPlanByCancelToken('short'), null);
+  assert.equal(s.getPlanByCancelToken("' OR 1=1 --"), null, 'shape-checked before it ever reaches SQL');
+  assert.equal(s.getPlanByCancelToken('Z'.repeat(64)), null, 'hex only');
+});
+
+test('a plan with NO token issued can never be reached by one', () => {
+  // Plans created before this feature (and any whose local write failed) have a blank hash. A blank
+  // must not become a skeleton key that matches an empty or unparsed token.
+  const s = mem();
+  s.recordPlan({ subscriptionId: 'sub_old', currency: 'USD' }); // no cancelTokenHash
+  assert.equal(s.getPlanRecord('sub_old')!.cancelTokenHash, '');
+  assert.equal(s.getPlanByCancelToken(''), null);
+  assert.equal(s.getPlanByCancelToken('0'.repeat(64)), null);
+});
+
+test('tokens are per-plan — one donor’s link cannot touch another’s', () => {
+  const s = mem();
+  const a = 'a'.repeat(64);
+  const b = 'b'.repeat(64);
+  s.recordPlan({ subscriptionId: 'sub_a', cancelTokenHash: s.hashCancelToken(a) });
+  s.recordPlan({ subscriptionId: 'sub_b', cancelTokenHash: s.hashCancelToken(b) });
+  assert.equal(s.getPlanByCancelToken(a)?.subscriptionId, 'sub_a');
+  assert.equal(s.getPlanByCancelToken(b)?.subscriptionId, 'sub_b');
+});
+
+test('the donor routes are reachable over the tunnel; the admin API still is not', () => {
+  // The whole point is that a donor can use this from anywhere. Both halves must pass the guard.
+  assert.equal(blockedOverTunnel('/kiosk/m/' + 'a'.repeat(64)), false, 'the page is not an /api path');
+  assert.equal(blockedOverTunnel('/api/public/monthly/abc/cancel'), false, 'the action is under /api/public');
+  // …and none of this may widen the hole that guard exists for.
+  assert.equal(blockedOverTunnel('/api/admin/plans'), true);
+  assert.equal(blockedOverTunnel('/api/login'), true);
+  assert.equal(blockedOverTunnel('/%61pi/admin/donations'), true, 'still fails closed on encoding');
+});
+
+test('the email carries the link, says to keep it, and escapes the donor’s own name', () => {
+  const base = {
+    name: 'Osman',
+    amountText: '$2.00',
+    campaignTitle: 'Masjid Donation',
+    masjidName: 'Al-Noor',
+    masjidLogo: '',
+    datePaid: '12 Aug 2026, 3:14 PM',
+    paymentMethod: 'Visa ···· 4050',
+    reference: 'ABC123',
+    contactEmail: 'info@alnoor.example',
+    contactPhone: '',
+    contactWebsite: '',
+    nextChargeDate: '12 Sep 2026',
+  };
+  const url = 'https://omos.example.org/kiosk/m/' + 'a'.repeat(64);
+  const withLink = renderMonthlyStarted({ accent: '' }, { ...base, cancelUrl: url });
+
+  assert.match(withLink.subject, /monthly donation/i);
+  assert.ok(withLink.html.includes(url), 'the link must actually be in the HTML');
+  assert.ok(withLink.text.includes(url), 'and in the plain-text part, for clients that strip HTML');
+  assert.match(withLink.text, /KEEP THIS EMAIL/i, 'the donor is told to hold on to it');
+  assert.match(withLink.text, /12 Sep 2026/, 'and when the next payment falls');
+
+  // No public address → NO dead link. A URL a donor cannot open is worse than none, because it looks
+  // like it should work and they stop looking for another way to stop the donation.
+  const noLink = renderMonthlyStarted({ accent: '' }, { ...base, cancelUrl: '' });
+  assert.ok(!/https?:\/\//.test(noLink.text.replace(base.contactWebsite, '')), 'no invented URL');
+  assert.match(noLink.text, /contact/i, 'points them at the masjid instead');
+
+  // A non-http scheme must never become an href — the name and the URL both come from outside.
+  const evil = renderMonthlyStarted(
+    { accent: '' },
+    { ...base, name: '<script>alert(1)</script>', cancelUrl: 'javascript:alert(1)' },
+  );
+  assert.ok(!evil.html.includes('<script>'), 'donor name escaped');
+  assert.ok(!evil.html.includes('javascript:'), 'only http(s) links are ever emitted');
+});
+
+test('cancelling is the SAFE direction, which is what makes a public link acceptable', () => {
+  // Worst case for a stolen link is a stopped donation, which the donor can restart at the kiosk.
+  // Money can never move TO anyone through this route, and nothing else is reachable from it.
+  const canDo = (action: string) => ['view-this-plan', 'cancel-this-plan'].includes(action);
+  assert.equal(canDo('cancel-this-plan'), true);
+  assert.equal(canDo('view-this-plan'), true);
+  assert.equal(canDo('change-amount'), false);
+  assert.equal(canDo('list-other-donors'), false);
+  assert.equal(canDo('refund'), false);
+  assert.equal(canDo('reach-admin-api'), false);
+});

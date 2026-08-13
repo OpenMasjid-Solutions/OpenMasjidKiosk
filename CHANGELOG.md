@@ -3,6 +3,21 @@
 
 # Changelog
 
+- **Donors are emailed when their monthly giving starts — with their own link to stop it.** As soon as
+  a standing order is set up, the donor gets a message confirming the amount, the date of their next
+  payment, and a **"Stop my monthly donation"** button. The email tells them to keep it, because that
+  link appears nowhere else. Opening it shows what they set up and stops it in one press, and you get
+  a **"A donor stopped their monthly donation"** alert when they do.
+  - **It works from anywhere**, not just on the masjid's wi-fi: the link uses your OpenMasjidOS remote
+    address (Settings → Remote access), so a donor at home can use it. Without remote access turned
+    on there is no address to send them to, so the email asks them to contact the masjid instead —
+    it never prints a link that can't be opened.
+  - The link is a long random code that only ever does one thing: stop that one donation. It is stored
+    scrambled, so even a copy of your database can't cancel anyone's giving, and it can't reach the
+    admin panel or anyone else's details.
+- **Campaign colours accept any colour you like.** Alongside the presets and the colour picker, both
+  the primary and accent colours now take a typed **hex code**, so a masjid can enter the exact colour
+  from its own branding (`#1f7a5c`, or the three-letter short form) instead of hunting for it by eye.
 - **Monthly donations are no longer set up as a "free trial" — anywhere.** A donation has nothing to
   try out, and the donor has already paid at the kiosk. New monthly plans now simply schedule their
   first repeat charge for a month's time, so they read as **Active** with "Next invoice $2.00 on

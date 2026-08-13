@@ -314,6 +314,8 @@ export interface PlanRecord {
   currency: string;
   donorName: string;
   donorEmail: string;
+  /** HMAC of the donor's cancel-link token. The token itself lives only in their email. */
+  cancelTokenHash: string;
   createdAt: string;
 }
 
@@ -578,9 +580,17 @@ export class Store {
         currency TEXT NOT NULL DEFAULT '',
         donor_name TEXT NOT NULL DEFAULT '',
         donor_email TEXT NOT NULL DEFAULT '',
+        cancel_token_hash TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
       );
     `);
+    // The donor's cancel-link token, for plans created before that link existed. Blank means no link
+    // was ever issued for that plan, and the lookup refuses blanks — so an old plan simply has no
+    // self-service cancel rather than a guessable one.
+    {
+      const pc = (this.db.prepare(`PRAGMA table_info(plans)`).all() as { name: string }[]).map((c) => c.name);
+      if (!pc.includes('cancel_token_hash')) this.db.exec("ALTER TABLE plans ADD COLUMN cancel_token_hash TEXT NOT NULL DEFAULT ''");
+    }
     // Migrate older donation rows (pre-campaigns) to carry the new columns. This MUST run before any
     // index on those columns — an existing `donations` table isn't recreated by CREATE TABLE IF NOT
     // EXISTS, so the columns don't exist yet on an upgrade (a fresh DB has them from the CREATE above).
@@ -1199,13 +1209,16 @@ export class Store {
     currency?: string;
     donorName?: string;
     donorEmail?: string;
+    cancelTokenHash?: string;
   }): void {
     this.db
       .prepare(
         `INSERT INTO plans (subscription_id, customer_id, stripe_account_id, campaign_id, campaign_title,
-           device_id, first_payment_intent_id, first_amount_minor, currency, donor_name, donor_email, created_at)
+           device_id, first_payment_intent_id, first_amount_minor, currency, donor_name, donor_email,
+           cancel_token_hash, created_at)
          VALUES (@subscriptionId, @customerId, @stripeAccountId, @campaignId, @campaignTitle, @deviceId,
-           @firstPaymentIntentId, @firstAmountMinor, @currency, @donorName, @donorEmail, @createdAt)
+           @firstPaymentIntentId, @firstAmountMinor, @currency, @donorName, @donorEmail,
+           @cancelTokenHash, @createdAt)
          ON CONFLICT(subscription_id) DO NOTHING`,
       )
       .run({
@@ -1220,6 +1233,7 @@ export class Store {
         currency: (d.currency || '').toUpperCase(),
         donorName: d.donorName || '',
         donorEmail: d.donorEmail || '',
+        cancelTokenHash: d.cancelTokenHash || '',
         createdAt: new Date().toISOString(),
       });
   }
@@ -1254,6 +1268,7 @@ export class Store {
       currency: String(r.currency ?? ''),
       donorName: String(r.donor_name ?? ''),
       donorEmail: String(r.donor_email ?? ''),
+      cancelTokenHash: String(r.cancel_token_hash ?? ''),
       createdAt: String(r.created_at),
     };
   }
@@ -1716,6 +1731,24 @@ export class Store {
    *  DB leak can't reveal usable device tokens. */
   hashDeviceToken(token: string): string {
     return crypto.createHmac('sha256', this.secret).update(token).digest('hex');
+  }
+
+  /** HMAC for a donor's plan-cancel token. Same construction as a device token and for the same
+   *  reason: what we store must be useless to anyone who reads the database. The token itself is only
+   *  ever in the donor's own email. */
+  hashCancelToken(token: string): string {
+    return crypto.createHmac('sha256', this.secret).update(`cancel:${token}`).digest('hex');
+  }
+
+  /** The plan a donor's cancel link refers to, or null. Looked up BY HASH — the raw token is never
+   *  stored, so a leaked database cannot cancel anyone's donation. */
+  getPlanByCancelToken(token: string): PlanRecord | null {
+    const t = (token ?? '').trim();
+    if (!/^[a-f0-9]{64}$/i.test(t)) return null; // wrong shape — don't even hash it
+    const r = this.db.prepare('SELECT * FROM plans WHERE cancel_token_hash = ?').get(this.hashCancelToken(t)) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? this.rowToPlan(r) : null;
   }
 
   // ── Pairing codes (single-use, short TTL) ───────────────────────────────────

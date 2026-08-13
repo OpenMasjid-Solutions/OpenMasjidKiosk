@@ -23,7 +23,7 @@ import { makeLog } from './logger';
 import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus, emailCanSend } from './fabric';
-import { renderReceipt, renderRefund, type ReceiptContext } from './email';
+import { escapeHtml, renderMonthlyStarted, renderReceipt, renderRefund, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
 import { blockedOverTunnel } from './tunnel';
@@ -1242,6 +1242,134 @@ async function main(): Promise<void> {
     return toCsv(rows);
   });
 
+  // ── The donor's own "stop my monthly donation" page ──────────────────────────
+  // PUBLIC BY DESIGN, and the only public thing here that changes anything. It is reachable over the
+  // masjid's Cloudflare tunnel because a donor is not on the masjid's wi-fi when they change their
+  // mind — `/m/…` is not an `/api` path, and the cancel POST lives under `/api/public/`, both of
+  // which the tunnel allowlist already permits (see tunnel.ts).
+  //
+  // What makes that safe:
+  //   • the token is 256 bits of randomness and is stored ONLY as an HMAC, so reading the database
+  //     does not let anyone cancel a donation;
+  //   • it can do exactly one thing — end THIS plan. There is nothing here to read a donor list
+  //     from, nothing to change an amount with, and no way to reach the admin API;
+  //   • cancelling is the safe direction. The worst a stolen link achieves is stopping a donation,
+  //     which the donor can restart at the kiosk. Money can never move TO anyone through this;
+  //   • it is rate-limited, and an unknown token gets the same answer as a used one.
+  const PLAN_TOKEN_RE = /^[a-f0-9]{64}$/i;
+
+  /** The shared page shell — plain server-rendered HTML, no SPA. A donor opening this from an email
+   *  on an unknown device should get something that works with nothing but a browser. */
+  const cancelPage = (body: string, title: string): string => {
+    const m = store.getMasjid();
+    const name = escapeHtml(m.name || 'Our masjid');
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>
+ :root{color-scheme:light dark}
+ body{margin:0;background:#f4f6f9;color:#16242b;font:16px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+ .wrap{max-width:520px;margin:0 auto;padding:32px 16px}
+ .card{background:#fff;border:1px solid #e6eaed;border-radius:14px;padding:28px 26px}
+ h1{margin:0 0 6px;font-size:20px}
+ .masjid{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:#9aa7af;margin:0 0 18px}
+ dl{margin:18px 0;padding:0;font-size:15px}
+ dt{color:#7a8892;font-size:13px;margin-top:12px}
+ dd{margin:2px 0 0;font-weight:600}
+ button{width:100%;margin-top:22px;padding:13px;font:inherit;font-weight:600;border:0;border-radius:10px;background:#b3261e;color:#fff;cursor:pointer}
+ button:disabled{opacity:.6;cursor:default}
+ .muted{color:#7a8892;font-size:14px}
+ .ok{color:#1f7a5c;font-weight:600}
+ @media(prefers-color-scheme:dark){body{background:#0f1720;color:#e7edf3}.card{background:#16202b;border-color:#243240}.muted,.masjid,dt{color:#9fb0bf}}
+</style></head><body><div class="wrap"><div class="card">
+<p class="masjid">${name}</p>
+${body}
+</div></div></body></html>`;
+  };
+
+  app.get('/m/:token', async (req, reply) => {
+    const token = String((req.params as { token: string }).token || '');
+    reply.header('content-type', 'text/html; charset=utf-8').header('cache-control', 'no-store');
+    // Never let a cancel page be indexed or previewed — the link IS the credential.
+    reply.header('x-robots-tag', 'noindex, nofollow, noarchive');
+    const plan = PLAN_TOKEN_RE.test(token) ? store.getPlanByCancelToken(token) : null;
+    if (!plan) {
+      return reply.code(404).send(
+        cancelPage(
+          `<h1>This link doesn’t work any more</h1>
+           <p class="muted">It may already have been used to stop the donation, or it may have been mistyped.
+           If you’re not sure whether your monthly donation is still running, please contact the masjid.</p>`,
+          'Link not found',
+        ),
+      );
+    }
+    const money = formatMoney(plan.firstAmountMinor, plan.currency);
+    return reply.send(
+      cancelPage(
+        `<h1>Stop your monthly donation</h1>
+         <p class="muted">This ends the repeating payment. Nothing you have already given is affected, and you can start again at the kiosk whenever you like.</p>
+         <dl>
+           <dt>Amount</dt><dd>${escapeHtml(money)} each month</dd>
+           ${plan.campaignTitle ? `<dt>Fund</dt><dd>${escapeHtml(plan.campaignTitle)}</dd>` : ''}
+           <dt>Started</dt><dd>${escapeHtml(fmtReceiptDate(plan.createdAt))}</dd>
+         </dl>
+         <!-- RELATIVE, and one level up on purpose. The browser resolves this against the page's own
+              address, which differs by route: on the LAN it is /m/<token>, and over the tunnel the OS
+              forwards the full prefix so it is /<basePath>/m/<token>. "../api/…" lands on /api/… and
+              /<basePath>/api/… respectively — both correct. A leading slash would break the tunnel
+              case, and a bare "api/…" would resolve to /m/api/… and 404. -->
+         <form method="post" action="${escapeHtml(`../api/public/monthly/${token}/cancel`)}">
+           <button type="submit">Stop my monthly donation</button>
+         </form>`,
+        'Stop your monthly donation',
+      ),
+    );
+  });
+
+  app.post('/api/public/monthly/:token/cancel', async (req, reply) => {
+    const token = String((req.params as { token: string }).token || '');
+    reply.header('content-type', 'text/html; charset=utf-8').header('cache-control', 'no-store');
+    reply.header('x-robots-tag', 'noindex, nofollow, noarchive');
+    const plan = PLAN_TOKEN_RE.test(token) ? store.getPlanByCancelToken(token) : null;
+    if (!plan) {
+      return reply.code(404).send(cancelPage(`<h1>This link doesn’t work any more</h1><p class="muted">Please contact the masjid if you need help.</p>`, 'Link not found'));
+    }
+    const acct = await resolveAccountById(plan.stripeAccountId).catch(() => null);
+    // immediately: the donor has already given this month at the kiosk and the next charge is still
+    // ahead, so “stop it” means stop it — there is no remaining paid period to run out.
+    const done = acct
+      ? await cancelPlan(acct.keys.secretKey, plan.subscriptionId, true).then(() => true).catch(() => false)
+      : false;
+    if (!done) {
+      // Never claim it stopped when it didn't — the donor would walk away and be charged again.
+      return reply.code(502).send(
+        cancelPage(
+          `<h1>We couldn’t stop it just now</h1>
+           <p class="muted">Something went wrong at our end and your monthly donation is still running.
+           Please try this link again shortly, or contact the masjid and they will stop it for you.</p>`,
+          'Couldn’t stop the donation',
+        ),
+      );
+    }
+    log.info(`donor cancelled plan ${plan.subscriptionId} via their own link`);
+    // Tell the masjid: a standing order ending is something an admin should know about, and the donor
+    // did it outside the admin panel so nothing else would ever surface it.
+    void fabricAlert(
+      'monthly-cancelled',
+      'A donor stopped their monthly donation',
+      `${plan.donorName || 'A donor'}${plan.donorEmail ? ` (${plan.donorEmail})` : ''} stopped their ${formatMoney(plan.firstAmountMinor, plan.currency)}/month donation${plan.campaignTitle ? ` to ${plan.campaignTitle}` : ''} using the link in their confirmation email. Nothing further will be collected.`,
+      'info',
+    ).catch(() => {});
+    return reply.send(
+      cancelPage(
+        `<h1 class="ok">Your monthly donation has stopped</h1>
+         <p class="muted">Nothing more will be taken. Thank you for what you have already given —
+         you can start again at the kiosk any time.</p>`,
+        'Monthly donation stopped',
+      ),
+    );
+  });
+
   // ── Kiosk (device-token) routes ─────────────────────────────────────────────
   /** The device for the request's token, INCLUDING a revoked one (or null if the token is
    *  malformed/unknown). Callers decide how to treat `.revoked`. */
@@ -1456,6 +1584,47 @@ async function main(): Promise<void> {
       contactWebsite: m.website || '',
     };
   };
+  /**
+   * The donor's public "stop my monthly donation" link, or '' when there is nowhere to point them.
+   *
+   * The address comes from the PLATFORM (Fabric `domain: true` → publicUrl), which is the masjid's
+   * Cloudflare tunnel address — the same one remote kiosk adoption uses. We never guess it: a LAN
+   * address in a donor's inbox is worse than no link, because it looks like it should work.
+   */
+  const donorCancelUrl = (token: string): string => {
+    if (!token) return '';
+    const pub = cachedFabricSite().publicUrl;
+    return pub ? `${pub}/m/${token}` : '';
+  };
+
+  /**
+   * Tell the donor their monthly giving is set up, and give them the way to stop it.
+   *
+   * Deliberately unconditional on the branded-receipt toggle: that setting is about receipts, and a
+   * standing order is a commitment the donor must be told about regardless. Still needs the platform
+   * to be able to send mail at all — with no provider there is simply no way to reach them, and the
+   * admin alert already covers the masjid's side.
+   */
+  const sendMonthlyStartedEmail = async (paymentIntentId: string, token: string): Promise<void> => {
+    const don = store.getDonationByPaymentIntent(paymentIntentId);
+    if (!don) return;
+    const addr = (don.donorEmail || '').trim();
+    if (!looksLikeEmail(addr) || !emailCanSend()) return;
+    // The first repeat charge is a month after the tap, matching what the subscription was given.
+    const next = new Date(don.createdAt);
+    const days = new Date(next.getFullYear(), next.getMonth() + 2, 0).getDate();
+    const day = next.getDate();
+    next.setDate(1);
+    next.setMonth(next.getMonth() + 1);
+    next.setDate(Math.min(day, days));
+    const rendered = renderMonthlyStarted(store.getEmailReceipt(), {
+      ...receiptContext(don),
+      nextChargeDate: fmtReceiptDate(next.toISOString()),
+      cancelUrl: donorCancelUrl(token),
+    });
+    await fabricEmail({ to: addr, subject: rendered.subject, text: rendered.text, html: rendered.html });
+  };
+
   /** Render + send a donor's branded receipt. Returns whether it {sent} and whether a failure is
    *  worth a {retry} (transient/system) vs permanent (no/invalid email, or the provider rejected
    *  the recipient). NEVER throws. Does NOT re-check the enabled toggle — the CALLER gates on the
@@ -1719,6 +1888,8 @@ async function main(): Promise<void> {
       // branch reached only the container log — so an admin saw a donation badged "Monthly", no plan
       // on the Recurring screen, and nothing anywhere saying why.
       let monthlyProblem = '';
+      /** The donor's one-time cancel token — only set when a plan was created AND recorded. */
+      let monthlyCancelToken = '';
       // The reusable card, whichever way it was taken: `generated_card` for a reader tap, or the
       // PaymentIntent's own payment_method for a keyed card (which has no generated_card at all).
       // Both exist only because the intent was created with setup_future_usage against a customer.
@@ -1767,6 +1938,10 @@ async function main(): Promise<void> {
           // lives on, and THIS charge — month one is card-present, so it is not an invoice and
           // adding up invoices alone under-reports what the plan has raised.
           if (sub.subscriptionId) {
+            // The donor's own way out. Minted here, hashed at rest, and sent ONCE in the
+            // "monthly is set up" email — a standing order keeps taking money long after the donor
+            // has left the building, so stopping it must not depend on reaching the right volunteer.
+            monthlyCancelToken = crypto.randomBytes(32).toString('hex');
             try {
               store.recordPlan({
                 subscriptionId: sub.subscriptionId,
@@ -1780,8 +1955,10 @@ async function main(): Promise<void> {
                 currency: result.currency,
                 donorName: meta.donorName || '',
                 donorEmail: meta.donorEmail || '',
+                cancelTokenHash: store.hashCancelToken(monthlyCancelToken),
               });
             } catch (e) {
+              monthlyCancelToken = ''; // nothing stored → the link would 404; don't promise one
               // The donor HAS a standing order — this only lost our local note of it. Never silent and
               // never dressed up as a Stripe failure: the plan still reaches the Recurring screen via
               // the account scan, but the campaign, the account and month one are now unknown to us.
@@ -1843,6 +2020,14 @@ async function main(): Promise<void> {
           text: `${formatMoney(result.amountMinor, result.currency)} ${label} at ${d.name || 'the kiosk'}.`,
           level: 'success',
         });
+        // "Your monthly donation is set up", carrying the donor's own cancel link. Sent ONCE, on the
+        // first recording, so a retried /complete can't email twice. Separate from the receipt on
+        // purpose: the receipt is about the payment just taken, this is about the ongoing commitment
+        // and the one message the donor needs to keep. Fire-and-forget — a mail failure must never
+        // disturb a donation and a plan that both already exist.
+        if (rec.firstRecord && monthly.created && monthlyCancelToken) {
+          void sendMonthlyStartedEmail(id, monthlyCancelToken).catch(() => {});
+        }
         // Send our branded receipt, but ONLY on the first recording of a 'pending' row (never a
         // double on a retried /complete). Non-blocking; a transient failure stays 'pending' for the
         // retry outbox, a permanent one (bad/no email) is marked 'skipped'. The .catch() is REQUIRED.

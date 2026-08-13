@@ -823,3 +823,10 @@ button.status-pill:hover { filter: brightness(1.08); }
 .inv-sub { font-size: 0.78rem; color: var(--color-ink-faint); }
 .inv-row--warn .inv-sub { color: var(--color-warning); }
 .inv-row--bad .inv-sub { color: var(--color-danger); }
+
+/* The hex box beside a colour swatch. Monospace so a code reads as a code, and narrow so the row
+   still fits the swatch, the field and the reset button on a laptop. */
+.color-hex {
+  width: 8.5rem; flex: none; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: lowercase;
+}
+.color-hex[aria-invalid="true"] { box-shadow: inset 0 0 0 1px var(--color-danger); }
