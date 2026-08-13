@@ -4,6 +4,10 @@
 # Changelog
 
 ## Unreleased
+- **Fixed: the donor’s "Stop my monthly donation" button returned an error.** The link from the email
+  opened the right page, but pressing the button showed a raw "Unsupported Media Type" message and the
+  donation kept running. It now stops the donation as it should. If a donor hit this, their monthly
+  giving is still active and the link in their email works now.
 - **Simpler wording at the card step.** It now says **"Tap or insert your card"** instead of listing
   swiping as well — one shorter instruction at the moment a donor is holding a card and deciding what
   to do. If a card can only be read by swiping, the reader still says so.

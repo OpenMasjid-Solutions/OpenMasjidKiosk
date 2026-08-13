@@ -1256,7 +1256,32 @@ async function main(): Promise<void> {
   //   • cancelling is the safe direction. The worst a stolen link achieves is stopping a donation,
   //     which the donor can restart at the kiosk. Money can never move TO anyone through this;
   //   • it is rate-limited, and an unknown token gets the same answer as a used one.
-  const PLAN_TOKEN_RE = /^[a-f0-9]{64}$/i;
+  // Registered as an ENCAPSULATED plugin so the form-encoded body parser below exists for these two
+  // routes and nowhere else.
+  await app.register(async (donor) => {
+    /**
+     * Accept a plain HTML form submission.
+     *
+     * The cancel page is deliberately server-rendered with no JavaScript — a donor opening it from an
+     * email on an unknown device should need nothing but a browser. A plain <form method="post"> sends
+     * `application/x-www-form-urlencoded`, and this server only ever parses JSON, so Fastify rejected
+     * the submission before the route ran:
+     *
+     *     415 FST_ERR_CTP_INVALID_MEDIA_TYPE — Unsupported Media Type
+     *
+     * The button looked right and did nothing useful. There are no fields to read (the token is in the
+     * URL), so the body is discarded rather than parsed.
+     *
+     * Scoped to this plugin ON PURPOSE. Registering it globally would let every other POST route accept
+     * a cross-origin form submission, and a form POST needs no CORS preflight — the admin API's only
+     * other line of defence there is the SameSite=Lax cookie. Nothing outside these two routes gains
+     * anything from urlencoded, so nothing outside them gets it.
+     */
+    donor.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, _body, done) => {
+      done(null, {});
+    });
+
+    const PLAN_TOKEN_RE = /^[a-f0-9]{64}$/i;
 
   /** The shared page shell — plain server-rendered HTML, no SPA. A donor opening this from an email
    *  on an unknown device should get something that works with nothing but a browser. */
@@ -1287,7 +1312,7 @@ ${body}
 </div></div></body></html>`;
   };
 
-  app.get('/m/:token', async (req, reply) => {
+  donor.get('/m/:token', async (req, reply) => {
     const token = String((req.params as { token: string }).token || '');
     reply.header('content-type', 'text/html; charset=utf-8').header('cache-control', 'no-store');
     // Never let a cancel page be indexed or previewed — the link IS the credential.
@@ -1326,7 +1351,7 @@ ${body}
     );
   });
 
-  app.post('/api/public/monthly/:token/cancel', async (req, reply) => {
+  donor.post('/api/public/monthly/:token/cancel', async (req, reply) => {
     const token = String((req.params as { token: string }).token || '');
     reply.header('content-type', 'text/html; charset=utf-8').header('cache-control', 'no-store');
     reply.header('x-robots-tag', 'noindex, nofollow, noarchive');
@@ -1368,6 +1393,8 @@ ${body}
         'Monthly donation stopped',
       ),
     );
+  });
+
   });
 
   // ── Kiosk (device-token) routes ─────────────────────────────────────────────
