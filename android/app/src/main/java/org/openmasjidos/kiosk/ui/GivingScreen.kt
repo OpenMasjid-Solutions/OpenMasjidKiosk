@@ -1310,7 +1310,9 @@ private fun ColumnScope.CardStep(
     Text(
         // While the keyed-entry PaymentIntent is being created, show a calm "opening" line instead of
         // the reader's tap prompt, so switching from the reader to keyed entry is seamless.
-        text = if (preparing) "Opening secure card entry…" else (readerPrompt?.takeIf { it.isNotBlank() } ?: "Tap, insert or swipe your card"),
+        // No "swipe": see ReaderManager.onRequestReaderInput. This is only the fallback shown before
+        // the reader has said anything; a real swipe request from the reader still comes through.
+        text = if (preparing) "Opening secure card entry…" else (readerPrompt?.takeIf { it.isNotBlank() } ?: "Tap or insert your card"),
         style = MaterialTheme.typography.headlineMedium,
         color = style.onScene,
         textAlign = TextAlign.Center,

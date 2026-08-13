@@ -753,7 +753,13 @@ object ReaderManager {
         // During a payment the reader tells us what to show the donor ("Insert or tap card",
         // "Remove card", …). The giving flow surfaces `prompt` on the card screen.
         override fun onRequestReaderInput(options: ReaderInputOptions) {
-            _state.update { it.copy(prompt = "Tap, insert or swipe your card") }
+            // "Swipe" is deliberately not offered here. Practically every card a masjid sees is
+            // contactless or chip, and naming a third option makes the one instruction a donor has to
+            // follow longer and vaguer at exactly the moment they are holding a card and deciding what
+            // to do. If the reader genuinely needs a swipe it says so itself through
+            // onRequestReaderDisplayMessage, which is passed through untouched — so the rare magstripe
+            // fallback still tells the donor what to do rather than leaving them stuck.
+            _state.update { it.copy(prompt = "Tap or insert your card") }
         }
 
         override fun onRequestReaderDisplayMessage(message: ReaderDisplayMessage) {
