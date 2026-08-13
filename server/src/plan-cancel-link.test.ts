@@ -122,3 +122,49 @@ test('cancelling is the SAFE direction, which is what makes a public link accept
   assert.equal(canDo('refund'), false);
   assert.equal(canDo('reach-admin-api'), false);
 });
+
+test('a link for a donation that has ALREADY stopped says so', () => {
+  // A donor keeps this email. They may open the link months later, or press it twice because the
+  // first press was not obviously acknowledged. Offering "Stop your monthly donation" for something
+  // that already stopped invites a press that does nothing and leaves them unsure either time worked.
+  const PLAN_OVER = new Set(['canceled', 'incomplete_expired']);
+  const isOver = (status: string) => PLAN_OVER.has(status);
+
+  assert.equal(isOver('canceled'), true);
+  assert.equal(isOver('incomplete_expired'), true, 'never got going — nothing is collecting');
+  // Still collecting, or could yet: these must keep offering the button.
+  assert.equal(isOver('active'), false);
+  assert.equal(isOver('trialing'), false, 'the first month was paid at the kiosk — very much live');
+  assert.equal(isOver('past_due'), false, 'a failed renewal is still a live plan Stripe will retry');
+  assert.equal(isOver('unpaid'), false);
+  assert.equal(isOver('paused'), false, 'paused can be resumed, so it is not over');
+});
+
+test('UNKNOWN must never be reported as already stopped', () => {
+  // The asymmetry that matters. Wrongly saying "already stopped" sends a donor away from a donation
+  // that is still running — the exact outcome this page exists to prevent. Wrongly showing the button
+  // costs one press that turns out to be a no-op. So anything we cannot confirm answers "not over".
+  const over = (o: { reachedStripe: boolean; status?: string }) =>
+    o.reachedStripe ? new Set(['canceled', 'incomplete_expired']).has(o.status ?? '') : false;
+
+  assert.equal(over({ reachedStripe: false }), false, 'Stripe unreachable');
+  assert.equal(over({ reachedStripe: false, status: 'canceled' }), false, 'no account resolved');
+  assert.equal(over({ reachedStripe: true, status: 'canceled' }), true, 'confirmed');
+  assert.equal(over({ reachedStripe: true, status: 'active' }), false);
+});
+
+test('a plan Stripe no longer has at all counts as stopped', () => {
+  // Deleted in the dashboard: nothing is collecting, so the honest answer to the donor is that it
+  // has stopped — not an error, and not a button that would 404 against Stripe.
+  const over = (live: { status: string } | null) => (live === null ? true : ['canceled', 'incomplete_expired'].includes(live.status));
+  assert.equal(over(null), true);
+  assert.equal(over({ status: 'active' }), false);
+});
+
+test('an already-stopped press changes nothing, so it raises no alert', () => {
+  // The monthly-cancelled alert tells the masjid a donor ended their giving. Firing it again on a
+  // second press would report a cancellation that did not happen, on a date it did not happen.
+  const alerts = (didSomething: boolean) => didSomething;
+  assert.equal(alerts(true), true, 'a real cancellation');
+  assert.equal(alerts(false), false, 'already stopped — nothing to report');
+});

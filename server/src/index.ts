@@ -20,7 +20,7 @@ import fastifyMultipart from '@fastify/multipart';
 import { z } from 'zod';
 import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
-import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt } from './store';
+import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus, emailCanSend } from './fabric';
 import { escapeHtml, renderMonthlyStarted, renderReceipt, renderRefund, type ReceiptContext } from './email';
@@ -1283,6 +1283,39 @@ async function main(): Promise<void> {
 
     const PLAN_TOKEN_RE = /^[a-f0-9]{64}$/i;
 
+    /** Statuses that mean "this is not collecting any more". `incomplete_expired` never got going. */
+    const PLAN_OVER = new Set(['canceled', 'incomplete_expired']);
+
+    /**
+     * Is this plan already finished, according to STRIPE? Unknown (unreachable, no account, no such
+     * subscription) answers **false** on purpose: the cost of wrongly saying "already stopped" is a
+     * donor walking away from a donation that is still running, which is the one outcome this whole
+     * page exists to prevent. Wrongly showing the button costs a press that turns out to be a no-op.
+     */
+    const donorPlanIsOver = async (plan: PlanRecord): Promise<boolean> => {
+      try {
+        const acct = await resolveAccountById(plan.stripeAccountId);
+        if (!acct) return false;
+        const live = await retrievePlan(acct.keys.secretKey, plan.subscriptionId, { ownedLocally: true });
+        // Gone from Stripe entirely — nothing is collecting, so it is over.
+        if (!live) return true;
+        return PLAN_OVER.has(live.status);
+      } catch {
+        return false;
+      }
+    };
+
+    /** One page, two entry points: opening a spent link, and pressing a button that had already run. */
+    const alreadyStoppedPage = (money: string): string =>
+      cancelPage(
+        `<h1>This monthly donation has already stopped</h1>
+         <p class="muted">Your ${escapeHtml(money)} monthly donation is no longer being collected, so there is nothing
+         left to cancel — you do not need to do anything.</p>
+         <p class="muted">Nothing you have already given is affected. If you would like to give again,
+         you can set it up at the kiosk any time, and thank you for your support.</p>`,
+        'Already stopped',
+      );
+
   /** The shared page shell — plain server-rendered HTML, no SPA. A donor opening this from an email
    *  on an unknown device should get something that works with nothing but a browser. */
   const cancelPage = (body: string, title: string): string => {
@@ -1329,6 +1362,20 @@ ${body}
       );
     }
     const money = formatMoney(plan.firstAmountMinor, plan.currency);
+
+    // ALREADY STOPPED? Say so, rather than offering a button that would do nothing. A donor keeps this
+    // email; they may well open the link again months later, or a second time because the first press
+    // was not obviously acknowledged. Showing them "Stop your monthly donation" for a donation that
+    // already stopped invites them to press it and wonder whether it worked either time.
+    //
+    // Asked live because Stripe is the truth: the plan may also have been ended from the admin panel,
+    // or by the masjid in Stripe's own dashboard, neither of which touches our row. If Stripe cannot
+    // be reached we fall through and show the button — a donor who wants to stop must never be
+    // blocked by our uncertainty, and the POST re-checks anyway.
+    if (await donorPlanIsOver(plan)) {
+      return reply.send(alreadyStoppedPage(money));
+    }
+
     return reply.send(
       cancelPage(
         `<h1>Stop your monthly donation</h1>
@@ -1358,6 +1405,13 @@ ${body}
     const plan = PLAN_TOKEN_RE.test(token) ? store.getPlanByCancelToken(token) : null;
     if (!plan) {
       return reply.code(404).send(cancelPage(`<h1>This link doesn’t work any more</h1><p class="muted">Please contact the masjid if you need help.</p>`, 'Link not found'));
+    }
+    // Already stopped — by an earlier press of this same link, by the admin panel, or in Stripe's own
+    // dashboard. Say so plainly instead of "we've stopped it", which would credit this press with
+    // something it didn't do, and instead of an error, which would suggest it is still running.
+    // No alert is raised either: nothing changed, so there is nothing to tell the masjid.
+    if (await donorPlanIsOver(plan)) {
+      return reply.send(alreadyStoppedPage(formatMoney(plan.firstAmountMinor, plan.currency)));
     }
     const acct = await resolveAccountById(plan.stripeAccountId).catch(() => null);
     // immediately: the donor has already given this month at the kiosk and the next charge is still

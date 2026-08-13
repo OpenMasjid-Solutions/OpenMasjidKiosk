@@ -4,6 +4,10 @@
 # Changelog
 
 ## Unreleased
+- **A cancel link for a donation that has already stopped now says so.** Opening the link again — or
+  pressing the button twice — used to show the same "Stop my monthly donation" page as if it were
+  still running. It now says the donation has already stopped and there is nothing to do. It checks
+  with Stripe, so a plan you ended from the Recurring page (or in Stripe itself) reads the same way.
 - **Fixed: the donor’s "Stop my monthly donation" button returned an error.** The link from the email
   opened the right page, but pressing the button showed a raw "Unsupported Media Type" message and the
   donation kept running. It now stops the donation as it should. If a donor hit this, their monthly
