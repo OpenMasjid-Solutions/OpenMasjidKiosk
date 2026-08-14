@@ -27,7 +27,7 @@ services:
     # build. CI's "Check the compose image matches the channel" step fails the build in both
     # directions — a prerelease version or image reaching stable, or a digest pin stranding dev —
     # but check it by eye too, because a merge is exactly when someone is in a hurry.
-    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.11.0@sha256:0ac663747fa2d21b5ec56b7e86ac0b4479801bd62ebf3689207db091680b9f71
+    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.11.0@sha256:161bc8126a12e70ebd159ed1b7d847c1dc0f44686b8165c75a68526a53097464
     restart: unless-stopped
     environment:
       PORT: "8080"
