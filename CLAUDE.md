@@ -62,7 +62,14 @@ If it prints anything else, `git checkout dev` first. If you are on `main`, you 
     1. Bump `manifest.yaml` (and the rest of rule 6b's fields) to the release version.
     2. Let CI build and publish the image.
     3. Commit `docker-compose.yml` carrying the **published image's `@sha256` digest**.
-    4. **Tag that commit.** Never tag before step 3 — a tag made first carries the *previous* release's digest, so anyone pinning the tag ships the wrong code under the new version number. **This has already happened twice.**
+    4. **Tag the digest-pin commit from step 3 — not the commit before it.** The commit before it is the one *called* `release: vX.Y.Z`, the one that bumps every version field and reads like the release. That is the wrong one, and it is the one you will reach for. Its `image:` line has no digest yet (or still carries the last release's), because the digest cannot exist until CI has built from it. Tag it and the tag ships the **previous** release's code under the new version number, for anyone pinning by tag. **This has already happened twice.**
+
+        ```
+        27e322b  release: v0.11.0                          <- version bump. NOT this one.
+        bb56a5e  build: pin 0.11.0 to the digest CI published   <- tag THIS one.
+        ```
+
+        Check before tagging, don't assume: `git show <commit>:docker-compose.yml | grep image:` must print an `@sha256:` that matches the digest CI printed under "What was published".
 
     **Step 2 — open a PR against `OpenMasjid-Solutions/OpenMasjidAPPS`, base branch `dev`, never `main`.** Change **only our own entry** in `registry.yaml`:
 
