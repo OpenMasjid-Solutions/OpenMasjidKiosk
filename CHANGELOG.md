@@ -3,187 +3,67 @@
 
 # Changelog
 
-## Unreleased
-- **No other site can put this app in a frame any more.** Every response now carries a framing
-  denial, so the admin panel and the donor's cancel page can't be loaded invisibly inside someone
-  else's page to trick a click out of you. This was left open by the August security audit only
-  because it wasn't known whether the OpenMasjidOS dashboard displays apps inside a frame — it
-  doesn't, it opens them in a new tab, so there was nothing to break.
-- **The donor's cancel link can no longer be used to hammer Stripe.** Opening it asks Stripe whether
-  the donation is still running, and nothing capped how often that could happen — so one link in the
-  wrong hands, or an email scanner following every URL, could have used up the masjid's Stripe
-  request allowance. There is now a ceiling on those checks, and reaching it never turns a donor
-  away: the page falls back to simply offering the button, and pressing it still checks properly.
-- **A full repository sweep** — documentation, security and dead code — before the 0.11.0 release:
-  - Every claim in `README.md` re-checked against the code. Corrected: refunds are no longer listed
-    as something the app can't do, the card reader is no longer described as primary-account-only,
-    screen pinning is no longer described as part of the kiosk lockdown, the alert list said three
-    when there are six, and the dev channel is described as it now works (a real version per build,
-    not a `-dev` suffix on the stable one).
-  - `CLAUDE.md` corrected where it had drifted from the code: scrypt rather than argon2, Node 22
-    rather than 20, the real Android package name in the device-owner command, and a manifest/compose
-    sketch that still showed `version: 0.1.0` replaced with the invariants that actually matter.
-  - The build pipeline's own notes said dev builds publish only a moving `:dev` tag, which stopped
-    being true when the dev channel became versioned — it contradicted the code directly below it.
-  - Four unused functions deleted, including one whose comment claimed a single-use protection it
-    never implemented. Every documentation link and external URL checked.
-  - Known gaps now listed honestly in the README rather than discovered later: the inert "allow
-    manual card entry" setting, the audit trail with no screen, donation totals using UTC day
-    boundaries, and the container running as root.
-- **A cancel link for a donation that has already stopped now says so.** Opening the link again — or
-  pressing the button twice — used to show the same "Stop my monthly donation" page as if it were
-  still running. It now says the donation has already stopped and there is nothing to do. It checks
-  with Stripe, so a plan you ended from the Recurring page (or in Stripe itself) reads the same way.
-- **Fixed: the donor’s "Stop my monthly donation" button returned an error.** The link from the email
-  opened the right page, but pressing the button showed a raw "Unsupported Media Type" message and the
-  donation kept running. It now stops the donation as it should. If a donor hit this, their monthly
-  giving is still active and the link in their email works now.
-- **Simpler wording at the card step.** It now says **"Tap or insert your card"** instead of listing
-  swiping as well — one shorter instruction at the moment a donor is holding a card and deciding what
-  to do. If a card can only be read by swiping, the reader still says so.
-- **The campaign editor no longer warns that a second Stripe account means typed cards only.** That
-  stopped being true when the reader learned to move between accounts; it now just notes that the
-  first tap on such an appeal takes a moment.
-- **The card reader now works for campaigns that pay into a second Stripe account.** Until now only
-  campaigns settling to your main Stripe account could take a card on the reader; the rest quietly
-  fell back to typing the card in. The kiosk now moves the reader onto whichever account the campaign
-  pays into, so any appeal can be tapped.
-  - **Your main campaign is unaffected and just as fast.** The switch only happens the moment someone
-    actually donates to an appeal on a different account, never while they browse the tabs — and it
-    takes a few seconds while the reader re-registers, which the donor sees as the card step taking a
-    moment to appear.
-  - Each Stripe account gets its own reader Location, created automatically from the masjid address
-    you already entered. If the reader can not be moved for any reason, the kiosk falls back to typed
-    card entry rather than failing the donation.
-  - **Monthly giving now works on those appeals too** — it needs the reader, so it was previously
-    impossible on a second account.
-  **(Requires updating the tablet app.)**
-- **Donors are emailed when their monthly giving starts — with their own link to stop it.** As soon as
-  a standing order is set up, the donor gets a message confirming the amount, the date of their next
-  payment, and a **"Stop my monthly donation"** button. The email tells them to keep it, because that
-  link appears nowhere else. Opening it shows what they set up and stops it in one press, and you get
-  a **"A donor stopped their monthly donation"** alert when they do.
-  - **It works from anywhere**, not just on the masjid's wi-fi: the link uses your OpenMasjidOS remote
-    address (Settings → Remote access), so a donor at home can use it. Without remote access turned
-    on there is no address to send them to, so the email asks them to contact the masjid instead —
-    it never prints a link that can't be opened.
-  - The link is a long random code that only ever does one thing: stop that one donation. It is stored
-    scrambled, so even a copy of your database can't cancel anyone's giving, and it can't reach the
-    admin panel or anyone else's details.
-- **Campaign colours accept any colour you like.** Alongside the presets and the colour picker, both
-  the primary and accent colours now take a typed **hex code**, so a masjid can enter the exact colour
-  from its own branding (`#1f7a5c`, or the three-letter short form) instead of hunting for it by eye.
-- **Monthly donations are no longer set up as a "free trial" — anywhere.** A donation has nothing to
-  try out, and the donor has already paid at the kiosk. New monthly plans now simply schedule their
-  first repeat charge for a month's time, so they read as **Active** with "Next invoice $2.00 on
-  Sep 12" — in this app, in your Stripe dashboard, and on the donor's own Stripe emails. Nothing about
-  the money changes: the first month is still the tap at the kiosk and the next charge is still a
-  month later. Plans created before this update keep their original wording in Stripe, but the
-  Recurring page shows them as Active too; they collect exactly as they always would have.
-- **Fixed: monthly donations were refused by the card reader before it even asked for a card.** With
-  everything else finally in place, Stripe's reader software turned the payment down on the spot,
-  because saving a donor's card for future months has to say *how* the donor allows that card to be
-  used again — and the tablet wasn't saying. It now does, so a monthly reaches the reader like any
-  other donation. **(Requires updating the tablet app.)**
-- **Fixed: a donation could fail with "unexpected end of stream".** After a quiet spell the tablet
-  reused a connection the server had already closed, and the donation was simply lost — so the very
-  first donation after a lull was the one most likely to fail. It now opens a fresh connection and
-  retries instead. **(Requires updating the tablet app.)**
-- **The giving screen now shows card-reader updates.** When Stripe pushes firmware to the reader, the
-  kiosk says so with a progress percentage and asks you to leave it switched on. Previously this was
-  only visible behind the maintenance PIN, so from the floor an updating reader looked like a broken
-  one — and unplugging it mid-update is the one thing that can leave it needing a repair.
-  **(Requires updating the tablet app.)**
-- **Fixed: the tablet gave up on payments too early.** Monthly donations often couldn't start at all,
-  and the card prompt sometimes flashed up for a split second before "Sorry, we couldn't start the
-  payment". The tablet was only willing to wait **8 seconds** for the server to set a payment up —
-  but setting one up means the server talking to Stripe over your internet connection, and a *monthly*
-  needs two of those conversations, so it ran out of patience two to three times more often than a
-  one-off. The tablet now waits properly for a payment (and only for a payment — everything else still
-  fails fast), and the server keeps its own work comfortably inside that. **(Requires updating the
-  tablet app.)**
-- **Payment failures now say why.** The tablet was recording that a payment failed but not the reason,
-  which is why this took several attempts to pin down. Admin → Devices → Logs now shows the actual
-  cause for both "couldn't start" and a card prompt that disappears.
-- **Fixed: payments could fail to start.** Monthly donations stopped starting at all, and one-off
-  donations failed now and then — "Sorry, we couldn't start the payment" with a donor's card already
-  out. Two causes, both fixed: setting up a monthly is now allowed to fail *without* taking the
-  donation down with it (the gift goes through as a one-off and you get told the plan wasn't created,
-  instead of nothing happening at all), and the kiosk now retries a payment that stumbles on a slow or
-  patchy internet connection rather than giving up on the first try. The retry can never double-charge.
-- **The campaign editor is now a full page in its own browser tab.** Editing an appeal opens a proper
-  page instead of a window-in-a-window, so the live kiosk preview and the settings both get real
-  room — and you can keep several appeals open side by side to compare them. The address is
-  shareable and survives a refresh. Saving or cancelling returns to the campaign list.
-- **Fixed: monthly donations took the money but never set up the standing order.** This is the real
-  cause of the problem reported since 0.11.0-dev.2, and it affected **every** monthly gift on every
-  card and every reader — not just some cards, as the kiosk had been reporting. Saving a donor's card
-  for next month has to be requested when the payment is set up, and we never asked; we then looked
-  for the saved card afterwards and of course never found one. The kiosk now asks properly, and sets
-  the donor up with Stripe **before** taking the payment so there is something for the card to be
-  saved against. Typed-in cards work too — they were a separate gap in the same feature. Refunds of a
-  monthly still don't cancel it; use the Recurring page for that.
-- **The kiosk no longer uses Android's screen pinning.** It was only ever there to block the Back,
-  Home and Recents buttons, which hiding the navigation bar does properly — and it quietly broke
-  everything else, because Android forbids a pinned app from opening any other app and says nothing
-  when it refuses. Android Settings, the permission buttons and the self-updater all appeared dead.
-  The tablet is still held on the giving screen by being the Home app, by reopening itself if it is
-  sent to the background, by the optional shade lock, and by the bars staying hidden. Nothing to
-  change on your tablets; the "Screen pinning" item has simply gone from the setup checklist.
-  **(Requires updating the tablet app.)**
-- **Updating the tablet app no longer needs a browser.** "Update app" downloads the new version over
-  the kiosk's own connection and hands it straight to Android. The first time, Android asks you to
-  allow installs from the kiosk — granting it and coming back now **finishes the update** instead of
-  making you download it again.
-- **Reader hint now works on portrait mounts.** "Reader side" adds **Top** and **Bottom** alongside
-  Left and Right, and the pointer lays itself out along whichever axis you pick — arrows marching up
-  or down for a reader above or below the screen, which is where a portrait-mounted tablet usually
-  has it. Left/Right are unchanged.
-- **Fixed: "Ask for a name" and "Ask for an email" didn't line up.** The email field's helper line
-  made it taller, which nudged its neighbour out of alignment. Fields in a row now share a top edge.
-- **Fixed: "Open Android Settings" didn't work on a locked-down kiosk.** From the tablet's
-  maintenance screen, opening Android Settings (and the permission-checklist buttons, and the "allow
-  installs" screen during an update) could do nothing at all, or flash Settings up for a moment before
-  the kiosk snatched itself back. The kiosk's own defences were fighting the maintainer: it re-pins
-  itself whenever it regains focus and hauls itself back to the front whenever it's left, and both were
-  firing on the way *into* Settings — and a pinned app isn't allowed to open another app, silently. The
-  tablet now recognises a maintenance trip out and stands those defences down until you come back, then
-  re-locks itself. If a button can't open anything at all it re-locks straight away instead of leaving
-  the kiosk unpinned. **(Requires updating the tablet app.)**
-- **Refund a donation from the Donations page.** Open any donation and press **Refund** — the whole
-  gift, or part of it, with a reason recorded in Stripe. The money goes back to the donor's card
-  automatically (most banks show it in 5–10 working days).
-  - **The donor is told**, if they left an email: a branded refund note in your masjid's colours,
-    saying how much is coming back and when. No email address, or the message couldn't be sent? The
-    page and the alert both say so, so nobody is left assuming the donor knows.
-  - **You are told too** — a new **"A donation was refunded"** alert, which OpenMasjidOS sends to your
-    email, your webhook, or both, exactly as you've set it up in Settings → Alerts.
-  - **Your totals stay honest.** Today / this week / this month / all time now show what you actually
-    kept, so a refunded gift stops counting the moment it's given back. The donation itself stays in
-    the log (struck through and badged) rather than disappearing, and the CSV gains **Refunded**,
-    **Net** and **Refund ID** columns.
-  - **Monthly donations:** refunding a payment does **not** cancel the standing order — you're warned
-    before and after, and can end the plan on the Recurring page.
-- **Fixed: a monthly donation could be missing from the Recurring page.** A donor's standing order
-  could show as **Monthly** in Donations while Recurring said "No recurring plans yet" — so there was
-  nothing to pause or cancel, even though Stripe was still collecting. The Recurring page used to
-  build its list by searching your Stripe account for subscriptions it recognised; if that search
-  couldn't reach the account, or the subscription had been edited in the Stripe dashboard, the plan
-  quietly disappeared from the one screen that can stop it. **Every monthly plan this app sets up is
-  now remembered here and always listed**, and if one can't be found in Stripe the page says so
-  plainly instead of showing an empty list. Plans set up before this release are picked up too.
-- **On-screen pointer to your card reader.** When a donor reaches the "Tap, insert or swipe" step, the
-  kiosk can now show a **pulsing contactless symbol with arrows pointing to it**, on the side of the
-  screen where your reader is mounted. When the payment goes through it turns **green**. Set it per
-  tablet in **Devices → Reader side** (Left / Right / **No hint** — the default, so nothing changes
-  until you choose a side). Left/right are for a landscape mount; on a portrait mount they follow the
-  rotation and become top/bottom automatically.
-- **Bigger, adjustable campaign tabs.** The tabs across the top of the kiosk (one per campaign,
-  shown when you have more than one) now have a **kiosk-wide "Campaign tab size"** setting in
-  **Campaigns → Kiosk settings** — Small / Medium / Large / Extra large. **Medium is the original
-  size**, so existing kiosks are unchanged until you pick a bigger one. The admin gets a faithful
-  live mini-preview of the tab strip, and the size pushes to every kiosk on the next heartbeat.
+## 0.11.0
+**Monthly giving works properly for the first time, and a donation can now be refunded from the
+admin panel. Update your tablets after installing** — several of these fixes are in the tablet app.
 
+- **Fixed: monthly donations took the money but never set up the standing order.** This affected
+  **every** monthly gift, on every card and every reader. Saving a donor's card for the following
+  month has to be requested at the moment the payment is set up, and we never asked — then looked
+  for the saved card afterwards and of course never found one. Monthly now works end to end, on the
+  reader and on typed cards. If a donor was told their monthly giving was set up before this
+  release, it was not: they were charged once and nothing recurs.
+- **Refund a donation from the Donations page.** Open any donation and press **Refund** — the whole
+  gift or part of it, with a reason recorded in Stripe. The donor gets a branded refund note if they
+  left an email, you get a **"A donation was refunded"** alert, and **every total is netted**, so
+  today / this week / this month / all time show what the masjid actually kept. The donation stays
+  in the log, struck through and badged, and the CSV gains Refunded, Net and Refund ID columns.
+  Refunding a monthly payment does **not** cancel the plan — end it on the Recurring page.
+- **Donors are emailed when their monthly giving starts, with their own link to stop it.** The
+  message confirms the amount and the date of the next payment and carries a **"Stop my monthly
+  donation"** button; it tells them to keep it, because that link appears nowhere else. One press
+  ends it and you get an alert. A link for a donation that has already stopped says so. It works
+  from anywhere via your OpenMasjidOS remote address — and without remote access turned on the email
+  asks them to contact the masjid rather than printing a link they could not open.
+- **The card reader now works for appeals that pay into a second Stripe account.** Previously only
+  your main account could take a card on the reader and the rest quietly fell back to typing the
+  card in — which also made monthly giving impossible on those appeals. The kiosk now moves the
+  reader onto whichever account the appeal pays into, the moment someone donates to it. Your main
+  appeal is unaffected and just as fast.
+- **Fixed: a monthly donation could be missing from the Recurring page.** A plan could show as
+  Monthly in Donations while Recurring said "No recurring plans yet" — nothing to pause or cancel,
+  even though Stripe was still collecting. Every plan this app sets up is now remembered and always
+  listed, including ones created before this release.
+- **Fixed: "Open Android Settings" and the permission buttons did nothing on a locked kiosk.** The
+  kiosk used Android's screen pinning, which blocks a pinned app from opening *any* other app and
+  says nothing when it refuses — so Settings, the permission prompts and the self-updater all looked
+  dead. Pinning is gone; hiding the navigation bar does the same job properly. Nothing to change on
+  your tablets, and the "Screen pinning" item has left the setup checklist.
+- **Updating the tablet app no longer needs a browser.** "Update app" downloads the new version over
+  the kiosk's own secure connection and hands it to Android, without leaving the lockdown.
+- **Fixed: payments could fail to start.** "Sorry, we couldn't start the payment" with a donor's card
+  already out — often for monthly, now and then for one-offs. The tablet was giving up after eight
+  seconds while the server was still talking to Stripe, and a stale connection after a quiet spell
+  could lose a donation outright. Both fixed, and failures now record the real reason in
+  **Devices → Logs**.
+- **The campaign editor is a full page in its own browser tab.** The live kiosk preview and the
+  settings both get real room, the address is shareable and survives a refresh, and several appeals
+  can be open side by side.
+- **An on-screen pointer to your card reader**, optional and set per tablet in **Devices → Reader
+  side**: a pulsing contactless symbol with arrows on the edge where your reader is mounted — left,
+  right, top or bottom — turning green when the payment goes through.
+- **Card-reader firmware updates are shown on the giving screen**, with a progress percentage and a
+  "leave it switched on" note. From the floor an updating reader used to look like a broken one, and
+  unplugging it mid-update is the one thing that can leave it needing a repair.
+- **Monthly donations are no longer set up as a "free trial."** They read as Active with a real next
+  invoice date — here, in Stripe, and in the donor's own Stripe emails. Nothing about the money
+  changes.
+- **Campaign colours accept a typed hex code**, so a masjid can enter its exact brand colour instead
+  of hunting for it by eye.
+- **Campaign tabs have an adjustable size** — Small / Medium / Large / Extra large in
+  **Campaigns → Kiosk settings**. Medium is the original size, so nothing changes until you pick one.
+- **Security: no other site can put this app in a frame.** The admin panel and the donor's cancel
+  page can no longer be loaded invisibly inside someone else's page to trick a click out of you.
 ## 0.10.2
 - **Nothing changes on your kiosks in this release.** No new donor-facing features, no admin
   changes, no tablet update needed. It is worth installing anyway for the build-safety fix below,
