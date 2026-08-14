@@ -42,7 +42,7 @@ If it prints anything else, `git checkout dev` first. If you are on `main`, you 
     Bump **all six together** — `VERSION`, `manifest.yaml`, `server/package.json`, `web/package.json`, both lockfile `version` fields — **and** the tag in `docker-compose.yml`, which must equal `manifest.yaml`'s version exactly. CI fails the build on drift, on a `:dev` line, and on a non-prerelease version.
 
     The `-dev.N` **shape is load-bearing**: the platform compares dotted-numeric parts, so `N` must sit in its own dotted position. `0.11.0-dev1` collapses to `0.11.0` and is silently never offered. Pinned by `server/src/config.test.ts`.
-7. **That merge is a release.** When told, run the full runbook: set the release version (drop the `-dev.N`) in `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and write the `CHANGELOG.md` release entry (rule 7b) → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → bump the OpenMasjidAPPS `registry.yaml` entry (`ref:` + the immutable 40-char `commit:`) → start the next dev cycle at `X.Y+1.0-dev.1`. `VERSION` moves on `dev` too (rule 6b), and so does `CHANGELOG.md` (rule 7b).
+7. **That merge is a release.** When told, run the full runbook: set the release version (drop the `-dev.N`) in `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and write the `CHANGELOG.md` release entry (rule 7b) → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → **open a PR against OpenMasjidAPPS `dev` and stop there** (rule 7c — you cannot and must not push the catalog yourself) → start the next dev cycle at `X.Y+1.0-dev.1`. `VERSION` moves on `dev` too (rule 6b), and so does `CHANGELOG.md` (rule 7b).
 
 7b. **`CHANGELOG.md`: two audiences, one file.** The changelog ships *inside the image* — the admin panel's "What's new" reads it from disk — so it is a product surface, not a git artefact, and it has to serve a masjid admin reading release notes and a developer tracking `dev` at the same time. It therefore has two kinds of section, and both branches carry the file:
 
@@ -54,6 +54,31 @@ If it prints anything else, `git checkout dev` first. If you are on `main`, you 
     **At release:** distil `## Unreleased` down to the major-only `## X.Y.Z` entry. `main` gets that entry and **no `## Unreleased` section at all** — a stable install must never read notes for code it isn't running. `dev` gets the same `## X.Y.Z` entry *plus* a fresh empty `## Unreleased` above it for the next cycle. The two files differ only by that section, and that difference is deliberate and permanent — do not "fix" it by syncing them.
 
     **Never delete or rewrite a released `## X.Y.Z` section.** They are the notes running installs display. (This has been broken twice: once by merging `main` into a stale branch, which silently dropped twelve of them, and once by an edit whose search text started at the `## Unreleased` heading and whose replacement did not put it back. Check `grep -c '^## ' CHANGELOG.md` before and after any changelog edit.)
+
+7c. **Getting a stable release into the OpenMasjidOS catalog — you go as far as a PR, and no further.** Stable moves only through a **catalog release run by a catalog maintainer**. Our part ends at an open pull request.
+
+    **Step 1 — in THIS repo, in this order. The order is the whole point.**
+
+    1. Bump `manifest.yaml` (and the rest of rule 6b's fields) to the release version.
+    2. Let CI build and publish the image.
+    3. Commit `docker-compose.yml` carrying the **published image's `@sha256` digest**.
+    4. **Tag that commit.** Never tag before step 3 — a tag made first carries the *previous* release's digest, so anyone pinning the tag ships the wrong code under the new version number. **This has already happened twice.**
+
+    **Step 2 — open a PR against `OpenMasjid-Solutions/OpenMasjidAPPS`, base branch `dev`, never `main`.** Change **only our own entry** in `registry.yaml`:
+
+    ```yaml
+      - id: kiosk
+        ref: v0.12.0        # the tag just published — the human label
+        commit: <40-char SHA of the tagged commit>
+    ```
+
+    `commit:` is **what actually gets fetched**; `ref:` is only a label. Get it with `git rev-list -n1 v0.12.0`. Follow step 1 and they are the same commit. **If they ever differ, pin the commit that has the correct digest** — the code that gets installed comes from `commit:`, so that is the one that has to be right.
+
+    **Step 3 — stop.** Do not commit to the catalog's `main`. Do not merge the catalog's `dev` into `main`: the two branches legitimately hold *different builds* of `catalog.json`, and merging them corrupts both channels. A maintainer runs the release that moves `main`.
+
+    **The dev channel needs none of this.** `dev_ref: dev` tracks our `dev` branch automatically and rebuilds hourly. Just keep the prerelease version and its version-tagged image current — and **publish the image before pushing the version bump**, because the dev tag is exact and an entry that lands first is a pull failure on someone's box.
+
+    **The trap that makes `ref:` and `commit:` drift apart here.** `build-image.yml` triggers on `v*` tags, so pushing the tag **rebuilds and republishes** `:X.Y.Z` — moving it off the digest the tagged commit pins. The image is not bit-reproducible, so the new digest genuinely differs. Re-pinning afterwards creates a commit *after* the tag, and that is the commit whose digest matches what `:X.Y.Z` now serves. At v0.10.2 and v0.11.0 both, the release therefore ended with `ref:` and `commit:` pointing at different commits. That is survivable — every digest published stays immutable and pullable, and the source trees are identical because `docker-compose.yml` is in the workflow's `paths-ignore` — but it is exactly the ambiguity step 1 exists to prevent, so **pin the commit whose digest `:X.Y.Z` actually resolves to**, and say plainly in the PR which commit that is and why it is not the tag.
 8. **Re-pin the image line when merging to `main`.** `dev` carries `:X.Y.Z-dev.N`; `main` must always carry `:<version>@sha256:<digest>`. A merge that leaves the dev line on `main` would point every stable install at a development build — check it explicitly, every time. CI enforces both directions (a prerelease version or image reaching stable fails the build), but do not rely on that to notice for you.
 
 ### Update channels (how the two branches reach a masjid)
