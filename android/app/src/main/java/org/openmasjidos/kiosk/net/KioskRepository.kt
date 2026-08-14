@@ -231,9 +231,9 @@ class KioskRepository(context: Context) {
     /** Mint a short-lived Stripe Terminal connection token, server-side. Called by the reader's
      *  [com.stripe.stripeterminal.external.callable.ConnectionTokenProvider]. Throws if not paired
      *  or the server is unreachable — the SDK surfaces that as a reader error. */
-    suspend fun getConnectionToken(): String = withContext(Dispatchers.IO) {
+    suspend fun getConnectionToken(campaignId: String = ""): ConnToken = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: throw IOException("Not paired")
-        KioskApi(pinnedClientFor(p.certSha256)).connectionToken(p.serverUrl, p.deviceToken)
+        KioskApi(pinnedClientFor(p.certSha256)).connectionToken(p.serverUrl, p.deviceToken, campaignId)
     }
 
     /** Download the server's bundled APK to a private cache file, so the app can update ITSELF via the

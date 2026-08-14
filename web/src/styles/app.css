@@ -55,6 +55,11 @@ h1, h2, h3, p, ul { margin: 0; }
 @media (max-width: 520px) { .topbar { padding-inline: 1rem; } }
 .brand { display: flex; align-items: center; gap: 0.6rem; color: var(--color-primary); font-weight: 700; background: none; border: 0; padding: 0; }
 .brand b { color: var(--color-ink); font-family: var(--font-display); letter-spacing: -0.01em; }
+/* The app logo is dark artwork on an OPAQUE light square (no alpha channel), so on the dark
+   theme it lands as a bright tile. Round it and give it a hairline ring so that reads as a
+   deliberate logo chip rather than a stray white block. `contain` keeps the mark un-cropped
+   whatever square we ask for. */
+.brand__logo { border-radius: 0.5rem; object-fit: contain; display: block; box-shadow: 0 0 0 1px var(--color-border, rgba(255, 255, 255, 0.12)); }
 .spacer { flex: 1; }
 .icon-btn {
   width: 2.4rem; height: 2.4rem; border-radius: 0.6rem; display: grid; place-items: center;
@@ -124,6 +129,12 @@ h1, h2, h3, p, ul { margin: 0; }
 .muted { color: var(--color-ink-muted); }
 .faint { color: var(--color-ink-faint); }
 .row { display: flex; align-items: center; gap: 0.6rem; }
+/* A row of FORM FIELDS rather than controls. `.row` centres its children, which is right for buttons
+   and pills but wrong for label+input stacks: the moment one field carries a hint line it becomes
+   taller, and centring then pushes its neighbour's label and input DOWN by half the difference, so
+   two fields side by side visibly fail to line up. Align to the top so the labels share a baseline
+   and the inputs sit level, however much helper text hangs underneath either one. */
+.row--top { align-items: flex-start; }
 .stack { display: flex; flex-direction: column; gap: 0.9rem; }
 
 /* ── /new setup page ──────────────────────────────────────────────────────── */
@@ -569,6 +580,15 @@ button.status-pill:hover { filter: brightness(1.08); }
 .modal--form .modal-body { padding-inline-end: 0.4rem; } /* breathing room beside the scrollbar */
 .modal--form .field { margin-block-end: 1.1rem; }        /* more space between fields */
 
+/* The campaign editor as a full PAGE (its own browser tab) rather than a dialog. Same form, no window
+   chrome: it gets the page's own width and the page's own scrollbar, instead of a scrolling box inside
+   a scrolling box — which is what made a two-column form with a live kiosk preview cramped in a modal.
+   `max-height: none` is the load-bearing line; the modal caps its body height so the dialog can't grow
+   past the viewport, and that cap is exactly what must NOT apply here. */
+.ce-page { width: 100%; }
+.ce-page .modal-body { overflow: visible; max-height: none; padding-inline-end: 0; }
+.ce-page .field { margin-block-end: 1.1rem; }
+
 /* Two-pane layout: form (flexible) + sticky preview. Collapses to one column on a narrow screen, with
    the preview moved to the top so it's the first thing you see. */
 /* Preview across the FULL width at the top (both kiosk orientations, big), settings below. A landscape
@@ -637,6 +657,13 @@ button.status-pill:hover { filter: brightness(1.08); }
 .donation-amt { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-ink); }
 .donation-row__meta { font-size: 0.82rem; }
 .badge--monthly { background: var(--color-primary-subtle); color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary-subtle); }
+/* Refunded money. Struck through rather than hidden or recoloured on its own: the donation still
+   happened and stays in the log, but scanning the list must never read a returned gift as income.
+   The strike is what carries the meaning, so the colour is a reinforcement and not the only signal
+   (it still reads on a mono display, and to anyone who can't distinguish the two colours). */
+.badge--refunded { background: color-mix(in srgb, var(--color-danger) 12%, transparent); color: var(--color-danger); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent); }
+.donation-amt--refunded,
+.detail-amt--refunded { text-decoration: line-through; text-decoration-thickness: 2px; color: var(--color-ink-muted); }
 .device-remove-btn:hover { color: var(--color-danger); }
 .device-danger { background: var(--color-danger); color: var(--color-on-primary); }
 .device-danger:hover { background: var(--color-danger); filter: brightness(1.06); }
@@ -796,3 +823,10 @@ button.status-pill:hover { filter: brightness(1.08); }
 .inv-sub { font-size: 0.78rem; color: var(--color-ink-faint); }
 .inv-row--warn .inv-sub { color: var(--color-warning); }
 .inv-row--bad .inv-sub { color: var(--color-danger); }
+
+/* The hex box beside a colour swatch. Monospace so a code reads as a code, and narrow so the row
+   still fits the swatch, the field and the reset button on a laptop. */
+.color-hex {
+  width: 8.5rem; flex: none; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: lowercase;
+}
+.color-hex[aria-invalid="true"] { box-shadow: inset 0 0 0 1px var(--color-danger); }

@@ -2,11 +2,12 @@
 // Copyright (C) 2026 OpenMasjid-Solutions
 
 /** Small shared UI pieces used across the admin shell: the ambient scene, brand mark,
- *  live clock, theme toggle, and the top-right profile menu. Mirrors the OpenMasjidOS
- *  dashboard (and OpenMasjidDonations) so the panel feels like part of the platform. */
+ *  live clock, and the top-right profile menu (which carries the light/dark override).
+ *  Mirrors the OpenMasjidOS dashboard (and OpenMasjidDonations) so the panel feels like
+ *  part of the platform. */
 import { useEffect, useRef, useState } from 'react';
-import { LogOut, Monitor, Moon, Settings, Sparkles, Sun, User } from 'lucide-react';
-import { prefsStore, resolveTheme, usePrefs, type Prefs } from './prefs';
+import { LogOut, Moon, Settings, Sparkles, Sun, User } from 'lucide-react';
+import { prefsStore, resolveTheme, usePrefs } from './prefs';
 import { getSession, logout, type AppInfo, type Session } from './api';
 import { withBase } from './base';
 import { useUnreadRelease, WhatsNewModal } from './whatsnew';
@@ -42,32 +43,22 @@ export function Scene() {
   return <div className="scene" aria-hidden="true" />;
 }
 
+/** The app's own logo, served from web/public (a copy of the repo-root icon.svg — the same
+ *  mark the App Store and the browser tab show). Goes through withBase so it still resolves
+ *  when the panel is reached under a /<basePath> prefix. Decorative: the surrounding link
+ *  already carries the accessible name, so an empty alt keeps a screen reader from hearing
+ *  the app's name twice. */
+export function Logo({ size = 26 }: { size?: number }) {
+  return <img className="brand__logo" src={withBase('/logo.svg')} width={size} height={size} alt="" />;
+}
+
 /** Brand mark; returns to the dashboard tab. */
 export function Brand() {
   return (
     <a className="brand" href="#dashboard" aria-label="OpenMasjid Kiosk — dashboard">
-      <Crescent size={22} />
+      <Logo size={26} />
       <b>OpenMasjid&nbsp;Kiosk</b>
     </a>
-  );
-}
-
-const NEXT: Record<Prefs['theme'], Prefs['theme']> = { system: 'dark', dark: 'light', light: 'system' };
-const THEME_LABEL: Record<Prefs['theme'], string> = { system: 'System theme', dark: 'Dark theme', light: 'Light theme' };
-
-/** Cycles system → dark → light. Dark is the default look. */
-export function ThemeToggle() {
-  const { theme } = usePrefs();
-  const Icon = theme === 'system' ? Monitor : theme === 'dark' ? Moon : Sun;
-  return (
-    <button
-      className="icon-btn"
-      title={THEME_LABEL[theme]}
-      aria-label={`${THEME_LABEL[theme]} — click to change`}
-      onClick={() => prefsStore.patch({ theme: NEXT[theme] })}
-    >
-      <Icon size={19} />
-    </button>
   );
 }
 

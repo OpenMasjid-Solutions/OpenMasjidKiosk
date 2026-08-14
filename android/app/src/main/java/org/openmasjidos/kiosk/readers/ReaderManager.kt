@@ -38,9 +38,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.openmasjidos.kiosk.net.KioskRepository
 
 /** How the tablet talks to the reader. Simulated uses Stripe's built-in mock reader (no hardware). */
@@ -161,6 +163,18 @@ object ReaderManager {
         _state.update { it.copy(initialized = true) }
     }
 
+    /**
+     * Which campaign the NEXT connection token should be scoped to ('' = the primary account).
+     *
+     * A Terminal reader is registered to one Stripe account, and the token is what binds it. The SDK
+     * asks for a token on its own schedule, so the campaign has to be parked here for the provider to
+     * pick up rather than passed in — see [registerFor].
+     */
+    @Volatile private var tokenCampaignId: String = ""
+
+    /** The Stripe account the reader is CURRENTLY registered to, as the server reported it. */
+    @Volatile private var registeredAccountId: String? = null
+
     private val connectionTokenProvider = object : ConnectionTokenProvider {
         override fun fetchConnectionToken(callback: ConnectionTokenCallback) {
             // Called by the SDK on its own worker thread, so blocking here is fine.
@@ -170,7 +184,9 @@ object ReaderManager {
                 return
             }
             try {
-                val token = runBlocking { r.getConnectionToken() }
+                val ct = runBlocking { r.getConnectionToken(tokenCampaignId) }
+                registeredAccountId = ct.accountId
+                val token = ct.secret
                 r.log("info", "reader_token_ok")
                 callback.onSuccess(token)
             } catch (e: Exception) {
@@ -491,6 +507,59 @@ object ReaderManager {
         tryAutoConnect()
     }
 
+    /**
+     * Make sure the reader is registered to the Stripe account a campaign settles to, re-registering
+     * it if not. Returns true when the reader is connected and ready to take money for [campaignId].
+     *
+     * WHY THIS EXISTS. A Terminal reader belongs to ONE Stripe account: it is registered to a Location,
+     * a Location belongs to an account, and a reader registered to account A is refused when asked to
+     * collect a PaymentIntent belonging to account B. That is why a campaign settling elsewhere used to
+     * be typed-entry only. Swapping accounts means genuinely re-registering: drop the connection, throw
+     * away the cached credentials (they are the old account’s), and connect again with a token minted
+     * for the new one.
+     *
+     * LAZY ON PURPOSE. Re-registering costs several seconds of Bluetooth work, so it happens at the
+     * moment a donation actually starts on a campaign that needs it — never while a donor browses tabs.
+     * The kiosk sits on the main campaign nearly all the time, and that path is untouched: same account,
+     * already registered, this returns immediately without touching the reader.
+     *
+     * Unlike [disconnect] this keeps auto-connect and the remembered reader, because we intend to come
+     * straight back — the only thing being discarded is which ACCOUNT it answers to.
+     */
+    suspend fun registerFor(campaignId: String, accountId: String, locationId: String): Boolean {
+        val connected = _state.value.conn == ReaderConn.Connected
+        if (connected && registeredAccountId == accountId) return true
+        if (!connected) return false // nothing to re-register; the caller falls back to typed entry
+        val serial = connectedSerial ?: autoSerial
+        val transport = connectedTransport ?: autoTransport
+        repo?.log("info", "reader_reregister", "account=" + accountId.ifBlank { "primary" })
+
+        // Scope every token from here on to this campaign, THEN drop the old registration.
+        tokenCampaignId = campaignId
+        registeredAccountId = null
+        _state.update { it.copy(conn = ReaderConn.Connecting, error = null) }
+        runCatching {
+            Terminal.getInstance().disconnectReader(object : Callback {
+                override fun onSuccess() {}
+                override fun onFailure(e: TerminalException) {}
+            })
+        }
+        // Wait for the SDK to actually let go before clearing credentials — they belong to the old
+        // account, and clearing them while still connected is not honoured.
+        withTimeoutOrNull(10_000) { _state.first { it.conn != ReaderConn.Connected } }
+        runCatching { Terminal.getInstance().clearCachedCredentials() }
+
+        autoLocationId = locationId
+        enableAutoConnect(transport, serial, locationId)
+        val ok = withTimeoutOrNull(45_000) { _state.first { it.conn == ReaderConn.Connected } } != null
+        if (ok) {
+            registeredAccountId = accountId
+        } else {
+            repo?.log("warn", "reader_reregister_failed", "account=" + accountId.ifBlank { "primary" })
+        }
+        return ok
+    }
+
     /** Re-attempt auto-connect (e.g. after the location/Bluetooth permission was just granted). */
     fun retryAutoConnect() {
         autoFailures = 0
@@ -684,7 +753,13 @@ object ReaderManager {
         // During a payment the reader tells us what to show the donor ("Insert or tap card",
         // "Remove card", …). The giving flow surfaces `prompt` on the card screen.
         override fun onRequestReaderInput(options: ReaderInputOptions) {
-            _state.update { it.copy(prompt = "Tap, insert or swipe your card") }
+            // "Swipe" is deliberately not offered here. Practically every card a masjid sees is
+            // contactless or chip, and naming a third option makes the one instruction a donor has to
+            // follow longer and vaguer at exactly the moment they are holding a card and deciding what
+            // to do. If the reader genuinely needs a swipe it says so itself through
+            // onRequestReaderDisplayMessage, which is passed through untouched — so the rare magstripe
+            // fallback still tells the donor what to do rather than leaving them stuck.
+            _state.update { it.copy(prompt = "Tap or insert your card") }
         }
 
         override fun onRequestReaderDisplayMessage(message: ReaderDisplayMessage) {

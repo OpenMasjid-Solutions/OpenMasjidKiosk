@@ -21,9 +21,49 @@ export interface StripeKeys {
 
 export type StripeMode = 'test' | 'live' | 'unknown';
 
-/** A Stripe client with a sane network timeout + one retry (the SDK default is 80s). */
+/**
+ * A Stripe client tuned for a kiosk with a donor standing in front of it.
+ *
+ * A masjid's uplink is often the weak link in this whole system, and a single dropped request means
+ * "Sorry — couldn't start the payment" with someone's card already in their hand. ONE retry was not
+ * enough: intermittent "hit or miss" failures on ordinary one-off donations were the symptom.
+ *
+ * Three retries with a shorter per-attempt timeout is the better trade for this shape of failure —
+ * a blip costs a second, not a lost donation, and total worst-case latency is similar to the old
+ * single 20s attempt. The SDK only retries on network errors, 5xx and 429 (never on a card decline
+ * or a 4xx), and it attaches its own idempotency key to each retry, so a retried create can never
+ * charge twice.
+ */
 export function client(secretKey: string): Stripe {
-  return new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, timeout: 20_000, maxNetworkRetries: 1 });
+  return new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, timeout: PAY_TIMEOUT_MS, maxNetworkRetries: PAY_RETRIES });
+}
+
+/**
+ * THE BUDGET HAS TO FIT INSIDE THE TABLET'S PATIENCE. This is the mistake that made dev.13 worse
+ * rather than better: retries were raised to 3 × 12s ≈ 50s per call, while the tablet gives up on the
+ * whole request after 20s (read) / 30s (call). So a retry that was supposed to rescue a blip instead
+ * guaranteed the tablet timed out first — and a MONTHLY, which needs two sequential Stripe calls
+ * (customer, then intent) plus a possible fallback, was two to three times more exposed than a
+ * one-off. Which is exactly the reported shape: "monthly can't even start, one-offs are hit and miss".
+ *
+ * So: one retry, a short per-attempt timeout, and a worst case of roughly 8s + 1s backoff + 8s ≈ 17s
+ * per call. The tablet's payment timeouts are raised to comfortably exceed the worst case for a whole
+ * monthly (see PinnedHttp), so whichever side is slow, the SERVER is the one that decides the outcome
+ * and can report a real reason — instead of the tablet hanging up and showing "couldn't start".
+ */
+const PAY_TIMEOUT_MS = 8_000;
+const PAY_RETRIES = 1;
+
+/**
+ * A deliberately impatient client for work that is OPTIONAL to the payment.
+ *
+ * Creating the monthly Customer is the only such step: if it fails or is slow we simply don't set up
+ * the standing order, and the donation itself is unaffected. Spending the full retry budget on it
+ * would push the payment past the tablet's timeout to protect something we are willing to lose —
+ * exactly the wrong trade with a donor waiting at the reader.
+ */
+export function quickClient(secretKey: string): Stripe {
+  return new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION, timeout: 5_000, maxNetworkRetries: 0 });
 }
 
 const PK_RE = /^pk_(test|live)_[A-Za-z0-9]+$/;
@@ -178,6 +218,52 @@ export interface CreatePaymentIntentInput {
   description?: string;
   receiptEmail?: string;
   metadata?: Record<string, string>;
+  /**
+   * The Customer this payment belongs to. Only set for a MONTHLY donation, where the card has to
+   * survive the transaction — see [setupFutureUsage].
+   */
+  customerId?: string;
+  /**
+   * SAVE THE CARD FOR LATER. Required for monthly, and the reason monthly never once worked:
+   *
+   * Stripe only produces a reusable payment method from a charge when the PaymentIntent asked for
+   * one. For `card_present` that reusable method is `payment_method_details.card_present
+   * .generated_card`, and Stripe's own API docs are explicit that it exists only "if setup_future_usage
+   * is set". We were reading generated_card without ever setting it, so it was ALWAYS null — every
+   * monthly donation took the money and then found no card to build the standing order from.
+   *
+   * For keyed entry there is no generated_card at all: the PaymentIntent's own `payment_method` is
+   * already reusable, and setup_future_usage is what attaches it to the customer.
+   */
+  setupFutureUsage?: 'off_session';
+}
+
+/**
+ * Create the Stripe Customer a monthly donation will belong to, BEFORE the payment.
+ *
+ * Up-front because that is what `setup_future_usage` needs: Stripe attaches the saved card (the
+ * card-present `generated_card`, or the keyed PaymentMethod) to the customer named ON THE
+ * PaymentIntent, at the moment the charge succeeds. Creating the customer afterwards, as we used to,
+ * leaves nothing for Stripe to attach the card to.
+ *
+ * Monthly always has a name and an email (enforced on the tablet AND server-side), so this is never
+ * an anonymous customer.
+ */
+export async function createDonorCustomer(
+  secretKey: string,
+  input: { name?: string; email?: string; deviceId?: string; campaignId?: string; idempotencyKey?: string },
+): Promise<string> {
+  // quickClient: this step is optional to the payment, so it must never eat the budget the PAYMENT
+  // needs. Losing monthly is recoverable; a donation the tablet gave up waiting for is not.
+  const customer = await quickClient(secretKey).customers.create(
+    {
+      name: input.name || undefined,
+      email: input.email || undefined,
+      metadata: { app: 'kiosk', deviceId: input.deviceId || '', campaignId: input.campaignId || '' },
+    },
+    input.idempotencyKey ? { idempotencyKey: `${input.idempotencyKey}_cust` } : undefined,
+  );
+  return customer.id;
 }
 
 /** Create a card-present PaymentIntent for the reader to collect + confirm. Manual capture:
@@ -197,6 +283,10 @@ export async function createCardPresentPaymentIntent(
       capture_method: 'manual',
       description: input.description || undefined,
       receipt_email: input.receiptEmail || undefined,
+      // Monthly only. Together these are what make Stripe mint `generated_card` on the resulting
+      // charge and attach it to this customer — the card the standing order is then built from.
+      ...(input.customerId ? { customer: input.customerId } : {}),
+      ...(input.setupFutureUsage ? { setup_future_usage: input.setupFutureUsage } : {}),
       metadata: input.metadata,
     },
     idempotencyKey ? { idempotencyKey } : undefined,
@@ -225,6 +315,11 @@ export async function createCardPaymentIntent(
       payment_method_types: ['card'],
       description: input.description || undefined,
       receipt_email: input.receiptEmail || undefined,
+      // Monthly only. There is no `generated_card` for a keyed card — the PaymentIntent's own
+      // payment_method IS the reusable one, and setup_future_usage is what attaches it to the
+      // customer so a subscription can charge it later.
+      ...(input.customerId ? { customer: input.customerId } : {}),
+      ...(input.setupFutureUsage ? { setup_future_usage: input.setupFutureUsage } : {}),
       metadata: input.metadata,
     },
     idempotencyKey ? { idempotencyKey } : undefined,
@@ -240,6 +335,10 @@ export interface CompletedPaymentIntent {
   chargeId?: string;
   /** The reusable PaymentMethod Stripe derives from a card-present charge (monthly, slice 7). */
   generatedCard?: string;
+  /** The PaymentIntent's own payment method — the reusable one for a KEYED card. */
+  paymentMethodId?: string;
+  /** The customer the PaymentIntent was created against (monthly only). */
+  customerId?: string;
   /** Card brand + last 4 from the charge (for the emailed receipt's "payment method" line). */
   cardBrand?: string;
   cardLast4?: string;
@@ -272,6 +371,12 @@ export async function completeCardPresentPaymentIntent(secretKey: string, id: st
     currency: pi.currency.toUpperCase(),
     chargeId: charge?.id,
     generatedCard: cardPresent?.generated_card ?? undefined,
+    // The KEYED-entry equivalent of generated_card. A typed card has no generated_card — the
+    // PaymentIntent's own payment_method is already reusable, and setup_future_usage attached it to
+    // the customer. Without this, monthly could never work by typed card even once generated_card
+    // was fixed, which is half of "it can't set up monthly anywhere".
+    paymentMethodId: typeof pi.payment_method === 'string' ? pi.payment_method : pi.payment_method?.id,
+    customerId: typeof pi.customer === 'string' ? pi.customer : pi.customer?.id,
     cardBrand: cardPresent?.brand ?? card?.brand ?? undefined,
     cardLast4: cardPresent?.last4 ?? card?.last4 ?? undefined,
     receiptUrl: charge?.receipt_url ?? undefined,
@@ -280,12 +385,88 @@ export async function completeCardPresentPaymentIntent(secretKey: string, id: st
   };
 }
 
+/**
+ * Ask Stripe to email its own built-in receipt for a charge we had suppressed.
+ *
+ * The branded-receipt path deliberately omits `receipt_email` at intent so Stripe stays quiet and
+ * our own message is the only one the donor gets. When that message then proves permanently
+ * unsendable, the donor would be left with NOTHING — so hand the job back: setting `receipt_email`
+ * on the charge is what makes Stripe send, and it works after the fact, not just at intent.
+ *
+ * Idempotent in the way that matters: Stripe sends one receipt per charge for a given address, so a
+ * retried fallback does not produce a second email. Never throws — a failed fallback must not
+ * disturb a donation that has already succeeded and been recorded.
+ *
+ * (Stripe only actually delivers receipts in live mode; in test mode the call succeeds and no mail
+ * is sent, which is Stripe's behaviour and not something this can work around.)
+ */
+export async function sendStripeReceipt(secretKey: string, chargeId: string, email: string): Promise<boolean> {
+  if (!chargeId || !email.trim()) return false;
+  try {
+    await client(secretKey).charges.update(chargeId, { receipt_email: email.trim() });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── Refunds: giving a donation back ────────────────────────────────────────────────────────
+export type RefundReason = 'requested_by_customer' | 'duplicate' | 'fraudulent';
+
+export interface RefundResult {
+  refundId: string;
+  /** What Stripe actually gave back, in minor units — trust THIS over what we asked for. */
+  amountMinor: number;
+  /** 'succeeded' | 'pending' | 'failed' | 'canceled'. Card refunds are usually 'succeeded' at once;
+   *  some methods settle asynchronously, which is why the caller must not assume success. */
+  status: string;
+}
+
+/**
+ * Refund a donation, in full or in part.
+ *
+ * Refunds the PAYMENT INTENT rather than the charge: one PaymentIntent has exactly one successful
+ * charge here, and naming the intent means we never have to have stored a charge id (older rows
+ * predate that column) and can never refund the wrong charge on a retried intent.
+ *
+ * `amountMinor` omitted = refund everything not already refunded. Stripe itself enforces that the
+ * total can't exceed the charge, so a double-submit gets `charge_already_refunded` rather than money
+ * leaving twice — and the idempotency key makes an identical retry return the SAME refund instead of
+ * creating a second one.
+ *
+ * Throws on failure. Unlike the receipt helpers this must NOT fail soft: refusing loudly is the only
+ * way the admin learns the money did not move, and a silent failure here means telling a donor they
+ * have been refunded when they have not.
+ */
+export async function refundPayment(
+  secretKey: string,
+  input: { paymentIntentId: string; amountMinor?: number; reason?: RefundReason; idempotencyKey?: string; metadata?: Record<string, string> },
+): Promise<RefundResult> {
+  const c = client(secretKey);
+  const refund = await c.refunds.create(
+    {
+      payment_intent: input.paymentIntentId,
+      ...(typeof input.amountMinor === 'number' ? { amount: input.amountMinor } : {}),
+      ...(input.reason ? { reason: input.reason } : {}),
+      metadata: { app: 'kiosk', ...(input.metadata ?? {}) },
+    },
+    input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined,
+  );
+  return { refundId: refund.id, amountMinor: refund.amount ?? 0, status: refund.status ?? 'unknown' };
+}
+
 // ── Monthly donations: Customer + Subscription from the card-present charge (slice 7) ──────
 export interface MonthlySubscriptionInput {
   amountMinor: number;
   currency: string;
-  /** The reusable PaymentMethod Stripe derived from the card-present charge (generated_card). */
+  /** The reusable PaymentMethod: `generated_card` for a reader tap, or the PaymentIntent's own
+   *  payment_method for a keyed card. Either way it exists only because the PaymentIntent was created
+   *  with setup_future_usage. */
   paymentMethod: string;
+  /** The Customer created BEFORE the payment (see createDonorCustomer) that Stripe attached the saved
+   *  card to. Empty falls back to creating one here — the pre-setup_future_usage behaviour, kept so an
+   *  in-flight PaymentIntent from an older build can still complete. */
+  customerId?: string;
   name?: string;
   email?: string;
   /** Human product name shown on the donor's Stripe invoices, e.g. "Monthly donation — Al-Noor". */
@@ -322,16 +503,33 @@ export interface MonthlySubscriptionResult {
 export async function createMonthlySubscription(secretKey: string, input: MonthlySubscriptionInput): Promise<MonthlySubscriptionResult> {
   const c = client(secretKey);
   const idem = input.idempotencyKey;
-  const customer = await c.customers.create(
-    {
-      name: input.name || undefined,
-      email: input.email || undefined,
-      payment_method: input.paymentMethod, // attaches the generated_card to the customer
-      invoice_settings: { default_payment_method: input.paymentMethod },
-      metadata: { app: 'kiosk', deviceId: input.deviceId || '' },
-    },
-    idem ? { idempotencyKey: `${idem}_cust` } : undefined,
-  );
+  // The customer normally already exists: monthly creates it BEFORE the payment so that
+  // setup_future_usage has something to attach the saved card to (see createDonorCustomer). Reuse it
+  // — creating a second one here would leave the saved card on one customer and the subscription
+  // billing another, which is a subscription that can never collect.
+  const existing = (input.customerId ?? '').trim();
+  const customer = existing
+    ? await (async () => {
+        // The card is already attached by setup_future_usage; attach again only as a no-op safety net
+        // for an odd flow, ignoring the "already attached" error. Then make it the DEFAULT, which is
+        // what the subscription's invoices actually charge.
+        await c.paymentMethods.attach(input.paymentMethod, { customer: existing }).catch(() => undefined);
+        return c.customers.update(existing, {
+          name: input.name || undefined,
+          email: input.email || undefined,
+          invoice_settings: { default_payment_method: input.paymentMethod },
+        });
+      })()
+    : await c.customers.create(
+        {
+          name: input.name || undefined,
+          email: input.email || undefined,
+          payment_method: input.paymentMethod, // attaches the generated_card to the customer
+          invoice_settings: { default_payment_method: input.paymentMethod },
+          metadata: { app: 'kiosk', deviceId: input.deviceId || '' },
+        },
+        idem ? { idempotencyKey: `${idem}_cust` } : undefined,
+      );
   // A recurring monthly Price for this amount. Subscription `price_data` requires an existing
   // product id, whereas `prices.create` accepts an inline `product_data` (auto-creating the
   // product) — account-agnostic and idempotent, so we build the price here then subscribe to it.
@@ -346,24 +544,54 @@ export async function createMonthlySubscription(secretKey: string, input: Monthl
   );
   // Anchor the first recurring charge to the same day next month (first month already collected).
   // Derived from a FIXED timestamp (the PI's created) so a retried /complete recomputes the exact
-  // same trial_end — otherwise the `_sub` idempotency key would carry a different body and Stripe
+  // same anchor — otherwise the `_sub` idempotency key would carry a different body and Stripe
   // would reject it. Clamp the day so a month-end signup (e.g. Jan 31) doesn't overflow past Feb.
   const anchor = new Date(input.anchorSec * 1000);
   const daysInNextMonth = new Date(anchor.getFullYear(), anchor.getMonth() + 2, 0).getDate();
   anchor.setDate(1);
   anchor.setMonth(anchor.getMonth() + 1);
   anchor.setDate(Math.min(new Date(input.anchorSec * 1000).getDate(), daysInNextMonth));
-  const trialEnd = Math.floor(anchor.getTime() / 1000);
-  const sub = await c.subscriptions.create(
-    {
-      customer: customer.id,
-      items: [{ price: price.id }],
-      default_payment_method: input.paymentMethod,
-      trial_end: trialEnd,
-      metadata: { app: 'kiosk', deviceId: input.deviceId || '', campaignId: input.campaignId || '', campaign: input.campaignTitle || '' },
-    },
-    idem ? { idempotencyKey: `${idem}_sub` } : undefined,
-  );
+  const firstChargeSec = Math.floor(anchor.getTime() / 1000);
+
+  const common = {
+    customer: customer.id,
+    items: [{ price: price.id }],
+    default_payment_method: input.paymentMethod,
+    metadata: { app: 'kiosk', deviceId: input.deviceId || '', campaignId: input.campaignId || '', campaign: input.campaignTitle || '' },
+  };
+
+  /**
+   * A DONATION IS NOT A FREE TRIAL, so don't create one.
+   *
+   * Both mechanisms below achieve the same thing — first automatic charge a month out, because month
+   * one was already taken on the reader — but they say very different things to a human:
+   *
+   *   billing_cycle_anchor  → status `active`, "Next invoice $2.00 on Sep 12"    ← what this is
+   *   trial_end             → status `trialing`, "Free trial ends Sep 12"        ← what it is NOT
+   *
+   * The trial wording reached the donor's own Stripe receipts and the masjid's dashboard, telling
+   * everyone the opposite of the truth: that nothing had been paid yet.
+   *
+   * `proration_behavior: 'none'` is the load-bearing half. Stripe's default for a future
+   * billing_cycle_anchor is `create_prorations` — the gap between now and the anchor becomes a
+   * prorated charge, which on top of the tap already taken at the reader would bill the donor TWICE.
+   * With 'none' there is no proration at all: nothing now, a full amount on the anchor date.
+   */
+  const sub = await c.subscriptions
+    .create(
+      { ...common, billing_cycle_anchor: firstChargeSec, proration_behavior: 'none' },
+      idem ? { idempotencyKey: `${idem}_sub_anchor` } : undefined,
+    )
+    // Fall back to the trial mechanism if Stripe won't take the anchor (it has historically been
+    // fussy about how far ahead one may sit). A plan that reads "Free trial" is a wording problem;
+    // no plan at all means a donor who asked to give monthly gives once. Wording loses that contest.
+    .catch(async (err) => {
+      if ((err as { type?: string }).type !== 'StripeInvalidRequestError') throw err;
+      return c.subscriptions.create(
+        { ...common, trial_end: firstChargeSec },
+        idem ? { idempotencyKey: `${idem}_sub` } : undefined,
+      );
+    });
   return { created: true, subscriptionId: sub.id, customerId: customer.id };
 }
 
@@ -593,7 +821,11 @@ export async function listPlans(secretKey: string, opts?: { limit?: number }): P
 /** One plan in full, or null when Stripe has never heard of it (or it isn't ours). A plan that has
  *  simply gone is a 404 for the admin; anything else — a bad key, Stripe unreachable — is thrown, so
  *  the caller can tell "deleted" from "we couldn't ask" and say so honestly. */
-export async function retrievePlan(secretKey: string, subscriptionId: string): Promise<StripePlan | null> {
+export async function retrievePlan(
+  secretKey: string,
+  subscriptionId: string,
+  opts?: { ownedLocally?: boolean },
+): Promise<StripePlan | null> {
   assertSubscriptionId(subscriptionId);
   const c = client(secretKey);
   let sub: Stripe.Subscription | null = null;
@@ -606,7 +838,13 @@ export async function retrievePlan(secretKey: string, subscriptionId: string): P
     if ((err as { code?: string }).code !== 'resource_missing') throw err;
   }
   if (!sub) return null;
-  if (((sub.metadata ?? {}) as Record<string, string>).app !== 'kiosk') return null;
+  // The metadata tag is how we DISCOVER our plans when scanning an account we may share with other
+  // apps — it is a discovery filter, not the definition of ownership. When the caller already holds a
+  // local `plans` row for this id, that row is the stronger proof: we wrote it when we created the
+  // subscription. Gating those on metadata too meant a plan created before the tag existed (added in
+  // v0.10.0 with the Recurring screen), or one whose metadata was edited in the dashboard, was
+  // invisible AND uncancellable — the screen said "no recurring plans" while Stripe kept billing.
+  if (!opts?.ownedLocally && ((sub.metadata ?? {}) as Record<string, string>).app !== 'kiosk') return null;
   return toPlan(sub, await paidTally(c, sub.id));
 }
 

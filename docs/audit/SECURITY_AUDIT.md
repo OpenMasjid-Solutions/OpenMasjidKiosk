@@ -3,6 +3,34 @@
 
 # Security & code-health audit — OpenMasjidKiosk
 
+> ## Addendum — re-audit of 2026-08-13 (v0.11.0)
+>
+> The whole tree was re-read against the 2026-08-04 baseline, covering everything built since:
+> refunds, the donor's public monthly-cancel link, the multi-account reader path, monthly
+> subscription setup, and the campaign editor. **No new Medium or High finding.** The money path,
+> the tunnel allowlist, the device-token model, the certificate pinning and the secret-key handling
+> were all re-checked and are sound; every SQL statement is still parameterised; no secret, key or
+> `.env` has entered the tree.
+>
+> Two items closed and two recorded:
+>
+> | | Item | Outcome |
+> |---|---|---|
+> | ✅ | **Clickjacking** (left open as [ACTION_REQUIRED §4](ACTION_REQUIRED.md)) | **Fixed.** The open question was whether OpenMasjidOS iframes apps. It does not — `openApp()` uses `window.open(…, '_blank')` and `iframe` appears nowhere in its source. `frame-ancestors 'none'` + `X-Frame-Options: DENY` now ship on every response, verified against a running server. |
+> | ✅ | **KIOSK-014** `consumeTuitionSession` dead code | **Deleted**, along with the comment claiming a single-use property the code never had. |
+> | 🆕 | **KIOSK-016 (Low)** — the donor cancel page could amplify to Stripe | `GET /m/:token` asks Stripe whether the plan is still live. A real token in the wrong hands (or a mailbox-scanning bot) turned unlimited page loads into unlimited Stripe API calls against the masjid's own rate limit. An unknown token was always a cheap hash lookup that 404s first, so only valid tokens were affected. **Fixed** with a 120/min global lookup budget that **fails open** — when spent, the page shows the button rather than refusing anyone, and the POST always checks properly. Pinned by two tests. |
+> | 🆕 | **KIOSK-017 (Info)** — cover-fees applies to monthly on fee-forcing appeals | A Zakat appeal forces the fee, and nothing excludes monthly, so the recurring amount is the grossed-up one. The tablet **displays** the grossed-up figure correctly, so nobody is charged a surprise — but the details step only explains the fee for one-time gifts, so a monthly Zakat donor sees the higher number unexplained. Not a defect in the arithmetic and arguably correct for zakat (it must arrive whole). **Left as-is deliberately** — changing what donors are charged is not an audit's call. Documented in `README.md`. |
+>
+> Also swept: three more unused exports removed (`cachedFabricStripe`, `cachedStudentsInfo`,
+> `ThemeToggle`), and every documentation claim re-checked against the code. `manualEntryEnabled`
+> remains a stored-but-never-read setting — noted in the README's known gaps rather than removed,
+> because it spans the DB, the wire format and Android DataStore, and the Android half cannot be
+> compile-checked on the dev machine.
+>
+> Still open and unchanged, both needing a decision rather than a patch:
+> **KIOSK-012** (container runs as root — needs a coordinated volume migration) and
+> **KIOSK-013** (donation totals use UTC day boundaries). See `ACTION_REQUIRED.md` §5 and §6.
+
 **Audit date:** 2026-08-04
 **Baseline commit:** `b5df3612dd2e3f281deef5ad0b69c241fda01485` (tag `pre-audit-2026-08-04`, `main`, tree clean)
 **Version audited:** 0.10.0

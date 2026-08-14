@@ -34,7 +34,7 @@ reference repos, **those win — and flag it.** Resolutions:
 |---|-------|------------------|-----------------|
 | 1 | **Design accent** | "emerald/gold" | **Cyan `#22D3EE` + amber `#F59E0B`** — the shipped `DESIGN.md` / Donations `tokens.css` are cyan (they "mirror the OpenMasjidOS palette"). Emerald is only a selectable accent. `tokens.css` + `glass.css` are copied verbatim from Donations. |
 | 2 | **Node version** | "Node 20+" | **`node:22-slim`** everywhere — matches every shipped app's Docker build + runtime. |
-| 3 | **Password/PIN hashing** | argon2 (§13/§14) | **scrypt** (chosen by maintainer, 2026-07-02) — `node:crypto` `scryptSync` on the server (mirrors Donations `auth.ts`), and `javax.crypto` `SCRYPT`/PBKDF2 offline on Android for the kiosk PIN. Zero extra native deps, Pi-friendly. Applied in slice 2. |
+| 3 | **Password/PIN hashing** | argon2 (§13/§14) | **scrypt** (chosen by maintainer, 2026-07-02) — `node:crypto` `scryptSync` on the server (mirrors Donations `auth.ts`), and **BouncyCastle** `org.bouncycastle.crypto.generators.SCrypt` (lightweight API, no JCE provider registration) offline on Android for the kiosk PIN, over the shared wire format `scrypt$N$r$p$saltB64$hashB64`. Zero extra native deps, Pi-friendly. Applied in slice 2; `CLAUDE.md` §13/§14 have since been corrected to say scrypt. |
 | 4 | **Compose hardening** | example omits it | Added `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, `tmpfs: [/tmp]` — matches Donations; the catalog validator permits it; least-privilege is a hard rule. |
 | 5 | **`domain:` / `tunnel:`** | (Kiosk forbade it) | **Set (v0.9.20+)** for opt-in REMOTE adoption. The server is base-path aware (mirrors Donations: `fetchFabricSite()` → `cachedFabricSite().basePath` drives Fastify `rewriteUrl` + `<base href>`/`window.__OMOS_BASE__` injection; `web/base.ts` is now LIVE, no longer a no-op). Kiosk-endpoints-only over the tunnel: an onRequest guard 404s `/api/admin` + `/api/fabric` on tunnel-origin requests (flagged in `rewriteUrl` when the URL arrives with the prefix). See `REMOTE_ADOPTION.md`. |
 | 6 | **Webhooks** | (Kiosk has none) | No raw-body JSON parser; default JSON parsing. Payment truth is confirmed by *retrieving* the PaymentIntent from Stripe, not by webhook. |
@@ -76,14 +76,28 @@ all calls time out (~4 s) and fail soft to standalone / LAN-only.
 
 ## Slice status
 
-- **Slice 1 (this):** repo scaffold (server + web + android) + Dockerfile + manifest +
-  compose + CI. Container boots, serves the themed admin shell, `GET /healthz`, and the
-  `/new` setup page. ✅
-- Slices 2–9: see `CLAUDE.md` §17.
+**All nine slices in `CLAUDE.md` §17 shipped across v0.1.0–v0.10.2.** The slice plan is history;
+`CHANGELOG.md` is the record of what landed when, and `README.md` describes what the app does now.
 
-## Dev-machine caveats (verification gaps for slice 1)
+Built since the slice plan ran out, each worth knowing about architecturally:
 
-The machine this was scaffolded on has **no Docker** and **JDK 8 only** (Android needs
-17+). So `docker compose up` and `./gradlew assembleDebug` could not be run here; they are
-verified on a machine/CI with those tools. The server (`tsc`) and web (`vite build`)
-builds were verified locally with Node.
+| Feature | Where it lives | The bit that isn't obvious |
+|---|---|---|
+| **Campaigns** | `store.ts` (`campaigns` table), `web/campaigns.tsx`, `CampaignJson.kt` | Each carries its own amounts, design, type and **Stripe account**. The campaign type — not a toggle — decides the fee rule, so a hand-crafted API body can't create a non-enforcing Zakat appeal. |
+| **Tuition** | `students.ts`, `docs/STUDENTS_INTEGRATION.md` | Brokered app-to-app through the Fabric (`students/billing`). Recorded as a **payment, never a donation**, so it stays out of donation totals, receipts and CSV donation columns. Amount computation is pure and unit-tested — it is the security-critical part. |
+| **Branded receipts** | `email.ts`, `fabric.ts` (`fabricEmail`) | The receipt strategy is decided **once**, at PaymentIntent creation, and carried in PI metadata, so `/complete` and the retry outbox agree about whether Stripe's own receipt was suppressed. That is what stops a donor getting two receipts, or none. |
+| **Remote adoption** | `tunnel.ts`, `rewriteUrl` in `index.ts`, `docs/REMOTE_ADOPTION.md` | The tunnel allowlist judges the path the **router** will resolve, not the one that arrived — Fastify percent-decodes before matching, and the original raw `startsWith('/api/')` was walked past with `/%61pi/`. |
+| **Recurring plans** | `index.ts` `/api/admin/plans*`, `plans` table | **Stripe is the source of truth** (no webhooks), read live on every open. The local table holds only what Stripe cannot know: the campaign, the account, and month one — which was card-present, so it is not an invoice. |
+| **Refunds** | `/api/admin/donations/:id/refund`, `store.recordRefund` | Refund → record → notify, in that order. Totals are netted in SQL (`SUM(amount_minor - refunded_minor)`), so a headline figure can never overstate what the masjid kept. |
+| **The donor's cancel link** | the encapsulated `donor` plugin in `index.ts` | The **only public route that changes anything**. The token is the credential: 256-bit, stored only as a hash, and able to do exactly one thing. Its urlencoded body parser is scoped to that plugin so no other POST route gains cross-origin form acceptance. |
+| **Multi-account reader** | `ReaderManager.registerFor`, `locationForAccount` | A Terminal reader is bound to one account by its connection token. The tablet re-registers against the campaign's account just before collecting, and each account gets its own Location, created from the masjid address already on file. |
+
+## Verification gaps (what cannot be checked on the dev machine)
+
+- **No Android SDK and no Docker here.** `./gradlew assembleDebug` and `docker compose up` are
+  verified by CI, not locally — so **CI's `build-apk` job is the only compile check the Kotlin
+  gets**, and a Kotlin change is not proven until that job is green.
+- The server (`tsc` + `node --test`) and web (`tsc` + `vite build`) are verified locally, and
+  anything user-facing on the server should also be checked by **booting it and pressing the
+  thing** — a `415` shipped to a donor's cancel button precisely because it was only reasoned about.
+- Hardware paths — a real M2 reader, a real card, a real refund — can only be confirmed on a box.

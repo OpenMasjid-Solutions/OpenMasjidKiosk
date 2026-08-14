@@ -20,10 +20,10 @@ import fastifyMultipart from '@fastify/multipart';
 import { z } from 'zod';
 import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
-import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt } from './store';
+import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus } from './fabric';
-import { renderReceipt, type ReceiptContext } from './email';
+import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus, emailCanSend } from './fabric';
+import { escapeHtml, renderMonthlyStarted, renderReceipt, renderRefund, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
 import { blockedOverTunnel } from './tunnel';
@@ -35,11 +35,13 @@ import {
   cancelPlan,
   createConnectionToken,
   createLocation,
+  createDonorCustomer,
   createMonthlySubscription,
   listLocations,
   listPlanInvoices,
   listPlans,
   pausePlan,
+  refundPayment,
   retrievePlan,
   schedulePlanEnd,
   type StripePlan,
@@ -47,6 +49,7 @@ import {
   looksLikeSecret,
   publicStripeStatus,
   retrieveLocation,
+  sendStripeReceipt,
   stripeConfigured,
   stripeMode,
   toMajor,
@@ -109,13 +112,23 @@ async function main(): Promise<void> {
   // the upload route allow-lists the MIME type and assigns its own random name and extension,
   // nosniff is what stops a browser reinterpreting a "PNG" whose bytes begin with markup.
   //
-  // NO framing header here on purpose. X-Frame-Options / frame-ancestors would close the
-  // clickjacking gap, but I could not confirm whether OpenMasjidOS ever renders an installed app
-  // inside an iframe, and a framing denial that breaks the dashboard would be worse than the gap it
-  // closes. See docs/audit/ACTION_REQUIRED.md.
+  // FRAMING IS DENIED. This was deliberately left open by the 2026-08-04 audit, which could not
+  // confirm whether OpenMasjidOS renders an installed app inside an iframe — and a framing denial
+  // that broke the dashboard would have been worse than the clickjacking gap it closed. That is now
+  // settled by reading the platform: `openApp()` in OpenMasjidOS `packages/ui/src/lib/apps.ts` calls
+  // `window.open(target, '_blank', 'noopener,noreferrer')`, and the string "iframe" does not appear
+  // anywhere in its source. The dashboard NAVIGATES to us; nothing frames us. So there is no
+  // legitimate frame to break, and every surface here is worth protecting — the admin panel acts on
+  // a session cookie, and the donor's cancel page is a one-press irreversible action.
+  //
+  // Both headers, on purpose: `frame-ancestors` is the modern rule and the only one that governs
+  // nested/`<object>` embedding, while `X-Frame-Options` still covers browsers that never
+  // implemented CSP level 2. They agree, so neither can weaken the other.
   app.addHook('onSend', async (_req, reply) => {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'no-referrer');
+    reply.header('content-security-policy', "frame-ancestors 'none'");
+    reply.header('x-frame-options', 'DENY');
   });
 
   // ── Gently upgrade insecure browser hits to HTTPS ────────────────────────────
@@ -606,16 +619,19 @@ async function main(): Promise<void> {
         name: z.string().max(80).optional(),
         // A UI rotation in degrees ('0'/'90'/'180'/'270'); legacy named values are normalised in the store.
         orientation: z.string().max(20).optional(),
+        // Which side the reader sits on ('off'/'left'/'right'); normalised in the store.
+        nfcSide: z.string().max(20).optional(),
       })
       .safeParse(req.body);
-    if (!parsed.success || (parsed.data.name === undefined && parsed.data.orientation === undefined)) {
-      return reply.code(400).send({ error: 'Please enter a name or orientation.' });
+    if (!parsed.success || (parsed.data.name === undefined && parsed.data.orientation === undefined && parsed.data.nfcSide === undefined)) {
+      return reply.code(400).send({ error: 'Please enter a name, orientation, or reader side.' });
     }
     const id = (req.params as { id: string }).id;
     let d = store.getDevice(id);
     if (!d) return reply.code(404).send({ error: 'Kiosk not found.' });
     if (parsed.data.name !== undefined) d = store.renameDevice(id, parsed.data.name.trim()) ?? d;
     if (parsed.data.orientation !== undefined) d = store.setDeviceOrientation(id, parsed.data.orientation) ?? d;
+    if (parsed.data.nfcSide !== undefined) d = store.setDeviceNfcSide(id, parsed.data.nfcSide) ?? d;
     return { data: deviceView(d) };
   });
 
@@ -681,6 +697,7 @@ async function main(): Promise<void> {
       thankYouMessage: z.string().max(500).optional(),
       maxBrightness: z.boolean().optional(),
       footerText: z.string().max(80).optional(),
+      tabSize: z.enum(['small', 'medium', 'large', 'xlarge']).optional(),
       largeAmountThresholdMinor: z.number().int().min(0).optional(),
       largeAmountNote: z.string().max(600).optional(),
       largeAmountImage: z.string().max(500).optional(),
@@ -840,6 +857,12 @@ async function main(): Promise<void> {
 
   const SUB_ID_RE = /^sub_[A-Za-z0-9_]+$/;
 
+  /** How many locally-recorded plans the Recurring list will look up one-by-one when the account scan
+   *  didn't return them. Only ever spent on plans the scan MISSED, so on a healthy install it is zero
+   *  requests; the cap just stops a pathological data volume from turning one page load into a
+   *  thousand Stripe calls. Well above any real masjid's number of standing orders. */
+  const PLAN_RECORD_LOOKUP_CAP = 300;
+
   /** Every Stripe account a plan could live on: the primary, any campaign's own, and any we have
    *  recorded. Deduped by resolved account id — '' and 'local' can be the very same keys. */
   const planAccounts = async (): Promise<ResolvedAccount[]> => {
@@ -889,10 +912,14 @@ async function main(): Promise<void> {
   ): Promise<{ ok: true; value: T } | { ok: false; reason: 'not-found' | 'no-account' }> => {
     const accounts = await planAccounts();
     if (!accounts.length) return { ok: false, reason: 'no-account' };
-    const recorded = store.getPlanRecord(id)?.stripeAccountId ?? '';
+    const rec = store.getPlanRecord(id);
+    const recorded = rec?.stripeAccountId ?? '';
     const ordered = recorded ? [...accounts].sort((a, b) => (a.id === recorded ? -1 : b.id === recorded ? 1 : 0)) : accounts;
     for (const acct of ordered) {
-      const found = await retrievePlan(acct.keys.secretKey, id).catch(() => null);
+      // Holding a local row for this id is proof it is ours, so don't also demand the metadata tag —
+      // otherwise a plan the list can now show would still refuse to pause or cancel, which is the
+      // worse half of the same bug (an admin can see the standing order but not stop it).
+      const found = await retrievePlan(acct.keys.secretKey, id, { ownedLocally: !!rec }).catch(() => null);
       if (!found) continue;
       return { ok: true, value: await fn(acct.keys, acct.id) };
     }
@@ -919,6 +946,43 @@ async function main(): Promise<void> {
         log.warn(`plans list failed for one account: ${e instanceof Error ? e.message : 'error'}`);
       }
     }
+    // THE INDEX IS LOCAL, the state is live. Everything above discovers plans by SCANNING each Stripe
+    // account and keeping those tagged `app=kiosk` — good for finding a plan we have no row for (a
+    // restored volume, a rebuilt box), but it cannot be the index: a scan reaches an account we can
+    // resolve today, filters on metadata that must still be intact, and a full page cuts the oldest
+    // off the end. Miss on any of those and a live standing order silently disappears from the only
+    // screen that can cancel it, under the words "No recurring plans yet".
+    //
+    // So every plan WE recorded is also fetched directly by id — one call, no scan, no metadata gate
+    // (see retrievePlan's ownedLocally). This is how OpenMasjidDonations has always done it: the index
+    // is the local rows, Stripe supplies each plan's live state. In the healthy case the scan already
+    // returned these, so this loop makes no calls at all; it only spends a request on a plan the scan
+    // failed to bring back — exactly the case that was broken.
+    let unconfirmed = 0;
+    for (const rec of store.listPlanRecords().slice(0, PLAN_RECORD_LOOKUP_CAP)) {
+      if (byId.has(rec.subscriptionId)) continue;
+      const ordered = rec.stripeAccountId
+        ? [...accounts].sort((a, b) => (a.id === rec.stripeAccountId ? -1 : b.id === rec.stripeAccountId ? 1 : 0))
+        : accounts;
+      let found = false;
+      for (const acct of ordered) {
+        let sp: StripePlan | null = null;
+        try {
+          sp = await retrievePlan(acct.keys.secretKey, rec.subscriptionId, { ownedLocally: true });
+        } catch (e) {
+          // A bad key or an unreachable Stripe — NOT "this plan is gone". Counting it as missing would
+          // tell the admin a live plan had vanished; count it as a failure so the list says it's short.
+          failures++;
+          log.warn(`plan lookup failed for one account: ${e instanceof Error ? e.message : 'error'}`);
+          continue;
+        }
+        if (!sp) continue; // resource_missing on this account — try the next one
+        byId.set(sp.id, toPlan(sp, acct.id));
+        found = true;
+        break;
+      }
+      if (!found) unconfirmed++;
+    }
     // A capped invoice scan means every total on this screen is a floor. Mark them all partial so
     // the list uses the footnote it already has, rather than showing a confident number that is
     // quietly short — opening a plan re-totals it exactly.
@@ -932,9 +996,15 @@ async function main(): Promise<void> {
         ? 'Couldn’t reach Stripe just now — please try again.'
         : failures
           ? 'Some plans couldn’t be loaded — this list may be incomplete.'
-          : truncated
-            ? 'This Stripe account has more subscriptions than we can scan at once, so this list may be incomplete.'
-            : '';
+          : // We hold a row saying we set this plan up, and Stripe says it does not exist on any account
+            // we can reach. Never silent: either it was deleted in the dashboard (fine, but the admin
+            // should know the record is stale) or it lives on an account this app can no longer resolve,
+            // in which case a donor is still being charged somewhere this screen cannot show or cancel.
+            unconfirmed
+            ? `${unconfirmed} plan${unconfirmed === 1 ? '' : 's'} we set up couldn’t be found in Stripe — ${unconfirmed === 1 ? 'it was' : 'they were'} either cancelled in the Stripe dashboard, or ${unconfirmed === 1 ? 'it lives' : 'they live'} on a Stripe account this app can no longer reach.`
+            : truncated
+              ? 'This Stripe account has more subscriptions than we can scan at once, so this list may be incomplete.'
+              : '';
     return { data: { plans, unavailable } };
   });
 
@@ -1032,12 +1102,137 @@ async function main(): Promise<void> {
   // CSV export — behind admin auth (it exposes donor PII). Every cell is escaped against CSV formula
   // injection (donor name/email are attacker-controllable). Amounts are in major units for humans.
   // Exports the FULL history (limit -1 = no SQLite limit), not just the on-screen page.
+  /**
+   * Refund a donation, in full or in part, and tell everyone who needs to know.
+   *
+   * Stripe is the only authority on whether money moved, so nothing is recorded, emailed or alerted
+   * until `refunds.create` has come back. The order matters: refund → record → notify. A crash after
+   * the refund leaves Stripe and our row disagreeing for one screen refresh, which the admin can see
+   * and re-run; notifying first would tell a donor about money that never left.
+   */
+  app.post('/api/admin/donations/:id/refund', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = String((req.params as { id: string }).id || '');
+    const parsed = z
+      .object({
+        // Omitted = refund whatever is left. Present = a partial, in minor units.
+        amountMinor: z.number().int().positive().max(100_000_000).optional(),
+        reason: z.enum(['requested_by_customer', 'duplicate', 'fraudulent']).optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'That refund wasn’t valid.' });
+
+    const don = store.getDonation(id);
+    if (!don) return reply.code(404).send({ error: 'That donation couldn’t be found.' });
+    // Only real money can be given back. A failed or pending donation never left the donor's account.
+    if (don.status !== 'succeeded') return reply.code(400).send({ error: 'Only a successful donation can be refunded.' });
+    const remaining = don.amountMinor - don.refundedMinor;
+    if (remaining <= 0) return reply.code(409).send({ error: 'This donation has already been refunded in full.' });
+    const want = parsed.data.amountMinor ?? remaining;
+    if (want > remaining) {
+      return reply.code(400).send({ error: `That’s more than is left to refund (${formatMoney(remaining, don.currency)}).` });
+    }
+
+    // The PaymentIntent may live on a campaign's own Stripe account, not the primary one.
+    const acct = await resolveAccountById(store.getPiAccount(don.paymentIntentId)).catch(() => null);
+    if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
+
+    let refund: Awaited<ReturnType<typeof refundPayment>>;
+    try {
+      refund = await refundPayment(acct.keys.secretKey, {
+        paymentIntentId: don.paymentIntentId,
+        // Always explicit, even for a full refund: "the rest" is computed from OUR row, and if that
+        // ever disagrees with Stripe we want Stripe to reject the number rather than silently give
+        // back more than the admin saw on screen.
+        amountMinor: want,
+        reason: parsed.data.reason,
+        // Keyed to the donation AND the running total, so a double-clicked button returns the same
+        // refund while a genuine second partial later is still allowed through.
+        idempotencyKey: `refund_${don.id}_${don.refundedMinor}_${want}`,
+        metadata: { donationId: don.id, deviceId: don.deviceId, campaignId: don.campaignId },
+      });
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      log.warn(`refund failed for ${don.paymentIntentId}: ${why}`);
+      // Loud on purpose. A refund the admin believes happened but didn't is how a donor gets told
+      // they've been repaid and then isn't.
+      return reply.code(502).send({ error: `Stripe couldn’t refund this donation: ${why.slice(0, 200)}` });
+    }
+    // Trust Stripe's figure over ours — a partial it adjusted is still what actually left the account.
+    const total = store.recordRefund(don.id, {
+      refundId: refund.refundId,
+      amountMinor: refund.amountMinor || want,
+      reason: parsed.data.reason,
+    });
+    const after = store.getDonation(don.id) ?? don;
+    const fullyRefunded = after.refundedMinor >= after.amountMinor;
+
+    // A refunded FIRST payment does not stop a monthly plan — Stripe keeps collecting next month.
+    // The admin has to be told, or a donor gets their £10 back and is charged again in four weeks.
+    const monthlyStillLive = don.kind === 'monthly';
+
+    // ── The donor (only if they gave us an address) ──
+    let donorEmailed = false;
+    const addr = (after.donorEmail || '').trim();
+    if (looksLikeEmail(addr) && emailCanSend()) {
+      try {
+        const rendered = renderRefund(store.getEmailReceipt(), {
+          ...receiptContext(after),
+          refundAmountText: formatMoney(refund.amountMinor || want, after.currency),
+          full: fullyRefunded,
+          dateRefunded: fmtReceiptDate(after.refundedAt || new Date().toISOString()),
+        });
+        const res = await fabricEmail({ to: addr, subject: rendered.subject, text: rendered.text, html: rendered.html });
+        donorEmailed = res.sent;
+      } catch {
+        donorEmailed = false; // never let a mail problem undo a refund that has already happened
+      }
+    }
+
+    // ── The admin: one alert, which OpenMasjidOS fans out to email and/or webhook per their choice ──
+    void fabricAlert(
+      'donation-refunded',
+      'A donation was refunded',
+      [
+        `${formatMoney(refund.amountMinor || want, after.currency)} was refunded to ${after.donorName || 'a donor'}${addr ? ` (${addr})` : ''}`,
+        `from ${after.deviceName || 'the kiosk'}${after.campaignTitle ? ` · ${after.campaignTitle}` : ''}.`,
+        fullyRefunded ? 'This was the full donation.' : `This was part of ${formatMoney(after.amountMinor, after.currency)}.`,
+        addr ? (donorEmailed ? 'The donor has been emailed.' : 'The donor could NOT be emailed — please contact them.') : 'No donor email was given, so they have not been told.',
+        monthlyStillLive
+          ? 'NOTE: this donor has a MONTHLY plan. Refunding this payment does NOT cancel it — end it on the Recurring page if they asked to stop.'
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+      'warning',
+    ).catch(() => {});
+
+    log.info(`refunded ${refund.amountMinor || want} ${after.currency} of donation ${after.id} (${refund.refundId})`);
+    return {
+      data: {
+        donation: after,
+        refundedMinor: total ?? after.refundedMinor,
+        fullyRefunded,
+        donorEmailed,
+        donorEmailAddress: addr,
+        monthlyStillLive,
+        status: refund.status,
+      },
+    };
+  });
+
   app.get('/api/admin/donations.csv', { preHandler: requireAdmin }, async (_req, reply) => {
-    const rows: string[][] = [['Date', 'Amount', 'Currency', 'Type', 'Campaign', 'Status', 'Donor name', 'Donor email', 'Kiosk', 'PaymentIntent']];
+    // 'Amount' stays the amount GIVEN, so an export never rewrites history; 'Refunded' and 'Net' carry
+    // what came back and what was kept. A spreadsheet summing the wrong column would otherwise report
+    // money the masjid no longer has — so Net is provided rather than left as an exercise.
+    const rows: string[][] = [
+      ['Date', 'Amount', 'Refunded', 'Net', 'Currency', 'Type', 'Campaign', 'Status', 'Donor name', 'Donor email', 'Kiosk', 'PaymentIntent', 'Refund ID', 'Refunded at'],
+    ];
     for (const d of store.listDonations(-1)) {
       rows.push([
         d.createdAt,
         String(toMajor(d.amountMinor, d.currency)),
+        String(toMajor(d.refundedMinor, d.currency)),
+        String(toMajor(d.amountMinor - d.refundedMinor, d.currency)),
         d.currency,
         d.kind === 'monthly' ? 'Monthly' : 'One-time',
         d.campaignTitle,
@@ -1046,6 +1241,8 @@ async function main(): Promise<void> {
         d.donorEmail,
         d.deviceName || '',
         d.paymentIntentId,
+        d.refundId,
+        d.refundedAt,
       ]);
     }
     reply
@@ -1053,6 +1250,238 @@ async function main(): Promise<void> {
       .header('content-disposition', 'attachment; filename="donations.csv"')
       .header('cache-control', 'no-store');
     return toCsv(rows);
+  });
+
+  // ── The donor's own "stop my monthly donation" page ──────────────────────────
+  // PUBLIC BY DESIGN, and the only public thing here that changes anything. It is reachable over the
+  // masjid's Cloudflare tunnel because a donor is not on the masjid's wi-fi when they change their
+  // mind — `/m/…` is not an `/api` path, and the cancel POST lives under `/api/public/`, both of
+  // which the tunnel allowlist already permits (see tunnel.ts).
+  //
+  // What makes that safe:
+  //   • the token is 256 bits of randomness and is stored ONLY as an HMAC, so reading the database
+  //     does not let anyone cancel a donation;
+  //   • it can do exactly one thing — end THIS plan. There is nothing here to read a donor list
+  //     from, nothing to change an amount with, and no way to reach the admin API;
+  //   • cancelling is the safe direction. The worst a stolen link achieves is stopping a donation,
+  //     which the donor can restart at the kiosk. Money can never move TO anyone through this;
+  //   • the outbound Stripe traffic it can cause is bounded (donorLookups, below), and an unknown
+  //     token gets the same answer as a used one.
+  // Registered as an ENCAPSULATED plugin so the form-encoded body parser below exists for these two
+  // routes and nowhere else.
+  await app.register(async (donor) => {
+    /**
+     * Accept a plain HTML form submission.
+     *
+     * The cancel page is deliberately server-rendered with no JavaScript — a donor opening it from an
+     * email on an unknown device should need nothing but a browser. A plain <form method="post"> sends
+     * `application/x-www-form-urlencoded`, and this server only ever parses JSON, so Fastify rejected
+     * the submission before the route ran:
+     *
+     *     415 FST_ERR_CTP_INVALID_MEDIA_TYPE — Unsupported Media Type
+     *
+     * The button looked right and did nothing useful. There are no fields to read (the token is in the
+     * URL), so the body is discarded rather than parsed.
+     *
+     * Scoped to this plugin ON PURPOSE. Registering it globally would let every other POST route accept
+     * a cross-origin form submission, and a form POST needs no CORS preflight — the admin API's only
+     * other line of defence there is the SameSite=Lax cookie. Nothing outside these two routes gains
+     * anything from urlencoded, so nothing outside them gets it.
+     */
+    donor.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, _body, done) => {
+      done(null, {});
+    });
+
+    const PLAN_TOKEN_RE = /^[a-f0-9]{64}$/i;
+
+    /** Statuses that mean "this is not collecting any more". `incomplete_expired` never got going. */
+    const PLAN_OVER = new Set(['canceled', 'incomplete_expired']);
+
+    /**
+     * A ceiling on the outbound Stripe calls this public page can cause.
+     *
+     * Opening the page asks Stripe whether the plan is still live, so one link that reaches the wrong
+     * hands — or simply a bot that follows every URL in a mailbox — turns unlimited page loads into
+     * unlimited Stripe API calls, against the masjid's own account rate limit. Everything else about
+     * the route is already cheap: an unknown token is a single indexed hash lookup and 404s before
+     * any of this, so the budget only has to cover loads that present a REAL token.
+     *
+     * Deliberately a global counter and not a per-peer one: over the Cloudflare tunnel every donor
+     * arrives from the same tunnel daemon, so a per-peer limit would lump them all together anyway.
+     *
+     * WHEN IT RUNS OUT NOBODY IS REFUSED. We skip the liveness check and show the button — exactly
+     * what the page did before that check existed. A donor is never blocked from stopping a donation
+     * to save an API call; the worst case is one press that turns out to be a no-op, and the POST
+     * (which is the action that matters, and is far rarer) always checks properly.
+     *
+     * 120/min is far above real use — a donor opens this once — and far below anything Stripe minds.
+     */
+    const donorLookups = new GlobalAttemptBudget(120, 60_000);
+
+    /**
+     * Is this plan already finished, according to STRIPE? Unknown (unreachable, no account, no such
+     * subscription) answers **false** on purpose: the cost of wrongly saying "already stopped" is a
+     * donor walking away from a donation that is still running, which is the one outcome this whole
+     * page exists to prevent. Wrongly showing the button costs a press that turns out to be a no-op.
+     */
+    const donorPlanIsOver = async (plan: PlanRecord): Promise<boolean> => {
+      try {
+        const acct = await resolveAccountById(plan.stripeAccountId);
+        if (!acct) return false;
+        const live = await retrievePlan(acct.keys.secretKey, plan.subscriptionId, { ownedLocally: true });
+        // Gone from Stripe entirely — nothing is collecting, so it is over.
+        if (!live) return true;
+        return PLAN_OVER.has(live.status);
+      } catch {
+        return false;
+      }
+    };
+
+    /** One page, two entry points: opening a spent link, and pressing a button that had already run. */
+    const alreadyStoppedPage = (money: string): string =>
+      cancelPage(
+        `<h1>This monthly donation has already stopped</h1>
+         <p class="muted">Your ${escapeHtml(money)} monthly donation is no longer being collected, so there is nothing
+         left to cancel — you do not need to do anything.</p>
+         <p class="muted">Nothing you have already given is affected. If you would like to give again,
+         you can set it up at the kiosk any time, and thank you for your support.</p>`,
+        'Already stopped',
+      );
+
+  /** The shared page shell — plain server-rendered HTML, no SPA. A donor opening this from an email
+   *  on an unknown device should get something that works with nothing but a browser. */
+  const cancelPage = (body: string, title: string): string => {
+    const m = store.getMasjid();
+    const name = escapeHtml(m.name || 'Our masjid');
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>
+ :root{color-scheme:light dark}
+ body{margin:0;background:#f4f6f9;color:#16242b;font:16px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+ .wrap{max-width:520px;margin:0 auto;padding:32px 16px}
+ .card{background:#fff;border:1px solid #e6eaed;border-radius:14px;padding:28px 26px}
+ h1{margin:0 0 6px;font-size:20px}
+ .masjid{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:#9aa7af;margin:0 0 18px}
+ dl{margin:18px 0;padding:0;font-size:15px}
+ dt{color:#7a8892;font-size:13px;margin-top:12px}
+ dd{margin:2px 0 0;font-weight:600}
+ button{width:100%;margin-top:22px;padding:13px;font:inherit;font-weight:600;border:0;border-radius:10px;background:#b3261e;color:#fff;cursor:pointer}
+ button:disabled{opacity:.6;cursor:default}
+ .muted{color:#7a8892;font-size:14px}
+ .ok{color:#1f7a5c;font-weight:600}
+ @media(prefers-color-scheme:dark){body{background:#0f1720;color:#e7edf3}.card{background:#16202b;border-color:#243240}.muted,.masjid,dt{color:#9fb0bf}}
+</style></head><body><div class="wrap"><div class="card">
+<p class="masjid">${name}</p>
+${body}
+</div></div></body></html>`;
+  };
+
+  donor.get('/m/:token', async (req, reply) => {
+    const token = String((req.params as { token: string }).token || '');
+    reply.header('content-type', 'text/html; charset=utf-8').header('cache-control', 'no-store');
+    // Never let a cancel page be indexed or previewed — the link IS the credential.
+    reply.header('x-robots-tag', 'noindex, nofollow, noarchive');
+    const plan = PLAN_TOKEN_RE.test(token) ? store.getPlanByCancelToken(token) : null;
+    if (!plan) {
+      return reply.code(404).send(
+        cancelPage(
+          `<h1>This link doesn’t work any more</h1>
+           <p class="muted">It may already have been used to stop the donation, or it may have been mistyped.
+           If you’re not sure whether your monthly donation is still running, please contact the masjid.</p>`,
+          'Link not found',
+        ),
+      );
+    }
+    const money = formatMoney(plan.firstAmountMinor, plan.currency);
+
+    // ALREADY STOPPED? Say so, rather than offering a button that would do nothing. A donor keeps this
+    // email; they may well open the link again months later, or a second time because the first press
+    // was not obviously acknowledged. Showing them "Stop your monthly donation" for a donation that
+    // already stopped invites them to press it and wonder whether it worked either time.
+    //
+    // Asked live because Stripe is the truth: the plan may also have been ended from the admin panel,
+    // or by the masjid in Stripe's own dashboard, neither of which touches our row. If Stripe cannot
+    // be reached — or the lookup budget above is spent — we fall through and show the button. A donor
+    // who wants to stop must never be blocked by our uncertainty, and the POST re-checks anyway.
+    if (donorLookups.retryAfterMs() === 0) {
+      donorLookups.fail();
+      if (await donorPlanIsOver(plan)) return reply.send(alreadyStoppedPage(money));
+    }
+
+    return reply.send(
+      cancelPage(
+        `<h1>Stop your monthly donation</h1>
+         <p class="muted">This ends the repeating payment. Nothing you have already given is affected, and you can start again at the kiosk whenever you like.</p>
+         <dl>
+           <dt>Amount</dt><dd>${escapeHtml(money)} each month</dd>
+           ${plan.campaignTitle ? `<dt>Fund</dt><dd>${escapeHtml(plan.campaignTitle)}</dd>` : ''}
+           <dt>Started</dt><dd>${escapeHtml(fmtReceiptDate(plan.createdAt))}</dd>
+         </dl>
+         <!-- RELATIVE, and one level up on purpose. The browser resolves this against the page's own
+              address, which differs by route: on the LAN it is /m/<token>, and over the tunnel the OS
+              forwards the full prefix so it is /<basePath>/m/<token>. "../api/…" lands on /api/… and
+              /<basePath>/api/… respectively — both correct. A leading slash would break the tunnel
+              case, and a bare "api/…" would resolve to /m/api/… and 404. -->
+         <form method="post" action="${escapeHtml(`../api/public/monthly/${token}/cancel`)}">
+           <button type="submit">Stop my monthly donation</button>
+         </form>`,
+        'Stop your monthly donation',
+      ),
+    );
+  });
+
+  donor.post('/api/public/monthly/:token/cancel', async (req, reply) => {
+    const token = String((req.params as { token: string }).token || '');
+    reply.header('content-type', 'text/html; charset=utf-8').header('cache-control', 'no-store');
+    reply.header('x-robots-tag', 'noindex, nofollow, noarchive');
+    const plan = PLAN_TOKEN_RE.test(token) ? store.getPlanByCancelToken(token) : null;
+    if (!plan) {
+      return reply.code(404).send(cancelPage(`<h1>This link doesn’t work any more</h1><p class="muted">Please contact the masjid if you need help.</p>`, 'Link not found'));
+    }
+    // Already stopped — by an earlier press of this same link, by the admin panel, or in Stripe's own
+    // dashboard. Say so plainly instead of "we've stopped it", which would credit this press with
+    // something it didn't do, and instead of an error, which would suggest it is still running.
+    // No alert is raised either: nothing changed, so there is nothing to tell the masjid.
+    if (await donorPlanIsOver(plan)) {
+      return reply.send(alreadyStoppedPage(formatMoney(plan.firstAmountMinor, plan.currency)));
+    }
+    const acct = await resolveAccountById(plan.stripeAccountId).catch(() => null);
+    // immediately: the donor has already given this month at the kiosk and the next charge is still
+    // ahead, so “stop it” means stop it — there is no remaining paid period to run out.
+    const done = acct
+      ? await cancelPlan(acct.keys.secretKey, plan.subscriptionId, true).then(() => true).catch(() => false)
+      : false;
+    if (!done) {
+      // Never claim it stopped when it didn't — the donor would walk away and be charged again.
+      return reply.code(502).send(
+        cancelPage(
+          `<h1>We couldn’t stop it just now</h1>
+           <p class="muted">Something went wrong at our end and your monthly donation is still running.
+           Please try this link again shortly, or contact the masjid and they will stop it for you.</p>`,
+          'Couldn’t stop the donation',
+        ),
+      );
+    }
+    log.info(`donor cancelled plan ${plan.subscriptionId} via their own link`);
+    // Tell the masjid: a standing order ending is something an admin should know about, and the donor
+    // did it outside the admin panel so nothing else would ever surface it.
+    void fabricAlert(
+      'monthly-cancelled',
+      'A donor stopped their monthly donation',
+      `${plan.donorName || 'A donor'}${plan.donorEmail ? ` (${plan.donorEmail})` : ''} stopped their ${formatMoney(plan.firstAmountMinor, plan.currency)}/month donation${plan.campaignTitle ? ` to ${plan.campaignTitle}` : ''} using the link in their confirmation email. Nothing further will be collected.`,
+      'info',
+    ).catch(() => {});
+    return reply.send(
+      cancelPage(
+        `<h1 class="ok">Your monthly donation has stopped</h1>
+         <p class="muted">Nothing more will be taken. Thank you for what you have already given —
+         you can start again at the kiosk any time.</p>`,
+        'Monthly donation stopped',
+      ),
+    );
+  });
+
   });
 
   // ── Kiosk (device-token) routes ─────────────────────────────────────────────
@@ -1200,14 +1629,61 @@ async function main(): Promise<void> {
 
   // The tablet's ConnectionTokenProvider calls this — the only Stripe credential the tablet
   // ever gets (short-lived). Minted server-side from the resolved account + Location.
+  /**
+   * The Terminal Location for a Stripe account, creating one the first time that account is used.
+   *
+   * A Location belongs to ONE account, so a second account needs its own before a reader can be
+   * registered against it. The admin already names/addresses a Location for the primary account on
+   * the Payments screen; making a donor wait for that to be repeated per account would be a poor
+   * trade, so a secondary account gets one created from the same masjid details, once, and remembered.
+   */
+  const locationForAccount = async (acct: ResolvedAccount): Promise<string> => {
+    const key = acct.id === '' ? '' : acct.id;
+    const existing = store.getLocation(key);
+    if (existing) return existing.id;
+    // Reuse the masjid address the admin already gave for the primary account's Location — the same
+    // building, just registered on a second Stripe account. Without a usable address we throw, and the
+    // caller falls back to whatever Location is stored rather than blocking the donation here.
+    const m = store.getMasjid();
+    const a = m.address;
+    if (!a?.line1 || !a?.country) throw new Error('no masjid address for a Terminal location');
+    const created = await createLocation(acct.keys.secretKey, (m.name || 'Masjid kiosk').slice(0, 160), {
+      line1: a.line1,
+      line2: a.line2,
+      city: a.city,
+      state: a.state,
+      postalCode: a.postalCode,
+      country: a.country,
+    });
+    store.setLocation({ id: created.id, name: created.displayName }, key);
+    return created.id;
+  };
+
+  /**
+   * Mint a Terminal connection token — for a SPECIFIC Stripe account when the tablet names one.
+   *
+   * The token is what binds a reader to an account: connect with the primary account's token and the
+   * reader cannot collect a PaymentIntent belonging to another account, which is why a campaign that
+   * settles elsewhere used to be keyed-entry only. The tablet now asks for a token for the campaign
+   * it is about to take money for, and re-registers the reader when that differs from the last one.
+   *
+   * `campaignId` omitted → the primary account, exactly as before, so an older tablet is unaffected.
+   */
+  const ConnTokenBody = z.object({ campaignId: z.string().max(120).optional() });
   app.post('/api/kiosk/connection-token', async (req, reply) => {
     const d = authDevice(req, reply);
     if (!d) return;
-    const acct = await resolveAccount();
+    const parsed = ConnTokenBody.safeParse(req.body ?? {});
+    const campaignId = parsed.success ? (parsed.data.campaignId ?? '').trim() : '';
+    const campaign = campaignId ? store.getCampaign(campaignId) : null;
+    const acct = campaign?.stripeAccountId ? await resolveAccountById(campaign.stripeAccountId) : await resolveAccount();
     if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     try {
-      const secret = await createConnectionToken(acct.keys.secretKey, store.getLocation()?.id);
-      return { data: { secret } };
+      const locationId = await locationForAccount(acct).catch(() => store.getLocation(acct.id)?.id);
+      const secret = await createConnectionToken(acct.keys.secretKey, locationId);
+      // The tablet needs to know WHICH account this token registers the reader to, so it can tell
+      // when the next donation needs a different one. An account id is not a secret.
+      return { data: { secret, accountId: acct.id, locationId: locationId ?? '' } };
     } catch {
       return reply.code(502).send({ error: 'Couldn’t reach Stripe Terminal. Please try again.' });
     }
@@ -1269,6 +1745,47 @@ async function main(): Promise<void> {
       contactWebsite: m.website || '',
     };
   };
+  /**
+   * The donor's public "stop my monthly donation" link, or '' when there is nowhere to point them.
+   *
+   * The address comes from the PLATFORM (Fabric `domain: true` → publicUrl), which is the masjid's
+   * Cloudflare tunnel address — the same one remote kiosk adoption uses. We never guess it: a LAN
+   * address in a donor's inbox is worse than no link, because it looks like it should work.
+   */
+  const donorCancelUrl = (token: string): string => {
+    if (!token) return '';
+    const pub = cachedFabricSite().publicUrl;
+    return pub ? `${pub}/m/${token}` : '';
+  };
+
+  /**
+   * Tell the donor their monthly giving is set up, and give them the way to stop it.
+   *
+   * Deliberately unconditional on the branded-receipt toggle: that setting is about receipts, and a
+   * standing order is a commitment the donor must be told about regardless. Still needs the platform
+   * to be able to send mail at all — with no provider there is simply no way to reach them, and the
+   * admin alert already covers the masjid's side.
+   */
+  const sendMonthlyStartedEmail = async (paymentIntentId: string, token: string): Promise<void> => {
+    const don = store.getDonationByPaymentIntent(paymentIntentId);
+    if (!don) return;
+    const addr = (don.donorEmail || '').trim();
+    if (!looksLikeEmail(addr) || !emailCanSend()) return;
+    // The first repeat charge is a month after the tap, matching what the subscription was given.
+    const next = new Date(don.createdAt);
+    const days = new Date(next.getFullYear(), next.getMonth() + 2, 0).getDate();
+    const day = next.getDate();
+    next.setDate(1);
+    next.setMonth(next.getMonth() + 1);
+    next.setDate(Math.min(day, days));
+    const rendered = renderMonthlyStarted(store.getEmailReceipt(), {
+      ...receiptContext(don),
+      nextChargeDate: fmtReceiptDate(next.toISOString()),
+      cancelUrl: donorCancelUrl(token),
+    });
+    await fabricEmail({ to: addr, subject: rendered.subject, text: rendered.text, html: rendered.html });
+  };
+
   /** Render + send a donor's branded receipt. Returns whether it {sent} and whether a failure is
    *  worth a {retry} (transient/system) vs permanent (no/invalid email, or the provider rejected
    *  the recipient). NEVER throws. Does NOT re-check the enabled toggle — the CALLER gates on the
@@ -1280,9 +1797,36 @@ async function main(): Promise<void> {
       const rendered = renderReceipt(store.getEmailReceipt(), receiptContext(don));
       const res = await fabricEmail({ to: addr, subject: rendered.subject, text: rendered.text, html: rendered.html });
       if (res.sent) return { sent: true, retry: false };
-      return { sent: false, retry: res.reason !== 'bad_recipient' }; // bad recipient is permanent; else retry
+      // Permanent = the recipient is unusable, OR the platform has just told us no mail will ever
+      // leave here (emailCanSend flips false the moment fabricEmail latches 'not_configured' /
+      // 'no-fabric'). Both must be permanent, because a branded row that keeps "retrying" for ever
+      // never reaches the Stripe hand-back and the donor ends up with NOTHING. 'bad_recipient'
+      // alone was not enough: it is the one reason our own address check almost never lets through.
+      const permanent = res.reason === 'bad_recipient' || !emailCanSend();
+      return { sent: false, retry: !permanent };
     } catch {
       return { sent: false, retry: true };
+    }
+  };
+
+  /**
+   * Give a donation's receipt back to Stripe, for a branded one we can no longer deliver.
+   *
+   * The branded path omits `receipt_email` at intent so Stripe stays quiet. Whenever we give up —
+   * permanently at /complete, permanently in the outbox, or by ageing out of it — that silence has
+   * to be undone or the donor is left with no record of their gift at all. Resolves the account the
+   * PaymentIntent was actually created on, so a campaign on its own Stripe account still works.
+   * Never throws.
+   */
+  const handReceiptBackToStripe = async (don: DonationRecord): Promise<void> => {
+    try {
+      const addr = (don.donorEmail || '').trim();
+      if (!don.chargeId || !addr) return;
+      const acct = await resolveAccountById(store.getPiAccount(don.paymentIntentId));
+      if (!acct) return;
+      await sendStripeReceipt(acct.keys.secretKey, don.chargeId, addr);
+    } catch {
+      /* a failed hand-back must never disturb a donation that already succeeded */
     }
   };
 
@@ -1329,17 +1873,18 @@ async function main(): Promise<void> {
     // Resolve the campaign's Stripe account (its own, or the primary/reader account when unset).
     const acct = await resolveAccountById(campaign.stripeAccountId);
     if (!acct) return reply.code(400).send({ error: 'This appeal’s Stripe account isn’t available.' });
-    const primary = await resolveAccount();
-    const readerCapable = !campaign.stripeAccountId || (!!primary && campaign.stripeAccountId === primary.id);
-    // The physical reader is locked to the primary account, so a cross-account campaign is keyed-only.
-    if (!manual && !readerCapable) {
-      return reply.code(400).send({ error: 'This appeal is taken by keyed card entry, not the reader.' });
-    }
-    // Monthly giving needs name + email and the card reader (the reusable card comes from a
-    // card-present charge — it can't be set up from keyed entry or a cross-account campaign).
+    // NOTE: a cross-account campaign is no longer refused the reader here. A tablet that supports it
+    // re-registers the reader against THIS campaign's Stripe account before collecting (see
+    // ReaderManager.registerFor), so the old "primary account only" rule would now block something
+    // that works. The campaign's account is already resolved above and 400s if it cannot be — which
+    // is the check that actually matters. (`readerCapable` in the kiosk config is deliberately left
+    // as it was, so an OLDER tablet still routes these to keyed entry rather than meeting a reader
+    // registered to the wrong account.)
+    //
+    // Monthly giving needs name + email and the card reader — the reusable card comes from a
+    // card-present charge, so it can't be set up from keyed entry.
     if (monthly) {
       if (manual) return reply.code(400).send({ error: 'Monthly giving needs the card reader.' });
-      if (!readerCapable) return reply.code(400).send({ error: 'Monthly giving needs the card reader.' });
       if (!campaign.monthlyEnabled) return reply.code(400).send({ error: 'Monthly giving isn’t available for this appeal.' });
       if (!donorName || !donorName.trim()) return reply.code(400).send({ error: 'Monthly giving needs a name.' });
       if (!looksLikeEmail(donorEmail)) return reply.code(400).send({ error: 'Monthly giving needs a valid email for the receipt.' });
@@ -1355,14 +1900,13 @@ async function main(): Promise<void> {
     // /complete recording + retry outbox stay consistent with whether we suppressed Stripe's receipt:
     //   • branded → suppress Stripe's built-in receipt + WE send our branded one (receipt:'pending').
     //   • else    → let Stripe send its receipt; we send nothing (receipt:'stripe') → never a double.
-    // We only go branded when the OS email is CONFIRMED working (emailStatus 'ok') AND the donor gave
-    // an email, so a donor is never left with zero receipts because email wasn't set up; a transient
-    // failure after that is covered by the retry outbox. NOT re-evaluated at confirm (that's the bug).
-    // Require a VALID-looking email (not just non-empty): if we suppressed Stripe's receipt but our
-    // own send then rejected a malformed address, the donor would get ZERO receipts. Gating on the
-    // same check sendDonationReceipt uses guarantees a branded PI is actually sendable.
-    const branded = looksLikeEmail(donorEmail) && store.getEmailReceipt().enabled && ssoConfigured() && emailStatus() === 'ok';
-    const metadata = {
+    // We go branded unless the platform has told us mail can never leave (emailCanSend — see the
+    // long note there: the old `emailStatus() === 'ok'` was unsatisfiable, so branded receipts had
+    // never once been sent). Require a VALID-looking email, not just a non-empty one: a branded PI
+    // must actually be sendable. The "never zero receipts" guarantee now lives at /complete, where a
+    // permanently failed branded send hands the job back to Stripe.
+    const branded = looksLikeEmail(donorEmail) && store.getEmailReceipt().enabled && ssoConfigured() && emailCanSend();
+    const metadata: Record<string, string> = {
       app: 'kiosk',
       deviceId: d.id,
       campaignId: campaign.id,
@@ -1377,6 +1921,29 @@ async function main(): Promise<void> {
       donorEmail,
       brandedReceipt: branded ? '1' : '0',
     };
+    // MONTHLY NEEDS THE CARD TO SURVIVE THE PAYMENT, and that has to be arranged BEFORE it, not after.
+    // Stripe only saves a card when the PaymentIntent asks (`setup_future_usage`), and it attaches the
+    // saved card to the customer named ON THAT INTENT. We used to ask for neither and then look for
+    // `generated_card` afterwards — which is why every monthly donation took the money and then found
+    // no card to build the plan from. If making the customer fails we still take the donation as a
+    // one-off rather than losing the gift; /complete then reports that monthly couldn't be arranged.
+    let monthlyCustomer = '';
+    if (monthly) {
+      try {
+        monthlyCustomer = await createDonorCustomer(acct.keys.secretKey, {
+          name: donorName || undefined,
+          email: donorEmail || undefined,
+          deviceId: d.id,
+          campaignId: campaign.id,
+          idempotencyKey,
+        });
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err);
+        log.warn(`monthly customer create failed: ${why}`);
+        store.addLogs(d.id, [{ level: 'warn', event: 'monthly_customer_failed', detail: why.slice(0, 200) }]);
+      }
+    }
+    if (monthlyCustomer) metadata.monthlyCustomer = monthlyCustomer;
     const piInput = {
       amountMinor: chargeMinor,
       currency,
@@ -1384,6 +1951,9 @@ async function main(): Promise<void> {
       // Stripe emails its built-in receipt on success (if enabled) — UNLESS we're sending our own
       // branded one, in which case we suppress Stripe's so the donor doesn't get two.
       receiptEmail: branded ? undefined : donorEmail || undefined,
+      // Only ever set for monthly. A one-off donation stays anonymous to Stripe and saves nothing.
+      customerId: monthlyCustomer || undefined,
+      setupFutureUsage: monthlyCustomer ? ('off_session' as const) : undefined,
       metadata,
     };
     try {
@@ -1391,9 +1961,44 @@ async function main(): Promise<void> {
       // otherwise a card-present PaymentIntent the M2 reader collects. Both are verified server-side
       // in /complete before a donation is recorded. The tablet needs the publishable key for the
       // manual (Stripe SDK) form — it's public and safe to return.
-      const pi = manual
-        ? await createCardPaymentIntent(acct.keys.secretKey, piInput, idempotencyKey)
-        : await createCardPresentPaymentIntent(acct.keys.secretKey, piInput, idempotencyKey);
+      const create = (input: typeof piInput, key?: string) =>
+        manual
+          ? createCardPaymentIntent(acct.keys.secretKey, input, key)
+          : createCardPresentPaymentIntent(acct.keys.secretKey, input, key);
+      let pi: { id: string; clientSecret: string };
+      try {
+        pi = await create(piInput, idempotencyKey);
+      } catch (err) {
+        // SETTING UP MONTHLY MUST NEVER COST US THE DONATION. The card-saving fields (customer +
+        // setup_future_usage) are the only thing here that a Stripe account can refuse while a plain
+        // payment would have been accepted — an account without card-present saving enabled, a
+        // restricted key, a currency or reader configuration Stripe won't save against. Failing the
+        // whole request turns "we couldn't arrange monthly" into "Sorry — couldn't start the payment"
+        // with the donor's card already out, which is what happened after dev.12.
+        //
+        // So on a monthly, fall back ONCE to the ordinary intent. The gift goes through as a one-off,
+        // /complete reports that the standing order couldn't be created, and the real Stripe reason is
+        // in the device log instead of being swallowed by a dead-end error screen.
+        if (!monthlyCustomer) throw err;
+        const e = err as { code?: string; type?: string; message?: string };
+        const why = `${e.code ?? e.type ?? ''} ${e.message ?? ''}`.trim().slice(0, 300);
+        log.warn(`monthly intent rejected, retrying as one-off: ${why}`);
+        store.addLogs(d.id, [
+          { level: 'warn', event: 'monthly_intent_rejected', detail: `Stripe refused the card-saving payment; taking it as a one-off instead · ${why}` },
+        ]);
+        void fabricAlert(
+          'monthly-failed',
+          'Monthly donations are not being set up',
+          `Stripe refused to set up a repeat payment at ${d.name || 'the kiosk'}, so this gift was taken as a ONE-OFF instead. Donors choosing "Monthly" are being charged once and no standing order is created. Reason: ${why}`,
+          'warning',
+        ).catch(() => {});
+        // A DIFFERENT idempotency key: same key + different body is itself a Stripe error, and this
+        // body deliberately differs (no customer, no setup_future_usage).
+        pi = await create(
+          { ...piInput, customerId: undefined, setupFutureUsage: undefined },
+          idempotencyKey ? `${idempotencyKey}_nosave` : undefined,
+        );
+      }
       store.rememberPiAccount(pi.id, acct.id); // so /complete verifies with the same account
       return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, chargeMinor, coverFees, publishableKey: manual ? acct.keys.publishableKey : undefined } };
     } catch (err) {
@@ -1440,12 +2045,41 @@ async function main(): Promise<void> {
       // that monthly couldn't be arranged so the tablet can say so kindly.
       const campaignLabel = meta.campaign || store.getMasjid().name || 'OpenMasjid Kiosk';
       let monthly = { requested: wantsMonthly, created: false };
-      if (result.succeeded && wantsMonthly && result.generatedCard) {
+      // Why a requested monthly plan did not get set up. Empty means it did (or none was asked for).
+      // This used to go nowhere at all: the generated-card branch simply didn't run, and the throw
+      // branch reached only the container log — so an admin saw a donation badged "Monthly", no plan
+      // on the Recurring screen, and nothing anywhere saying why.
+      let monthlyProblem = '';
+      /** The donor's one-time cancel token — only set when a plan was created AND recorded. */
+      let monthlyCancelToken = '';
+      // The reusable card, whichever way it was taken: `generated_card` for a reader tap, or the
+      // PaymentIntent's own payment_method for a keyed card (which has no generated_card at all).
+      // Both exist only because the intent was created with setup_future_usage against a customer.
+      const reusableCard = result.generatedCard || result.paymentMethodId || '';
+      // Prefer the customer Stripe actually recorded on the PaymentIntent over our metadata copy —
+      // metadata can be stale on a retried/duplicated intent, the PI cannot.
+      const monthlyCustomer = result.customerId || meta.monthlyCustomer || '';
+      if (result.succeeded && wantsMonthly && !reusableCard) {
+        // Stripe returns no reusable card for some cards and networks (notably digital wallets, which
+        // are excluded from generated_card by design). The gift stands; the standing order cannot be
+        // created from it. Say which half is missing — this line is the whole diagnosis in the log.
+        monthlyProblem = monthlyCustomer
+          ? 'Stripe saved no reusable card for this charge, so no standing order could be created. Some cards, networks and digital wallets cannot be reused.'
+          : 'This donation was taken before the card could be set up for reuse, so no standing order could be created. If the tablet was mid-donation during an update, the next monthly gift will work.';
+      }
+      if (result.succeeded && wantsMonthly && reusableCard) {
+        // Two failure domains, deliberately not sharing a try. Stripe creating the plan and us writing
+        // our note of it fail for unrelated reasons and mean opposite things: the first means no plan
+        // exists, the second means one DOES exist that we have lost our pointer to. Sharing a catch
+        // reported a database error as "Stripe refused to create the standing order" — the exact
+        // opposite of the truth, sending an admin to look for a plan they'd have been told wasn't there.
+        let sub: Awaited<ReturnType<typeof createMonthlySubscription>> | null = null;
         try {
-          const sub = await createMonthlySubscription(acct.keys.secretKey, {
+          sub = await createMonthlySubscription(acct.keys.secretKey, {
             amountMinor: result.amountMinor,
             currency: result.currency,
-            paymentMethod: result.generatedCard,
+            paymentMethod: reusableCard,
+            customerId: monthlyCustomer,
             name: meta.donorName || undefined,
             email: meta.donorEmail || undefined,
             productName: `Monthly donation — ${campaignLabel}`,
@@ -1455,28 +2089,66 @@ async function main(): Promise<void> {
             anchorSec: result.createdSec, // deterministic across retries (idempotency-safe)
             idempotencyKey: id,
           });
-          monthly = { requested: true, created: sub.created };
+        } catch (e) {
+          const why = e instanceof Error ? e.message : String(e);
+          log.warn('monthly subscription failed: ' + why);
+          monthlyProblem = `Stripe refused to create the standing order: ${why.slice(0, 200)}`;
+        }
+        if (sub?.created) {
+          monthly = { requested: true, created: true };
           // Remember the half of this plan Stripe will never know: the campaign, the account it
           // lives on, and THIS charge — month one is card-present, so it is not an invoice and
           // adding up invoices alone under-reports what the plan has raised.
           if (sub.subscriptionId) {
-            store.recordPlan({
-              subscriptionId: sub.subscriptionId,
-              customerId: sub.customerId,
-              stripeAccountId: acct.id,
-              campaignId: meta.campaignId || '',
-              campaignTitle: meta.campaign || '',
-              deviceId: d.id,
-              firstPaymentIntentId: id,
-              firstAmountMinor: result.amountMinor,
-              currency: result.currency,
-              donorName: meta.donorName || '',
-              donorEmail: meta.donorEmail || '',
-            });
+            // The donor's own way out. Minted here, hashed at rest, and sent ONCE in the
+            // "monthly is set up" email — a standing order keeps taking money long after the donor
+            // has left the building, so stopping it must not depend on reaching the right volunteer.
+            monthlyCancelToken = crypto.randomBytes(32).toString('hex');
+            try {
+              store.recordPlan({
+                subscriptionId: sub.subscriptionId,
+                customerId: sub.customerId,
+                stripeAccountId: acct.id,
+                campaignId: meta.campaignId || '',
+                campaignTitle: meta.campaign || '',
+                deviceId: d.id,
+                firstPaymentIntentId: id,
+                firstAmountMinor: result.amountMinor,
+                currency: result.currency,
+                donorName: meta.donorName || '',
+                donorEmail: meta.donorEmail || '',
+                cancelTokenHash: store.hashCancelToken(monthlyCancelToken),
+              });
+            } catch (e) {
+              monthlyCancelToken = ''; // nothing stored → the link would 404; don't promise one
+              // The donor HAS a standing order — this only lost our local note of it. Never silent and
+              // never dressed up as a Stripe failure: the plan still reaches the Recurring screen via
+              // the account scan, but the campaign, the account and month one are now unknown to us.
+              const why = e instanceof Error ? e.message : String(e);
+              log.error(`plan created at Stripe but not recorded locally (${sub.subscriptionId}): ${why}`);
+              store.addLogs(d.id, [
+                {
+                  level: 'warn',
+                  event: 'plan_record_failed',
+                  detail: `The monthly plan ${sub.subscriptionId} was created at Stripe but could not be saved here: ${why.slice(0, 200)}`,
+                },
+              ]);
+            }
           }
-        } catch (e) {
-          log.warn('monthly subscription failed: ' + (e instanceof Error ? e.message : String(e)));
         }
+      }
+      // A monthly gift the donor asked for and did NOT get is the one outcome here that must never
+      // be silent: the money was taken once, the donor believes they have set up a standing order,
+      // and the admin has nothing to cancel because nothing exists. Put it where both can see it —
+      // this kiosk's log, and an alert to the admin.
+      if (result.succeeded && wantsMonthly && !monthly.created) {
+        store.addLogs(d.id, [{ level: 'warn', event: 'monthly_setup_failed', detail: monthlyProblem || 'No standing order was created.' }]);
+        void fabricAlert(
+          'monthly-failed',
+          'A monthly donation could not be set up',
+          `${formatMoney(result.amountMinor, result.currency)} was taken once at ${d.name || 'the kiosk'}, but the donor's monthly plan could NOT be created, so nothing will be collected again and there is nothing to cancel. ${monthlyProblem} If the donor expected a standing order, please contact them.`,
+          'warning',
+        ).catch(() => {});
       }
       // Branded receipt owed ONLY when the PI was minted branded (Stripe's receipt suppressed at
       // intent) AND it succeeded AND the donor gave an email. recordDonation persists that decision
@@ -1490,7 +2162,12 @@ async function main(): Promise<void> {
         campaignTitle: meta.campaign || '',
         amountMinor: result.amountMinor,
         currency: result.currency,
-        kind: meta.kind || 'one_time',
+        // What ACTUALLY happened, not what was asked for. Recording a requested-but-failed monthly
+        // as 'monthly' is what put a "Monthly" badge in Donations with no matching plan on the
+        // Recurring screen — an admin reasonably reads that as a live standing order they cannot
+        // cancel, when in truth a single gift was taken and nothing recurs. A failed monthly IS a
+        // one-off charge; the intent is preserved in the kiosk log and the alert raised above.
+        kind: monthly.created ? 'monthly' : 'one_time',
         status: result.succeeded ? 'succeeded' : result.status,
         donorName: meta.donorName,
         donorEmail: meta.donorEmail,
@@ -1505,6 +2182,14 @@ async function main(): Promise<void> {
           text: `${formatMoney(result.amountMinor, result.currency)} ${label} at ${d.name || 'the kiosk'}.`,
           level: 'success',
         });
+        // "Your monthly donation is set up", carrying the donor's own cancel link. Sent ONCE, on the
+        // first recording, so a retried /complete can't email twice. Separate from the receipt on
+        // purpose: the receipt is about the payment just taken, this is about the ongoing commitment
+        // and the one message the donor needs to keep. Fire-and-forget — a mail failure must never
+        // disturb a donation and a plan that both already exist.
+        if (rec.firstRecord && monthly.created && monthlyCancelToken) {
+          void sendMonthlyStartedEmail(id, monthlyCancelToken).catch(() => {});
+        }
         // Send our branded receipt, but ONLY on the first recording of a 'pending' row (never a
         // double on a retried /complete). Non-blocking; a transient failure stays 'pending' for the
         // retry outbox, a permanent one (bad/no email) is marked 'skipped'. The .catch() is REQUIRED.
@@ -1512,9 +2197,14 @@ async function main(): Promise<void> {
           const don = store.getDonationByPaymentIntent(id);
           if (don) {
             void sendDonationReceipt(don)
-              .then((r) => {
-                if (r.sent) store.setDonationReceipt(id, 'sent');
-                else if (!r.retry) store.setDonationReceipt(id, 'skipped');
+              .then(async (r) => {
+                if (r.sent) return store.setDonationReceipt(id, 'sent');
+                if (r.retry) return; // stays 'pending' for the outbox
+                // Permanently unsendable, and we suppressed Stripe's receipt at intent — so the
+                // donor currently has NOTHING. Hand it back to Stripe rather than leave them with
+                // no record of their gift. Only then mark it settled.
+                await handReceiptBackToStripe(don);
+                store.setDonationReceipt(id, 'skipped');
               })
               .catch(() => {});
           }
@@ -1979,11 +2669,23 @@ async function main(): Promise<void> {
     const RECEIPT_MIN_AGE_MS = 120_000; // 2 min
     const receiptOutbox = async () => {
       try {
+        // Rows that have run out of road. Before this they simply stopped being selected once they
+        // passed RECEIPT_MAX_AGE_MS and were abandoned at 'pending' for ever — and since we had
+        // silenced Stripe at intent, those donors never received anything at all. Give the receipt
+        // back to Stripe and close the row out.
+        for (const don of store.listExpiredPendingReceipts(RECEIPT_MAX_AGE_MS)) {
+          await handReceiptBackToStripe(don);
+          store.setDonationReceipt(don.paymentIntentId, 'skipped');
+        }
         for (const don of store.listPendingReceipts(RECEIPT_MAX_AGE_MS, RECEIPT_MIN_AGE_MS)) {
           const r = await sendDonationReceipt(don);
           if (r.sent) store.setDonationReceipt(don.paymentIntentId, 'sent');
-          else if (!r.retry) store.setDonationReceipt(don.paymentIntentId, 'skipped');
-          else break; // email provider down / rate-limited — try again next tick
+          else if (!r.retry) {
+            // Permanent here too — same reasoning as at /complete: never close a branded row
+            // without making sure the donor gets *a* receipt from somewhere.
+            await handReceiptBackToStripe(don);
+            store.setDonationReceipt(don.paymentIntentId, 'skipped');
+          } else break; // email provider down / rate-limited — try again next tick
         }
       } catch { /* fail soft — never let the receipt outbox crash the app */ }
     };

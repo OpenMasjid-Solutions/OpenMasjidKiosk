@@ -84,6 +84,9 @@ export interface GivingConfig {
   maxBrightness: boolean;
   /** Small tagline shown at the bottom of the kiosk giving screen ('' hides it). */
   footerText: string;
+  /** Size of the campaign tabs across the top of the kiosk (only shown when 2+ campaigns).
+   *  'medium' is the original size, so existing kiosks are unchanged. */
+  tabSize: 'small' | 'medium' | 'large' | 'xlarge';
   /** For a large donation the kiosk suggests a fee-free alternative (e.g. bank transfer). 0 = off. */
   largeAmountThresholdMinor: number;
   /** Message shown in the large-donation dialog (e.g. bank / Zelle transfer details). */
@@ -109,6 +112,7 @@ const GIVING_DEFAULTS: GivingConfig = {
   thankYouMessage: 'JazākAllāhu khayran — thank you for your generous donation.',
   maxBrightness: true,
   footerText: 'OpenMasjid Solutions',
+  tabSize: 'medium',
   largeAmountThresholdMinor: 0,
   largeAmountNote: '',
   largeAmountImage: '',
@@ -256,6 +260,16 @@ export interface DonationRecord {
    *  permanently un-sendable (no/invalid donor email, or the provider rejected it). */
   receipt: 'stripe' | 'pending' | 'sent' | 'skipped';
   chargeId: string;
+  /** How much of this donation has been given back, in the SAME minor units as `amountMinor`.
+   *  0 = untouched. Partial refunds accumulate here, so `amountMinor - refundedMinor` is always what
+   *  the masjid actually kept — which is what every total on the Donations screen is summed from. */
+  refundedMinor: number;
+  /** The most recent Stripe refund id (`re_…`), for tracing a row back to the dashboard. */
+  refundId: string;
+  /** When the latest refund was issued (UTC ISO), or '' if never. */
+  refundedAt: string;
+  /** Stripe's reason code for the latest refund: 'requested_by_customer' | 'duplicate' | 'fraudulent'. */
+  refundReason: string;
   createdAt: string;
 }
 
@@ -300,6 +314,8 @@ export interface PlanRecord {
   currency: string;
   donorName: string;
   donorEmail: string;
+  /** HMAC of the donor's cancel-link token. The token itself lives only in their email. */
+  cancelTokenHash: string;
   createdAt: string;
 }
 
@@ -336,6 +352,10 @@ export interface Device {
    *  tablet rotates its own content by this angle (works even where the device ignores orientation
    *  requests). Legacy named values are normalised to degrees on read. */
   orientation: string;
+  /** Which side of the tablet the card reader sits on, so the kiosk can point donors to it during the
+   *  card step: 'off' (no hint) | 'left' | 'right'. Left/right are in the app's LOGICAL landscape
+   *  space, so RotatedRoot maps them to top/bottom when the device is rotated to portrait. */
+  nfcSide: string;
 }
 
 /** Valid device orientations — a rotation applied to the kiosk UI in DEGREES ('0' = as mounted). We
@@ -358,6 +378,22 @@ export function normalizeOrientation(v: unknown): DeviceOrientation {
   const s = String(v ?? '');
   if ((DEVICE_ORIENTATIONS as readonly string[]).includes(s)) return s as DeviceOrientation;
   return LEGACY_ORIENTATION[s] ?? '0';
+}
+
+/** Valid NFC-reader sides — where the reader sits relative to the kiosk's LOGICAL landscape screen,
+ *  so it can point donors to it. 'off' = show no hint (the default; existing kiosks are unchanged). */
+// Where the reader physically sits, relative to the giving screen as the donor sees it. Left/right
+// suit a landscape mount; TOP/BOTTOM exist because a portrait-mounted tablet usually has the reader
+// above or below the screen, and "left" on a tall narrow screen points at a bezel nobody's card is
+// near. The kiosk lays the hint out along the matching axis — arrows march sideways for left/right
+// and up/down for top/bottom.
+export const DEVICE_NFC_SIDES = ['off', 'left', 'right', 'top', 'bottom'] as const;
+export type DeviceNfcSide = (typeof DEVICE_NFC_SIDES)[number];
+
+/** Normalise any stored/incoming NFC side to a valid value (default 'off'). */
+export function normalizeNfcSide(v: unknown): DeviceNfcSide {
+  const s = String(v ?? '');
+  return (DEVICE_NFC_SIDES as readonly string[]).includes(s) ? (s as DeviceNfcSide) : 'off';
 }
 
 /** Short, URL-safe id with a kind prefix, e.g. "dev_a1b2c3d4". */
@@ -396,7 +432,8 @@ export class Store {
         config_version INTEGER NOT NULL DEFAULT 0,
         identify INTEGER NOT NULL DEFAULT 0,
         revoked INTEGER NOT NULL DEFAULT 0,
-        orientation TEXT NOT NULL DEFAULT 'auto'
+        orientation TEXT NOT NULL DEFAULT 'auto',
+        nfc_side TEXT NOT NULL DEFAULT 'off'
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_token ON devices(token_hash);
 
@@ -543,9 +580,17 @@ export class Store {
         currency TEXT NOT NULL DEFAULT '',
         donor_name TEXT NOT NULL DEFAULT '',
         donor_email TEXT NOT NULL DEFAULT '',
+        cancel_token_hash TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
       );
     `);
+    // The donor's cancel-link token, for plans created before that link existed. Blank means no link
+    // was ever issued for that plan, and the lookup refuses blanks — so an old plan simply has no
+    // self-service cancel rather than a guessable one.
+    {
+      const pc = (this.db.prepare(`PRAGMA table_info(plans)`).all() as { name: string }[]).map((c) => c.name);
+      if (!pc.includes('cancel_token_hash')) this.db.exec("ALTER TABLE plans ADD COLUMN cancel_token_hash TEXT NOT NULL DEFAULT ''");
+    }
     // Migrate older donation rows (pre-campaigns) to carry the new columns. This MUST run before any
     // index on those columns — an existing `donations` table isn't recreated by CREATE TABLE IF NOT
     // EXISTS, so the columns don't exist yet on an upgrade (a fresh DB has them from the CREATE above).
@@ -558,6 +603,16 @@ export class Store {
     {
       const has = (this.db.prepare(`PRAGMA table_info(donations)`).all() as { name: string }[]).some((c) => c.name === 'receipt');
       if (!has) this.db.exec("ALTER TABLE donations ADD COLUMN receipt TEXT NOT NULL DEFAULT 'stripe'");
+    }
+    // Refunds (added when the admin gained a Refund button). Legacy rows default to "nothing given
+    // back", which is true of every donation taken before refunds existed. refunded_minor is INTEGER
+    // and the rest TEXT, so they can't share the TEXT loop above.
+    {
+      const dc = (this.db.prepare(`PRAGMA table_info(donations)`).all() as { name: string }[]).map((c) => c.name);
+      if (!dc.includes('refunded_minor')) this.db.exec('ALTER TABLE donations ADD COLUMN refunded_minor INTEGER NOT NULL DEFAULT 0');
+      for (const col of ['refund_id', 'refunded_at', 'refund_reason']) {
+        if (!dc.includes(col)) this.db.exec(`ALTER TABLE donations ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`);
+      }
     }
     // Now that campaign_id is guaranteed to exist, its index is safe to create.
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_donations_campaign ON donations(campaign_id)');
@@ -581,10 +636,11 @@ export class Store {
       // Per-campaign device targeting (which kiosks show this campaign; '[]' = all).
       if (!cols.includes('device_ids')) this.db.exec("ALTER TABLE campaigns ADD COLUMN device_ids TEXT NOT NULL DEFAULT '[]'");
     }
-    // Per-device screen orientation (set from the web UI).
+    // Per-device screen orientation + NFC-reader side (both set from the web UI).
     {
       const dcols = (this.db.prepare('PRAGMA table_info(devices)').all() as { name: string }[]).map((c) => c.name);
       if (!dcols.includes('orientation')) this.db.exec("ALTER TABLE devices ADD COLUMN orientation TEXT NOT NULL DEFAULT 'auto'");
+      if (!dcols.includes('nfc_side')) this.db.exec("ALTER TABLE devices ADD COLUMN nfc_side TEXT NOT NULL DEFAULT 'off'");
     }
     // The per-child split of a tuition charge (students/billing v2) and the ticked bill lines (0.43.0).
     // Absent on installs that predate them; an in-flight outbox row without either simply lets Students
@@ -694,20 +750,46 @@ export class Store {
     return c;
   }
 
-  /** The chosen Terminal Location (readers must connect with a locationId). */
-  getLocation(): TerminalLocationRef | null {
-    const raw = this.getRaw('terminal_location');
-    if (!raw) return null;
-    try {
-      const o = JSON.parse(raw) as TerminalLocationRef;
-      return o.id ? o : null;
-    } catch {
-      return null;
+  /**
+   * The chosen Terminal Location, PER STRIPE ACCOUNT.
+   *
+   * A Location belongs to one Stripe account, and a reader is registered to a Location — which is why
+   * a reader connected for the primary account cannot collect a PaymentIntent belonging to a second
+   * one. Serving a campaign that settles elsewhere means re-registering the reader against a Location
+   * on THAT account, so a single stored Location was never going to be enough.
+   *
+   * `accountId` is '' for the primary/current account, which is also where the original single-value
+   * setting is read from — so an install that predates this keeps its Location without a migration
+   * step, and only ever grows entries as other accounts are actually used.
+   */
+  getLocation(accountId = ''): TerminalLocationRef | null {
+    const key = (accountId || '').trim();
+    if (!key) {
+      const raw = this.getRaw('terminal_location');
+      if (!raw) return null;
+      try {
+        const o = JSON.parse(raw) as TerminalLocationRef;
+        return o.id ? o : null;
+      } catch {
+        return null;
+      }
     }
+    const map = this.getJson<Record<string, TerminalLocationRef>>('terminal_locations', {});
+    const o = map[key];
+    return o && o.id ? o : null;
   }
-  setLocation(loc: TerminalLocationRef | null): void {
-    if (!loc) this.setRaw('terminal_location', '');
-    else this.setRaw('terminal_location', JSON.stringify({ id: loc.id, name: loc.name }));
+
+  setLocation(loc: TerminalLocationRef | null, accountId = ''): void {
+    const key = (accountId || '').trim();
+    if (!key) {
+      if (!loc) this.setRaw('terminal_location', '');
+      else this.setRaw('terminal_location', JSON.stringify({ id: loc.id, name: loc.name }));
+    } else {
+      const map = this.getJson<Record<string, TerminalLocationRef>>('terminal_locations', {});
+      if (!loc) delete map[key];
+      else map[key] = { id: loc.id, name: loc.name };
+      this.setRaw('terminal_locations', JSON.stringify(map));
+    }
     this.bumpConfigVersion(); // kiosks refetch config (locationId) when this changes
   }
 
@@ -830,6 +912,7 @@ export class Store {
     merged.thankYouMessage = String(merged.thankYouMessage ?? GIVING_DEFAULTS.thankYouMessage).slice(0, 500);
     merged.maxBrightness = merged.maxBrightness !== false; // default ON — a wall kiosk wants max brightness
     merged.footerText = String(merged.footerText ?? GIVING_DEFAULTS.footerText).slice(0, 80);
+    merged.tabSize = (['small', 'medium', 'large', 'xlarge'] as const).includes(merged.tabSize) ? merged.tabSize : 'medium';
     merged.largeAmountThresholdMinor = Math.max(0, Math.round(Number(merged.largeAmountThresholdMinor) || 0));
     merged.largeAmountNote = String(merged.largeAmountNote ?? '').slice(0, 600);
     {
@@ -1152,13 +1235,16 @@ export class Store {
     currency?: string;
     donorName?: string;
     donorEmail?: string;
+    cancelTokenHash?: string;
   }): void {
     this.db
       .prepare(
         `INSERT INTO plans (subscription_id, customer_id, stripe_account_id, campaign_id, campaign_title,
-           device_id, first_payment_intent_id, first_amount_minor, currency, donor_name, donor_email, created_at)
+           device_id, first_payment_intent_id, first_amount_minor, currency, donor_name, donor_email,
+           cancel_token_hash, created_at)
          VALUES (@subscriptionId, @customerId, @stripeAccountId, @campaignId, @campaignTitle, @deviceId,
-           @firstPaymentIntentId, @firstAmountMinor, @currency, @donorName, @donorEmail, @createdAt)
+           @firstPaymentIntentId, @firstAmountMinor, @currency, @donorName, @donorEmail,
+           @cancelTokenHash, @createdAt)
          ON CONFLICT(subscription_id) DO NOTHING`,
       )
       .run({
@@ -1173,6 +1259,7 @@ export class Store {
         currency: (d.currency || '').toUpperCase(),
         donorName: d.donorName || '',
         donorEmail: d.donorEmail || '',
+        cancelTokenHash: d.cancelTokenHash || '',
         createdAt: new Date().toISOString(),
       });
   }
@@ -1207,6 +1294,7 @@ export class Store {
       currency: String(r.currency ?? ''),
       donorName: String(r.donor_name ?? ''),
       donorEmail: String(r.donor_email ?? ''),
+      cancelTokenHash: String(r.cancel_token_hash ?? ''),
       createdAt: String(r.created_at),
     };
   }
@@ -1323,6 +1411,19 @@ export class Store {
    *  so without a floor a 60s outbox tick landing in that window would re-select the same row and send a
    *  SECOND identical receipt. With the floor the outbox only ever retries a row that has been pending a
    *  good while — i.e. one whose inline send genuinely didn't land. */
+  /** Branded rows the outbox has given up on: still 'pending' and now OLDER than the retry window.
+   *  Selected so the caller can hand the receipt back to Stripe and close them, instead of leaving
+   *  a donor whose Stripe receipt we suppressed with nothing at all. Complement of
+   *  [listPendingReceipts]'s age window, so a row is in exactly one of the two. */
+  listExpiredPendingReceipts(maxAgeMs: number, limit = 50): DonationRecord[] {
+    const floor = new Date(Date.now() - maxAgeMs).toISOString();
+    return (
+      this.db
+        .prepare(`SELECT d.*, dev.name AS device_name FROM donations d LEFT JOIN devices dev ON dev.id = d.device_id WHERE d.status = 'succeeded' AND d.receipt = 'pending' AND d.created_at < ? ORDER BY d.created_at LIMIT ?`)
+        .all(floor, limit) as Record<string, unknown>[]
+    ).map((r) => this.rowToDonation(r));
+  }
+
   listPendingReceipts(maxAgeMs: number, minAgeMs = 0, limit = 50): DonationRecord[] {
     const now = Date.now();
     const floor = new Date(now - maxAgeMs).toISOString(); // oldest we still bother retrying
@@ -1462,8 +1563,48 @@ export class Store {
         ? (String(r.receipt) as DonationRecord['receipt'])
         : 'stripe',
       chargeId: String(r.charge_id),
+      refundedMinor: Number(r.refunded_minor ?? 0),
+      refundId: String(r.refund_id ?? ''),
+      refundedAt: String(r.refunded_at ?? ''),
+      refundReason: String(r.refund_reason ?? ''),
       createdAt: String(r.created_at),
     };
+  }
+
+  /**
+   * Add a refund to a donation. ACCUMULATES, so several partial refunds add up rather than the last
+   * one overwriting the others — the running total is what every figure on the Donations screen is
+   * netted against, so an overwrite would quietly re-inflate the totals.
+   *
+   * Clamped to the donation's own amount: Stripe already refuses to refund more than was charged, but
+   * a clamp here means a bug or a racing double-click can never drive `amountMinor - refundedMinor`
+   * negative and start SUBTRACTING from the masjid's totals.
+   *
+   * Returns the new refunded total, or null if there is no such donation.
+   */
+  recordRefund(
+    donationId: string,
+    r: { refundId: string; amountMinor: number; reason?: string; at?: string },
+  ): number | null {
+    const row = this.db.prepare('SELECT amount_minor, refunded_minor FROM donations WHERE id = ?').get(donationId) as
+      | { amount_minor: number; refunded_minor: number }
+      | undefined;
+    if (!row) return null;
+    const already = Number(row.refunded_minor ?? 0);
+    const add = Math.max(0, Math.round(r.amountMinor));
+    const total = Math.min(Number(row.amount_minor), already + add);
+    this.db
+      .prepare('UPDATE donations SET refunded_minor = ?, refund_id = ?, refunded_at = ?, refund_reason = ? WHERE id = ?')
+      .run(total, r.refundId, r.at ?? new Date().toISOString(), r.reason ?? '', donationId);
+    return total;
+  }
+
+  /** One donation by our own row id (the Refund route's handle on it). */
+  getDonation(id: string): DonationRecord | null {
+    const r = this.db
+      .prepare('SELECT d.*, dev.name AS device_name FROM donations d LEFT JOIN devices dev ON dev.id = d.device_id WHERE d.id = ?')
+      .get(id) as Record<string, unknown> | undefined;
+    return r ? this.rowToDonation(r) : null;
   }
 
   /** Recorded donations, newest first, with the kiosk name resolved (LEFT JOIN, so a removed
@@ -1502,19 +1643,28 @@ export class Store {
     const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
     // created_at is a UTC ISO string; ISO sorts lexicographically = chronologically, so a `>=` string
     // compare against a UTC-ISO cutoff gives correct local-day/week/month windows.
+    // NET OF REFUNDS. Every sum is `amount_minor - refunded_minor`, so a refunded gift stops counting
+    // the moment it is given back. Showing gross here would have the Donations screen state a figure
+    // the bank account cannot back — the number an admin repeats to a committee. The COUNT is left
+    // gross on purpose: a refunded donation still happened, and "2 donations" going to "1" would look
+    // like a lost record rather than returned money. Refunds are visible per row and in the CSV.
     const sumSince = (iso: string): number =>
       Number(
         (this.db
-          .prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS s FROM donations WHERE status = 'succeeded' AND currency = ? AND created_at >= ?`)
+          .prepare(
+            `SELECT COALESCE(SUM(amount_minor - refunded_minor), 0) AS s FROM donations WHERE status = 'succeeded' AND currency = ? AND created_at >= ?`,
+          )
           .get(currency, iso) as { s: number }).s,
       );
     const all = this.db
-      .prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS s, COUNT(*) AS n FROM donations WHERE status = 'succeeded' AND currency = ?`)
+      .prepare(
+        `SELECT COALESCE(SUM(amount_minor - refunded_minor), 0) AS s, COUNT(*) AS n FROM donations WHERE status = 'succeeded' AND currency = ?`,
+      )
       .get(currency) as { s: number; n: number };
     const rows = this.db
       .prepare(
         `SELECT d.device_id AS deviceId, COALESCE(dev.name, '') AS deviceName,
-                COALESCE(SUM(d.amount_minor), 0) AS amountMinor, COUNT(*) AS count
+                COALESCE(SUM(d.amount_minor - d.refunded_minor), 0) AS amountMinor, COUNT(*) AS count
          FROM donations d LEFT JOIN devices dev ON dev.id = d.device_id
          WHERE d.status = 'succeeded' AND d.currency = ?
          GROUP BY d.device_id ORDER BY amountMinor DESC`,
@@ -1567,7 +1717,9 @@ export class Store {
         thankYouMessage: c.thankYouMessage || g.thankYouMessage,
         theme: c.theme || 'auto',
         isMain: c.isMain,
-        // The reader is bound to the primary account; a campaign on another account is keyed-only.
+        // Only meaningful to OLDER tablets now: they cannot re-register the reader onto another Stripe
+        // account, so they must still route a cross-account campaign to keyed entry. Current builds
+        // ignore this and re-register instead (ReaderManager.registerFor).
         readerCapable: !c.stripeAccountId || c.stripeAccountId === primaryAccountId,
       }));
     return {
@@ -1579,12 +1731,15 @@ export class Store {
         masjidName: this.getMasjid().name,
         // The UI rotation in degrees for THIS device (from the web UI); '0' = as mounted.
         orientation: (deviceId !== '' ? this.getDevice(deviceId)?.orientation : '') || '0',
+        // Which side the reader sits on for THIS device, so the card step can point donors to it.
+        nfcSide: (deviceId !== '' ? this.getDevice(deviceId)?.nfcSide : '') || 'off',
         // Global giving policy (per-campaign amounts/monthly/thank-you live on each campaign).
         manualEntryEnabled: g.manualEntryEnabled,
         namePolicy: g.namePolicy,
         emailPolicy: g.emailPolicy,
         maxBrightness: g.maxBrightness !== false,
         footerText: g.footerText,
+        tabSize: g.tabSize,
         largeAmountThresholdMinor: g.largeAmountThresholdMinor,
         largeAmountNote: g.largeAmountNote,
         largeAmountImage: g.largeAmountImage,
@@ -1604,6 +1759,24 @@ export class Store {
    *  DB leak can't reveal usable device tokens. */
   hashDeviceToken(token: string): string {
     return crypto.createHmac('sha256', this.secret).update(token).digest('hex');
+  }
+
+  /** HMAC for a donor's plan-cancel token. Same construction as a device token and for the same
+   *  reason: what we store must be useless to anyone who reads the database. The token itself is only
+   *  ever in the donor's own email. */
+  hashCancelToken(token: string): string {
+    return crypto.createHmac('sha256', this.secret).update(`cancel:${token}`).digest('hex');
+  }
+
+  /** The plan a donor's cancel link refers to, or null. Looked up BY HASH — the raw token is never
+   *  stored, so a leaked database cannot cancel anyone's donation. */
+  getPlanByCancelToken(token: string): PlanRecord | null {
+    const t = (token ?? '').trim();
+    if (!/^[a-f0-9]{64}$/i.test(t)) return null; // wrong shape — don't even hash it
+    const r = this.db.prepare('SELECT * FROM plans WHERE cancel_token_hash = ?').get(this.hashCancelToken(t)) as
+      | Record<string, unknown>
+      | undefined;
+    return r ? this.rowToPlan(r) : null;
   }
 
   // ── Pairing codes (single-use, short TTL) ───────────────────────────────────
@@ -1638,6 +1811,7 @@ export class Store {
       identify: !!r.identify,
       revoked: !!r.revoked,
       orientation: normalizeOrientation(r.orientation),
+      nfcSide: normalizeNfcSide(r.nfc_side),
     };
   }
 
@@ -1648,6 +1822,17 @@ export class Store {
     const res = this.db.prepare('UPDATE devices SET orientation = ? WHERE id = ?').run(o, id);
     if (res.changes === 0) return null;
     this.bumpConfigVersion(); // the tablet picks up the new orientation on its next heartbeat
+    return this.getDevice(id);
+  }
+
+  /** Set which side of the tablet the card reader sits on (from the web UI), so the kiosk can point
+   *  donors to it during the card step. Bumps the config version. Returns the updated device (null if
+   *  unknown). */
+  setDeviceNfcSide(id: string, nfcSide: string): Device | null {
+    const s = normalizeNfcSide(nfcSide);
+    const res = this.db.prepare('UPDATE devices SET nfc_side = ? WHERE id = ?').run(s, id);
+    if (res.changes === 0) return null;
+    this.bumpConfigVersion(); // the tablet picks up the new NFC hint on its next heartbeat
     return this.getDevice(id);
   }
 

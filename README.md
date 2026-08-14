@@ -43,7 +43,7 @@ with no instructions and nobody standing next to them. Behind it sits one admin 
 your OpenMasjidOS: run several appeals at once, take monthly giving, email receipts,
 collect school fees, and manage a fleet of tablets across more than one site.
 
-> **Status: v0.10.1 — running in masajid, actively developed.**
+> **Status: v0.11.0 — running in masajid, actively developed.**
 > See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ---
@@ -73,12 +73,17 @@ collect school fees, and manage a fleet of tablets across more than one site.
   ask for them, if they chose monthly, or if the appeal offers fee-covering — otherwise it's
   amount → card in one tap.
 - **Optional name and email**, each independently set to *off*, *optional* or *required*.
-- **Cover the card fee.** Donors can add the estimated fee so the masjid nets the full gift
-  (one-time gifts only). Zakat appeals always cover it, and say so on screen.
+- **Cover the card fee.** Donors can add the estimated fee so the masjid nets the full gift. It
+  is offered as a choice on one-time gifts. **Zakat appeals always cover it** — including monthly
+  ones, where the grossed-up amount is what recurs, so the zakat arrives whole every month.
 - **A gentler route for large gifts.** Above a threshold you set, the kiosk can suggest a
   cheaper alternative — your bank or Zelle details, with an optional QR image.
-- **Tap, insert or swipe**, with live reader prompts and a "hold your card on the reader for
-  at least 5 seconds" hint — the most common reason a good payment looks like a failure.
+- **"Tap or insert your card"**, with live reader prompts and a "hold your card on the reader for
+  at least 5 seconds" hint — the most common reason a good payment looks like a failure. (If a
+  card can only be read by swiping, the reader says so itself.)
+- **An on-screen pointer to your reader**, optionally: a pulsing contactless symbol with arrows,
+  on whichever edge the reader is mounted — left, right, top or bottom — turning green when the
+  payment goes through.
 - **Typed card entry**, always available as a fallback and used automatically when a kiosk
   has no reader. The card goes into Stripe's own form inside the app — never a browser, so
   it works on a fully locked tablet — and is tokenised on the device.
@@ -124,18 +129,21 @@ Each appeal is its own tab across the top of the kiosk, with its own everything.
 
 - **Multiple appeals** — General Fund, Zakat, Building Fund — reorderable, each live or
   hidden, with one always-shown **main** appeal.
-- **A two-pane designer** with a **true-to-device live preview** of both the portrait and
-  landscape giving screens as you type.
-- **Design tab** — eight one-tap colour-theme presets, a primary and an accent colour picker
-  (each resettable), and three image slots with upload: **background**, **cover** and **logo**.
+- **A two-pane designer**, opening as a **full page in its own browser tab**, with a
+  **true-to-device live preview** of both the portrait and landscape giving screens as you type.
+  The address is shareable and survives a refresh, so several appeals can be compared side by side.
+- **Design tab** — eight one-tap colour-theme presets, a primary and an accent colour (picker,
+  or a typed **hex code** so a masjid can enter its exact brand colour; each resettable), and
+  three image slots with upload: **background**, **cover** and **logo**.
 - **Amounts tab** — up to six suggested amounts, custom-amount on/off with a minimum and
   maximum, and a monthly toggle.
 - **Type & fees tab** — **Donation**, **Zakat** or **Tuition**. The type drives the fee rule
   automatically: Zakat always covers the fee, Donation makes it the donor's choice, Tuition
   leaves it to you.
-- **Payments tab** — settle this appeal to a **different Stripe account**. The physical
-  reader is bound to your primary account, so a cross-account appeal is keyed-entry only, and
-  the panel says so plainly.
+- **Payments tab** — settle this appeal to a **different Stripe account**, with the card reader
+  working there too: the kiosk moves the reader onto that account the moment someone donates to
+  the appeal, so the first tap takes a few seconds longer and everything else is unchanged. If
+  the reader can't be moved, the kiosk falls back to typed entry rather than failing the gift.
 - **Kiosks tab** — target which tablets show this appeal (all of them by default).
 - **Message tab** — a description and a per-appeal thank-you message.
 - Text colour is **calculated from the background you actually chose**, so headings and small
@@ -176,7 +184,10 @@ Shared by every appeal:
 - **Capture-and-verify**: the server retrieves the PaymentIntent from Stripe, captures it, and
   records a donation only once Stripe says it succeeded.
 - **Monthly giving** is set up from the card tapped on the reader — the first month is that
-  tap, and the subscription's first automatic charge is one month later, never doubled.
+  tap, and the subscription's first automatic charge is one month later, never doubled. Plans are
+  created as ordinary active subscriptions, not "free trials".
+- **Refunds** from the Donations page — full or partial, with a Stripe reason, the donor emailed
+  and the admin alerted. Every total is netted, so a refund stops counting the moment it is given.
 
 ## Receipts, alerts & notifications
 
@@ -185,18 +196,25 @@ Shared by every appeal:
   colour, and the amount/date/card/fund filled in automatically, with a live preview and a
   send-me-a-test button. It is escaped against injection and can never double-send.
 - **A retry queue** for receipts, so a transient email failure still lands.
+- **A refund note** to the donor, in the same branding, when you give a donation back.
+- **A "your monthly donation is set up" email** carrying the donor's own cancel link.
 - **Donation notifications** to your OpenMasjidOS dashboard.
-- **Admin alerts** when the **card reader goes offline** (debounced and latched, so a blip
-  doesn't page you) or a **payment can't be started** — delivered by email or webhook
-  according to your OpenMasjidOS alert settings.
+- **Admin alerts**, delivered by email or webhook according to your OpenMasjidOS alert settings:
+  the **card reader goes offline** (debounced and latched, so a blip doesn't page you), a
+  **payment can't be started**, a **monthly plan couldn't be set up** (the gift was taken once and
+  nothing recurs — so somebody should tell the donor), a **donor stopped their monthly donation**,
+  and a **donation was refunded**. Plus a **test** you can fire from the app.
 
 ## Donations & reporting
 
 - **A full log** — amount, kiosk, time, one-time vs monthly, campaign, donor if given, and
-  status, newest first, with a detail window per donation.
-- **Totals** for today, this week, this month and all time, plus a **per-kiosk breakdown**.
-- **CSV export** of the entire history, escaped against spreadsheet formula injection and
-  behind admin sign-in because it contains donor details.
+  status, newest first, with a detail window per donation that can also **refund** it.
+- **Totals** for today, this week, this month and all time, plus a **per-kiosk breakdown**, all
+  **netted of refunds** so they show what the masjid actually kept. Refunded donations stay in
+  the log, struck through and badged, rather than disappearing.
+- **CSV export** of the entire history — including **Refunded**, **Net** and **Refund ID**
+  columns — escaped against spreadsheet formula injection and behind admin sign-in because it
+  contains donor details.
 - Totals count **succeeded donations in your current currency** only, so mixed currencies are
   never silently added together.
 
@@ -218,6 +236,13 @@ cached status on the screen you use to cancel someone's standing order would be 
   afterwards so the screen shows what Stripe actually did.
 - Plans created before this feature existed still appear; they just can't name their campaign
   and say so rather than guessing.
+- **The donor gets their own way out.** When a plan is set up they're emailed a confirmation with
+  a **"Stop my monthly donation"** link — the email tells them to keep it, because that link
+  appears nowhere else. One press ends it, you get an alert, and a link for something that has
+  already stopped says so instead of offering a button that would do nothing. It works from
+  anywhere via your OpenMasjidOS remote address; with remote access off, the email asks them to
+  contact the masjid rather than printing a link they couldn't open. The link is a long random
+  code stored only as a hash, and the single thing it can do is stop that one donation.
 
 ## Devices & fleet management
 
@@ -245,10 +270,13 @@ cached status on the screen you use to cancel someone's standing order would be 
 - **A real kiosk.** The app is the tablet's Home launcher and starts itself on boot.
 - **Device-owner mode** (a one-time ADB step) gives true **Lock Task Mode** — the status bar,
   notification shade, recents and Home are all gone.
-- **Soft kiosk with no computer at all**: screen pinning re-asserted on resume and focus, a
-  dead Back button, a bounce-back watchdog, and an **opt-in accessibility helper** that closes
-  the notification shade the instant it's pulled. The maintenance screen walks a volunteer
-  through the one-time setup.
+- **Soft kiosk with no computer at all**: being the Home app, a dead Back button, a bounce-back
+  watchdog that reopens the kiosk if it's sent to the background, hidden system bars, and an
+  **opt-in accessibility helper** that closes the notification shade the instant it's pulled. The
+  maintenance screen walks a volunteer through the one-time setup. (Android's **screen pinning**
+  was used for this until 0.11.0 and has been removed — it blocked the Back/Home/Recents buttons,
+  which hiding the navigation bar does properly, while silently forbidding the app from opening
+  Android Settings, the permission prompts or the self-updater.)
 - **Screen stays awake**, bars stay hidden, and the app self-recovers after a crash.
 - **Getting out:** **10 rapid taps** in the corner → your **exit PIN** → the maintenance
   screen. The PIN is verified **on the tablet**, so it works with the server down, and is
@@ -271,7 +299,10 @@ cached status on the screen you use to cancel someone's standing order would be 
 - **Stripe Reader M2 over Bluetooth *and* USB.**
 - **Automatic reconnection** — on boot and whenever the connection drops, plus a background
   health check that catches silent drops.
-- **Firmware updates** handled in the app, with battery and charging reported to the panel.
+- **Firmware updates** handled in the app, with battery and charging reported to the panel. An
+  update in progress is shown **on the giving screen** with a percentage and a "leave it switched
+  on" note — from the floor an updating reader used to look like a broken one, and unplugging it
+  mid-update is the one thing that can leave it needing a repair.
 - Transient Bluetooth failures are retried with a clean re-scan, and errors come with the
   **actual fix** ("don't pair it in Android's own Bluetooth settings", "charge it past 50%").
 - A **simulated reader** for testing without hardware.
@@ -307,27 +338,33 @@ code only ever sees connection tokens, PaymentIntent client secrets and the publ
 - An **append-only audit trail** of actions that reach outside the app — cancelling, pausing
   or rescheduling a plan, removing a kiosk, changing the exit PIN. Readable at
   `GET /api/admin/audit`; it has no screen in the panel yet.
-- Security headers on every response, automatic HTTPS upgrade for browser visits, request-size
-  limits, and CSV/HTML escaping against injection.
+- Security headers on every response — including a **framing denial** (`frame-ancestors 'none'`
+  plus `X-Frame-Options: DENY`), so no other site can embed the admin panel or the donor's cancel
+  page to trick a click — automatic HTTPS upgrade for browser visits, request-size limits, and
+  CSV/HTML escaping against injection.
 
 A full audit lives in [`docs/audit/`](docs/audit/).
 
 ## OpenMasjidOS integration
 
-Declares `sso`, `stripe`, `https`, `notifications`, `email`, `domain`/`tunnel` and three
-`alerts` (`reader-offline`, `payment-failed`, `test`), and consumes the `students/billing`
-capability. There are **no install settings** — everything is configured in-app. Nothing
-platform-derived is ever written to disk, so a restore onto a new machine just works.
+Declares `sso`, `stripe`, `https`, `notifications`, `email`, `domain`/`tunnel` and six `alerts`
+(`reader-offline`, `payment-failed`, `monthly-failed`, `monthly-cancelled`, `donation-refunded`,
+`test`), and consumes the `students/billing` capability. There are **no install settings** —
+everything is configured in-app. Nothing platform-derived is ever written to disk, so a restore
+onto a new machine just works.
 
 ### Update channels
 
-| Channel | What you get |
-|---|---|
-| **stable** (default) | Released versions, digest-pinned. What a masjid should run. |
-| **dev** | The `dev` branch, rebuilt on every push, plus an immutable `:dev-<sha>` tag for rollback. Testing only. |
+| Channel | Version | Image installed |
+|---|---|---|
+| **stable** (default) | `X.Y.Z` | `:<version>@sha256:<digest>` — what a masjid should run. |
+| **dev** | `X.Y.Z-dev.N` | `:X.Y.Z-dev.N`, rebuilt on every push to `dev`. Testing only. |
 
-Dev builds report their version with a `-dev` suffix, so a test tablet is never mistaken for a
-production one.
+**Both channels are versioned and both install an immutable image**; they differ only in how — a
+digest on stable, a per-build version tag on dev. A dev build's version (`0.11.1-dev.3`) sorts
+above the last release and below the next, so a test tablet can never be mistaken for a production
+one and OpenMasjidOS can offer each dev build as a real update. `:dev` and `:dev-<sha>` are also
+published as conveniences for `docker pull`, but neither is what the catalog installs.
 
 ## How it works
 
@@ -362,13 +399,23 @@ tablet and a 6-digit code.
 
 ## Not included
 
-No webhooks, no inbound ports. Refunds are done in the Stripe dashboard, so a kiosk can never
-issue one. No Gift Aid, donor accounts, printed receipts, iOS app, offline payments, or Play
-Store distribution.
+No webhooks and no inbound ports — the tablet and the server both make only outbound calls.
+Refunds are issued from the admin panel, never from a kiosk. No Gift Aid, donor accounts, printed
+receipts, iOS app, offline payments, or Play Store distribution.
 
-**Known gaps:** branded receipt emails currently fall back to Stripe's own receipt (a start-up
-ordering bug), and the stored "allow manual card entry" setting is inert — typed entry is
-always offered.
+**Known gaps:**
+
+- The stored **"allow manual card entry"** setting is inert — typed entry is always offered as a
+  fallback, and there is no admin control for it.
+- The **audit trail** of admin actions that reach outside the app is recorded and readable at
+  `GET /api/admin/audit`, but has no screen in the panel yet.
+- **Donation totals use UTC day boundaries.** The container sets no timezone, so "today" rolls
+  over at UTC midnight rather than the masjid's — a treasurer in California sees the day's total
+  reset at 5pm. The figures are right; only the day boundary is.
+- The container **runs as root** (with no Linux capabilities at all and `no-new-privileges`).
+  Dropping to an unprivileged user needs a coordinated one-time migration of the data volume,
+  since dropping it alone would break every existing install. See
+  [`docs/audit/ACTION_REQUIRED.md`](docs/audit/ACTION_REQUIRED.md).
 
 ## Develop & build
 
@@ -379,7 +426,7 @@ All development happens on the **`dev`** branch — see the Branching policy at 
 # server (API + static host)
 cd server && npm install && npm run build && npm test
 
-# admin web (Vite dev server proxies /api + /healthz to the server on :8080)
+# admin web (Vite dev server proxies /api, /healthz + /download to the server on :8080)
 cd web && npm install && npm run dev
 
 # Android kiosk app (needs JDK 17+ and the Android SDK)

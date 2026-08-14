@@ -24,35 +24,50 @@ mount that keeps it **plugged in** is strongly recommended.
 ## 3. Lock it down (kiosk mode) — no computer needed
 
 **First, set the exit PIN.** In the admin panel go to **Devices** and set the kiosk **exit
-PIN**. Staff reach the maintenance screen by tapping **the top corner 10 times** → the PIN
-pad. The PIN is verified on the tablet even if the network is down, so guard it.
+PIN**. Staff reach the maintenance screen by tapping the giving screen's background **10 times
+within 3 seconds** (anywhere that isn't a button) → the PIN pad. The PIN is verified on the
+tablet even if the network is down, so guard it.
 
-**Then harden the tablet itself — all on the tablet, no computer:**
+**Then work down the checklist on the tablet — no computer:**
 
-1. **Make the app the Home screen.** Open the maintenance screen (10 taps → PIN) and tap
-   **Set as Home app**, choosing OpenMasjid Kiosk. Now pressing Home returns to the kiosk.
-2. **Turn on Screen pinning + a screen lock.** From the maintenance screen tap **Open tablet
-   Settings (for Screen pinning)**, then:
-   - **Security → Screen pinning** (some tablets: **App pinning**) → turn **ON**, and turn on
-     **"Ask for PIN/pattern before unpinning."**
-   - Set a **screen lock** (PIN or pattern) if the tablet doesn't have one.
-3. **Turn on the shade lock (optional but recommended).** From the maintenance screen tap
-   **Turn on shade lock (Accessibility)** and enable **OpenMasjid Kiosk — shade lock**. This
-   accessibility helper closes the notification shade the instant it's pulled down while the
-   kiosk is locked (it reads no screen content and does nothing when unlocked/unpaired). It's a
-   backstop for the moments screen pinning isn't active.
-4. Return to the kiosk. It now **pins itself**: the **notification shade is blocked**, the
-   **Home/Recents buttons are blocked**, the **Back button does nothing**, and getting out by
-   hand needs the device PIN. The app still opens the maintenance screen and exits normally
-   behind **your** exit PIN.
+Open the maintenance screen (10 taps on the background → PIN) and find
+**Permissions & lockdown**. It lists everything the kiosk asks the tablet for, whether each
+one is currently set, and a button that opens exactly the right dialog or settings page. Work
+down it until it reads *"n of n set"*. It covers:
 
-**If your tablet supports it, also:** hide the navigation bar / use gesture navigation
-(**Settings → Display / System → Navigation bar**), and turn off lock-screen notifications.
-These are OEM-specific and optional — screen pinning already blocks the buttons — but they make
-the lock cleaner on tablets that allow it.
+| Item | What it's for |
+|---|---|
+| Install apps from this kiosk | So the kiosk can **update itself** — it downloads the new version from your own server and hands it to Android. Android calls this "install unknown apps". |
+| Nearby devices (Bluetooth) | Finding a Stripe Reader M2 wirelessly. Skip it for a USB reader. |
+| Location access | Stripe's reader software requires it before it will look for **any** reader, USB included. It is never used to track the tablet. |
+| Location turned on | The tablet's own location switch, needed alongside the permission. |
+| Bluetooth turned on | Only for a wireless reader. |
+| Home app | Home returns to the giving screen, and the kiosk restarts itself after a reboot. |
+| Shade lock (Accessibility) | Optional backstop that shuts the notification shade if it's ever pulled down. |
+| Full kiosk lock (device owner) | Status only — see the ADB step below. Not required. |
 
-That's a strong, self-contained kiosk with nothing but the tablet. The maintenance screen shows
-a reminder with these exact steps until they're done.
+Each button steps the kiosk out of the way, opens the right screen, and picks the kiosk back up
+when you return — so nothing has to be done twice. If a button needs a permission you haven't
+granted yet (self-update is the usual one), granting it and coming back finishes the job rather
+than starting over.
+
+**The app no longer uses Android's screen pinning.** It was only ever there to block the Back,
+Home and Recents buttons, which hiding the navigation bar (below) does properly. Pinning also
+stopped a pinned app from opening *any* other app, silently — so Android Settings, the permission
+prompts and the self-updater all looked broken from the tablet. If you previously turned on
+"Screen pinning" or "Ask for PIN before unpinning" in **Settings → Security**, you can leave them
+on or off; the kiosk ignores both.
+
+**Hiding the two system bars.** The maintenance screen states this too:
+
+- **Bottom navigation bar** — **Settings → Display → Navigation bar** (or **System → Gestures**)
+  → choose **Gesture navigation** / **Swipe gestures**. That removes the Back, Home and Recents
+  buttons. Naming is OEM-specific; some tablets add a pin icon that keeps the bar hidden.
+- **Top notification bar** — Android gives an ordinary app **no way** to remove this, and no
+  tablet setting hides it. The shade lock closes it the moment it is pulled down. Removing the bar outright needs **device owner** (below), which the
+  kiosk then does for you automatically.
+
+That's a strong, self-contained kiosk with nothing but the tablet.
 
 **Updating the app** is now in-app: when an update is available, open the maintenance screen →
 **Update app**. The tablet downloads the new version over the same secure connection and hands it
@@ -68,7 +83,8 @@ with **no Google or other accounts added**:
 adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver
 ```
 
-The app then enters true **Lock Task Mode** automatically (no screen-pinning setup needed).
+The app then enters true **Lock Task Mode** automatically — the only mode that makes the
+notification shade genuinely unreachable.
 This is optional — the soft-kiosk steps above are enough for most masjids.
 
 ## 4. Keep it running
@@ -77,14 +93,26 @@ This is optional — the soft-kiosk steps above are enough for most masjids.
 - **To move it to another server or after revoking:** open the maintenance screen (10 taps →
   PIN) → **Re-pair**.
 
-### Removing the kiosk
-Revoke it from **Devices** (the tablet returns to the pairing screen). To fully leave
-kiosk mode on a device-owner tablet you must remove device-owner:
+### Getting out of kiosk mode
+
+There are two ways out, and both keep working on a device-owner tablet:
+
+1. **Paired kiosk** — 10 taps on the giving screen → **exit PIN** → **Exit kiosk**. This is the
+   normal route and needs the PIN you set in **Devices**.
+2. **Unpaired tablet** — the setup screen is deliberately **never locked** and carries a plain
+   **Exit and leave setup** button. Until a kiosk is paired there is no configuration, no donor
+   flow and no exit PIN to check, so withholding an exit would protect nothing and would strand
+   a tablet that was never paired (or one you have just revoked) with no way back short of ADB.
+
+So **revoking from Devices is a complete remote undo**: the tablet drops to the setup screen,
+releases its lock, and can be handed back or re-paired from there.
+
+To remove device-owner altogether (the tablet stops being a managed device):
 
 ```
 adb shell dpm remove-active-admin org.openmasjidos.kiosk/.KioskAdminReceiver
 ```
 
-(“Exit kiosk” in the maintenance screen stops the lock, but while this app is the only home
-launcher the system relaunches it — install another launcher or remove device-owner to
-fully exit.)
+Note that this app registers as a home launcher, so after **Exit kiosk** the system may reopen
+it if it's the only launcher installed — the exit sends you to the Home-app picker so you can
+choose another one.

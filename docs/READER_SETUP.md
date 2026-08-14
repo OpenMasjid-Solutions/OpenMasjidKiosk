@@ -23,7 +23,8 @@ protected by the exit PIN — donors never see any of it.
 
 ## 2. Open the maintenance screen
 
-1. On the kiosk's giving screen, tap the **top-left corner 10 times** within 3 seconds.
+1. On the kiosk's giving screen, tap the background **10 times** within 3 seconds (anywhere that
+   isn't a button).
 2. Enter the **exit PIN** (set in the admin panel, Devices → this kiosk).
 3. You're now on the maintenance screen. Find the **Card reader** section.
 

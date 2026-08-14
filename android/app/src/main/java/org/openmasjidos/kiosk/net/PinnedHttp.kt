@@ -126,7 +126,21 @@ object PinnedHttp {
             .readTimeout(8, TimeUnit.SECONDS)
             .writeTimeout(8, TimeUnit.SECONDS)
             .callTimeout(12, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(false)
+            // RETRY A DEAD POOLED CONNECTION. Observed on a real kiosk as
+            //   IOException: unexpected end of stream on https://192.168.1.240:8445/...
+            // which failed a donation outright. That is OkHttp's message for a keep-alive connection
+            // the other end had already closed: the tablet takes an idle connection from the pool,
+            // writes the request, and gets EOF instead of a response. It is ordinary and expected —
+            // the platform's HTTPS front end recycles idle connections, and the kiosk is idle between
+            // donors by nature, so the FIRST request after a quiet spell is exactly the one that hits
+            // a stale socket. With retries off, that first request was simply lost, which is why the
+            // failure looked random and always seemed to strike a fresh attempt.
+            //
+            // This does not weaken certificate pinning: a retry opens a NEW connection and runs the
+            // full pinned trust check again. OkHttp only retries when the failure was at the
+            // connection level and the request body can be replayed, so it cannot turn one payment
+            // into two — and every payment carries an idempotency key regardless.
+            .retryOnConnectionFailure(true)
             .build()
     }
 

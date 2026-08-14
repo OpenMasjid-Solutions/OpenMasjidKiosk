@@ -316,11 +316,20 @@ export interface Device {
   online: boolean;
   /** Forced screen orientation set from here (not the tablet's auto-rotate). */
   orientation: DeviceOrientation;
+  /** Which side of the tablet the card reader sits on, so the kiosk can point donors to it during the
+   *  card step. 'off' = no hint. */
+  nfcSide: DeviceNfcSide;
 }
 
 /** Kiosk UI rotation in degrees ('0' = as mounted). The tablet rotates its own UI by this angle, so it
  *  works even on tablets that ignore system orientation requests. */
 export type DeviceOrientation = '0' | '90' | '180' | '270';
+
+/** Which side the card reader sits on, relative to the app's LOGICAL landscape screen. Left/right map
+ *  to top/bottom when the tablet is rotated to portrait. 'off' shows no reader hint. */
+/** Where the reader sits relative to the giving screen. Left/right suit a landscape mount; top/bottom
+ *  are for a portrait one, where the reader is usually above or below rather than beside the screen. */
+export type DeviceNfcSide = 'off' | 'left' | 'right' | 'top' | 'bottom';
 
 /** One structured log line from a kiosk (payments, reader events, errors). */
 export interface DeviceLog {
@@ -363,6 +372,10 @@ export const renameDevice = (id: string, name: string) =>
 export const setDeviceOrientation = (id: string, orientation: DeviceOrientation) =>
   request<Device>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ orientation }) });
 
+/** Set which side of the tablet the card reader sits on (delivered to the tablet on its next check-in). */
+export const setDeviceNfcSide = (id: string, nfcSide: DeviceNfcSide) =>
+  request<Device>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ nfcSide }) });
+
 export const revokeDevice = (id: string) =>
   request<{ ok: true }>(`/api/admin/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
@@ -382,6 +395,9 @@ export const setKioskPin = (pin: string) =>
 // Stripe). Saving pushes live: kiosks pick up the change on their next heartbeat.
 export type PromptPolicy = 'off' | 'optional' | 'required';
 
+/** Campaign-tab size on the kiosk. 'medium' matches the original hardcoded size. */
+export type TabSize = 'small' | 'medium' | 'large' | 'xlarge';
+
 export interface GivingConfig {
   presetsMinor: number[];
   allowCustom: boolean;
@@ -397,6 +413,9 @@ export interface GivingConfig {
   maxBrightness: boolean;
   /** Small tagline shown at the bottom of the kiosk giving screen ('' hides it). */
   footerText: string;
+  /** Size of the campaign tabs across the top of the kiosk (shown only with 2+ campaigns).
+   *  'medium' is the original size. */
+  tabSize: TabSize;
   /** When a donation is at/above this many MINOR units, the kiosk gently suggests a cheaper
    *  alternative (bank transfer / Zelle QR) before the card. 0 disables the prompt. */
   largeAmountThresholdMinor: number;
@@ -566,10 +585,17 @@ export interface Donation {
   donorName: string;
   donorEmail: string;
   chargeId: string;
+  /** How much has been given back, in the same minor units as `amountMinor`. 0 = untouched;
+   *  equal to `amountMinor` = refunded in full; anything between = a partial. */
+  refundedMinor: number;
+  refundId: string;
+  refundedAt: string;
+  refundReason: string;
   createdAt: string;
 }
 
-/** Succeeded-donation totals (integer minor units) + a per-kiosk breakdown. */
+/** Succeeded-donation totals (integer minor units) + a per-kiosk breakdown. NET OF REFUNDS — a
+ *  refunded gift stops counting toward the amounts, though it still counts in `count`. */
 export interface DonationTotals {
   today: number;
   thisWeek: number;
@@ -587,6 +613,25 @@ export interface DonationsData {
 }
 
 export const getDonations = () => request<DonationsData>('/api/admin/donations');
+
+/** What the server did after a refund — enough for the UI to tell the admin the whole truth in one
+ *  go, including the two things they'd otherwise have to guess: whether the donor actually got an
+ *  email, and whether a monthly plan is still running. */
+export interface RefundResult {
+  donation: Donation;
+  refundedMinor: number;
+  fullyRefunded: boolean;
+  donorEmailed: boolean;
+  donorEmailAddress: string;
+  /** True when this donation was a monthly — refunding a payment does NOT cancel the standing order. */
+  monthlyStillLive: boolean;
+  /** Stripe's refund status: usually 'succeeded', occasionally 'pending' for slower methods. */
+  status: string;
+}
+
+/** Refund a donation. `amountMinor` omitted = give back everything not already refunded. */
+export const refundDonation = (id: string, body: { amountMinor?: number; reason?: string } = {}) =>
+  request<RefundResult>(`/api/admin/donations/${encodeURIComponent(id)}/refund`, { method: 'POST', body: JSON.stringify(body) });
 
 /** Fetch the donations CSV as a Blob. Uses fetch (not a plain <a download>) so an expired session
  *  surfaces an error instead of silently saving the 401 JSON body as "donations.csv". */

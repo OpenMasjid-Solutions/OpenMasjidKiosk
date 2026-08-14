@@ -9,8 +9,7 @@
  *  live: kiosks pick the change up on their next check-in. Amounts are edited in whole/decimal
  *  currency units but stored as integer MINOR units. Non-optimistic — every change re-hydrates
  *  from the server's response. */
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
@@ -42,6 +41,7 @@ import {
   type GivingSettings,
   type PromptPolicy,
   type StripeAccountRef,
+  type TabSize,
 } from './api';
 import { formatMoney, symbolFor, toMajorStr, toMinor } from './money';
 import { safeImageUrl } from './ui';
@@ -49,6 +49,16 @@ import { safeImageUrl } from './ui';
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
 
 const MAX_PRESETS = 6;
+
+/** Campaign-tab sizes — kept in sync with the kiosk (android GivingHome.kt `tabMetricsFor`).
+ *  `medium` is the original hardcoded size, so it's the safe default. font/padX/padY are the
+ *  dp/sp values the tablet uses; the web preview reuses them 1:1 as px for a faithful mock. */
+const TAB_SIZES: { id: TabSize; label: string; font: number; padX: number; padY: number }[] = [
+  { id: 'small', label: 'Small', font: 15, padX: 20, padY: 12 },
+  { id: 'medium', label: 'Medium', font: 16, padX: 26, padY: 16 },
+  { id: 'large', label: 'Large', font: 22, padX: 34, padY: 22 },
+  { id: 'xlarge', label: 'Extra large', font: 28, padX: 46, padY: 30 },
+];
 /** Campaign title/description limits — kept tight so the tab name and the kiosk header never overflow
  *  or get cut off on the giving screen. */
 const TITLE_MAX = 48;
@@ -111,13 +121,41 @@ const CAMPAIGN_TABS: { id: CampaignTabId; label: string }[] = [
 ];
 
 // ── The section ─────────────────────────────────────────────────────────────────
+/**
+ * Link to the campaign editor's own page. Includes the current path so the href works when the panel
+ * is served under a `/<basePath>` prefix (OpenMasjidOS remote access) — a bare "#campaign/x" would
+ * resolve against the wrong root once opened in a fresh tab.
+ */
+export const campaignEditorHref = (id: string) =>
+  `${typeof location === 'undefined' ? '' : location.pathname}#campaign/${encodeURIComponent(id)}`;
+
+/**
+ * Open the editor in a new tab VIA SCRIPT, so that tab is allowed to close itself again.
+ *
+ * Browsers only let `window.close()` shut a window a script opened — a tab created by a plain
+ * `target="_blank"` link is refused (silently in Chrome, with a console warning in Firefox). Since
+ * closing the editor should close its tab, the tab has to be opened this way.
+ *
+ * Still rendered as a real <a href>, so middle-click, ⌘/Ctrl-click and "Open link in new tab" all keep
+ * working and the address is copyable. Those routes bypass this handler, and such a tab simply falls
+ * back to showing the campaign list on close (see CampaignEditorPage) rather than failing.
+ *
+ * Deliberately NOT 'noopener': the new tab is our own origin, and severing the opener is what takes
+ * the ability to self-close away again.
+ */
+export function openCampaignEditor(e: ReactMouseEvent<HTMLAnchorElement>, href: string): void {
+  // Let the browser handle anything that already means "somewhere else": a modified click, or a
+  // middle/right button.
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const w = window.open(href, '_blank');
+  if (w) e.preventDefault(); // only swallow the click if the tab actually opened
+}
+
 export function CampaignsSection() {
   const [data, setData] = useState<CampaignsData | null>(null);
   const [loadErr, setLoadErr] = useState('');
   const [actErr, setActErr] = useState('');
   const [pending, setPending] = useState(''); // id of the campaign a list action is mutating
-  // Editor: `undefined` = closed, `null` = a new campaign, a Campaign = editing that one.
-  const [editor, setEditor] = useState<Campaign | null | undefined>(undefined);
 
   const reload = useCallback(async () => {
     try {
@@ -170,9 +208,15 @@ export function CampaignsSection() {
             <p className="muted">Each appeal is its own giving screen (a tab on the kiosk). Your main campaign always shows first.</p>
           </div>
           {data && (
-            <button className="btn btn--primary btn--sm" style={{ marginInlineStart: 'auto' }} onClick={() => setEditor(null)}>
+            <a
+              className="btn btn--primary btn--sm"
+              style={{ marginInlineStart: 'auto' }}
+              href={campaignEditorHref('new')}
+              target="_blank"
+              onClick={(e) => openCampaignEditor(e, campaignEditorHref('new'))}
+            >
               <Plus size={15} /> New campaign
-            </button>
+            </a>
           )}
         </div>
 
@@ -193,7 +237,7 @@ export function CampaignsSection() {
                   busy={pending === c.id}
                   canUp={!c.isMain && nonMain.length > 1 && nonMain[0].id !== c.id}
                   canDown={!c.isMain && nonMain.length > 1 && nonMain[nonMain.length - 1].id !== c.id}
-                  onEdit={() => setEditor(c)}
+                  editHref={campaignEditorHref(c.id)}
                   onMakeMain={() => void runAction(c.id, () => setMainCampaign(c.id))}
                   onMoveUp={() => move(c.id, -1)}
                   onMoveDown={() => move(c.id, 1)}
@@ -205,23 +249,6 @@ export function CampaignsSection() {
         )}
       </section>
 
-      {editor !== undefined && data && (
-        <CampaignEditor
-          key={editor ? editor.id : 'new'}
-          campaign={editor}
-          currency={data.currency}
-          accounts={data.accounts}
-          devices={data.devices}
-          primaryAccountId={data.primaryAccountId}
-          hasLocal={data.hasLocal}
-          footerText={data.footerText}
-          onClose={() => setEditor(undefined)}
-          onSaved={() => {
-            setEditor(undefined);
-            void reload();
-          }}
-        />
-      )}
     </>
   );
 }
@@ -235,6 +262,7 @@ function GlobalSettingsCard() {
   const [emailPolicy, setEmailPolicy] = useState<PromptPolicy>('optional');
   const [maxBrightness, setMaxBrightness] = useState(true);
   const [footerText, setFooterText] = useState('OpenMasjid Solutions');
+  const [tabSize, setTabSize] = useState<TabSize>('medium');
   const [currency, setCurrency] = useState('USD');
   const [largeThreshold, setLargeThreshold] = useState(''); // major units; '' = off
   const [largeNote, setLargeNote] = useState('');
@@ -252,6 +280,7 @@ function GlobalSettingsCard() {
     setEmailPolicy(s.giving.emailPolicy);
     setMaxBrightness(s.giving.maxBrightness !== false);
     setFooterText(s.giving.footerText ?? 'OpenMasjid Solutions');
+    setTabSize(s.giving.tabSize ?? 'medium');
     setCurrency(s.currency);
     setLargeThreshold(s.giving.largeAmountThresholdMinor > 0 ? toMajorStr(s.giving.largeAmountThresholdMinor, s.currency) : '');
     setLargeNote(s.giving.largeAmountNote ?? '');
@@ -282,6 +311,7 @@ function GlobalSettingsCard() {
         emailPolicy,
         maxBrightness,
         footerText,
+        tabSize,
         largeAmountThresholdMinor: toMinor(largeThreshold, currency), // 0 when blank = off
         largeAmountNote: largeNote,
         largeAmountImage: largeImage.trim(),
@@ -326,12 +356,14 @@ function GlobalSettingsCard() {
             <p className="hint">Small line at the bottom of the kiosk giving screen. Leave blank to hide it.</p>
           </div>
 
+          <TabSizeField value={tabSize} onChange={setTabSize} />
+
           <p className="hint" style={{ marginTop: '0.25rem' }}>
             Donors can always tap “Enter card details” to pay by typing their card — with or without a
             reader connected. (Your Stripe account must have online card payments enabled.)
           </p>
 
-          <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
+          <div className="row row--top" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
             <PolicyField id="g-name" label="Ask for a name" value={namePolicy} onChange={setNamePolicy} />
             <PolicyField id="g-email" label="Ask for an email" value={emailPolicy} onChange={setEmailPolicy} hint="An email lets Stripe send a receipt." />
           </div>
@@ -350,7 +382,7 @@ function GlobalSettingsCard() {
               cheaper way to give (like a bank transfer or a Zelle QR code) before the card — the donor
               can still choose to pay by card.
             </p>
-            <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap', marginBlockStart: '0.4rem' }}>
+            <div className="row row--top" style={{ gap: '0.8rem', flexWrap: 'wrap', marginBlockStart: '0.4rem' }}>
               <div className="field" style={{ flex: 1, minWidth: '10rem' }}>
                 <label className="label" htmlFor="g-large">Show it at or above <span className="faint">({currency})</span></label>
                 <div className="preset-input">
@@ -429,13 +461,83 @@ function GlobalSettingsCard() {
   );
 }
 
+// ── Campaign-tab size picker (kiosk-wide) ──────────────────────────────────────────
+/** A segmented picker for the campaign-tab size, with a faithful mini preview of the tab strip
+ *  (mirrors android GivingHome.kt CampaignTabs: rounded-top browser tabs, colour-coded, one filled
+ *  "selected"). Tabs only appear on the kiosk when there are 2+ campaigns. */
+function TabSizeField({ value, onChange }: { value: TabSize; onChange: (v: TabSize) => void }) {
+  const m = TAB_SIZES.find((t) => t.id === value) ?? TAB_SIZES[1];
+  const sample = [
+    { title: 'General', color: '#0891b2' },
+    { title: 'Zakat', color: '#16a34a' },
+    { title: 'Building', color: '#d97706' },
+  ];
+  return (
+    <div className="field">
+      <span className="label">Campaign tab size</span>
+      <p className="hint" style={{ marginBlockStart: 0 }}>
+        The size of the tabs across the top of the kiosk. These only appear when you have more than
+        one campaign. “Medium” is the standard size.
+      </p>
+      <div className="ce-tabs" role="group" aria-label="Campaign tab size" style={{ borderBlockEnd: 'none', marginBlock: '0.4rem' }}>
+        {TAB_SIZES.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`ce-tab${t.id === value ? ' ce-tab--on' : ''}`}
+            aria-pressed={t.id === value}
+            onClick={() => onChange(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div
+        aria-hidden="true"
+        style={{
+          display: 'flex',
+          gap: '0.6rem',
+          overflowX: 'auto',
+          padding: '0.7rem 0.6rem 0.5rem',
+          borderRadius: 'var(--radius-card)',
+          background: 'linear-gradient(180deg, #b9e6f2, #7fd4e8)',
+        }}
+      >
+        {sample.map((s, i) => {
+          const selected = i === 1;
+          return (
+            <span
+              key={s.title}
+              style={{
+                flex: 'none',
+                fontWeight: 700,
+                fontSize: `${m.font}px`,
+                lineHeight: 1,
+                padding: `${m.padY}px ${m.padX}px`,
+                borderRadius: '18px 18px 6px 6px',
+                border: `2px solid ${s.color}`,
+                background: selected ? s.color : `${s.color}33`,
+                color: selected ? '#fff' : '#0a2b38',
+                boxShadow: selected ? '0 6px 14px rgba(0,0,0,0.22)' : 'none',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {s.title}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── One campaign in the list ──────────────────────────────────────────────────────
 function CampaignRow({
   c,
   busy,
   canUp,
   canDown,
-  onEdit,
+  editHref,
   onMakeMain,
   onMoveUp,
   onMoveDown,
@@ -445,7 +547,9 @@ function CampaignRow({
   busy: boolean;
   canUp: boolean;
   canDown: boolean;
-  onEdit: () => void;
+  /** Where the editor lives — a real link, so the browser can open it in a new tab (and the admin
+   *  can middle-click / open several appeals side by side). */
+  editHref: string;
   onMakeMain: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
@@ -487,9 +591,9 @@ function CampaignRow({
             <Star size={14} aria-hidden="true" /> Make main
           </button>
         )}
-        <button className="btn btn--ghost btn--sm" onClick={onEdit}>
+        <a className="btn btn--ghost btn--sm" href={editHref} target="_blank" onClick={(e) => openCampaignEditor(e, editHref)}>
           <Pencil size={14} aria-hidden="true" /> Edit
-        </button>
+        </a>
         {!c.isMain &&
           (confirming ? (
             <>
@@ -593,8 +697,10 @@ function CampaignEditor({
   // Live preview amounts (drop blanks/invalid, cap at 6) — recomputed as you type.
   const previewPresets = useMemo(() => presets.map((p) => toMinor(p, currency)).filter((n) => n > 0).slice(0, MAX_PRESETS), [presets, currency]);
 
-  // A non-primary account can't use the reader (it's registered to the primary account), so that
-  // appeal is taken by keyed card entry. `hasLocal` still lets the picker mean "the reader account".
+  // A non-primary account USED to mean keyed entry only, because a reader is registered to one Stripe
+  // account. The kiosk now re-registers the reader onto the campaign's account when someone donates to
+  // it, so this is no longer a restriction — just a note that the first tap takes a moment.
+  // `hasLocal` still lets the picker mean "the reader account".
   const crossAccount = !!stripeAccountId && stripeAccountId !== primaryAccountId;
   const showAccountPicker = accounts.length > 0 || hasLocal;
 
@@ -669,22 +775,25 @@ function CampaignEditor({
     }
   };
 
-  return createPortal(
-    <div className="modal-scrim" role="dialog" aria-modal="true" aria-label={editing ? 'Edit campaign' : 'New campaign'} onClick={onClose}>
-      <div className="modal modal--form glass-raised" onClick={(e) => e.stopPropagation()}>
-        <div className="tl-bar">
-          <button className="tl tl--red" onClick={onClose} aria-label="Close">
-            <X size={9} strokeWidth={3} />
-          </button>
-          <span className="tl tl--amber" aria-hidden="true" />
-        </div>
-        <div className="modal-head">
-          <div className="card-head__main">
-            <h3 className="section-title-inline">{editing ? 'Edit campaign' : 'New campaign'}</h3>
-            <p className="muted">A live preview of the giving screen your kiosks will show.</p>
-          </div>
-        </div>
+  const head = (
+    <div className="modal-head">
+      <div className="card-head__main">
+        <h3 className="section-title-inline">{editing ? 'Edit campaign' : 'New campaign'}</h3>
+        <p className="muted">A live preview of the giving screen your kiosks will show.</p>
+      </div>
+    </div>
+  );
 
+  // One frame now: the editor is always a page. It used to be a dialog over the campaign list, which
+  // meant a two-column form with a live kiosk preview scrolled inside a box inside a box.
+  const shell = (inner: ReactNode) => (
+    <div className="ce-page">
+      {head}
+      {inner}
+    </div>
+  );
+
+  return shell(
         <div className="modal-body">
           <div className="ce-grid">
             <aside className="ce-preview">
@@ -767,33 +876,26 @@ function CampaignEditor({
                       <p className="hint">Pick a preset to fill the two colours below — you can still fine-tune either one.</p>
                     </div>
 
-                    <div className="field">
-                      <span className="label">Primary colour <span className="faint">(background)</span></span>
-                      <div className="accent-row">
-                        <input type="color" className="accent-swatch-input" aria-label="Primary colour" value={primaryColor || DEFAULT_PRIMARY} onChange={(e) => setPrimaryColor(e.target.value)} />
-                        <span className="hint" style={{ margin: 0 }}>{primaryColor ? primaryColor : 'Using the default background'}</span>
-                        {primaryColor && (
-                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPrimaryColor('')}>
-                            Reset to default
-                          </button>
-                        )}
-                      </div>
-                      <p className="hint">Tints the giving screen's background — a soft wash of this colour behind the amount tiles.</p>
-                    </div>
-
-                    <div className="field">
-                      <span className="label">Accent colour <span className="faint">(buttons)</span></span>
-                      <div className="accent-row">
-                        <input type="color" className="accent-swatch-input" aria-label="Accent colour" value={accentColor || DEFAULT_ACCENT} onChange={(e) => setAccentColor(e.target.value)} />
-                        <span className="hint" style={{ margin: 0 }}>{accentColor ? accentColor : 'Using your default accent'}</span>
-                        {accentColor && (
-                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setAccentColor('')}>
-                            Reset to default
-                          </button>
-                        )}
-                      </div>
-                      <p className="hint">The colour of the “Donate” band on each amount tile, and the buttons.</p>
-                    </div>
+                    <ColorField
+                      id="ce-primary"
+                      label="Primary colour"
+                      sub="(background)"
+                      value={primaryColor}
+                      fallback={DEFAULT_PRIMARY}
+                      unsetLabel="Using the default background"
+                      onChange={setPrimaryColor}
+                      hint="Tints the giving screen's background — a soft wash of this colour behind the amount tiles."
+                    />
+                    <ColorField
+                      id="ce-accent"
+                      label="Accent colour"
+                      sub="(buttons)"
+                      value={accentColor}
+                      fallback={DEFAULT_ACCENT}
+                      unsetLabel="Using your default accent"
+                      onChange={setAccentColor}
+                      hint="The colour of the “Donate” band on each amount tile, and the buttons."
+                    />
 
                     <div className="field">
                       <label className="label" htmlFor="c-theme">Appearance</label>
@@ -844,7 +946,7 @@ function CampaignEditor({
 
                     <Toggle label="Allow donors to enter their own amount" hint="Shows a “Choose your own amount” number pad on the kiosk." checked={allowCustom} onChange={setAllowCustom} />
                     {allowCustom && (
-                      <div className="row" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
+                      <div className="row row--top" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
                         <div className="field" style={{ flex: 1, minWidth: '8rem' }}>
                           <label className="label" htmlFor="c-min">Minimum custom amount</label>
                           <input id="c-min" className="input" value={customMin} inputMode="decimal" onChange={(e) => setCustomMin(e.target.value.replace(/[^\d.]/g, ''))} />
@@ -858,7 +960,7 @@ function CampaignEditor({
 
                     <Toggle
                       label="Offer a monthly (recurring) option"
-                      hint="Monthly giving is taken on the card reader, so it isn't available on keyed-only or cross-account campaigns."
+                      hint="Monthly giving is taken on the card reader, so a donor needs the reader (not a typed card) to set one up."
                       checked={monthlyEnabled}
                       onChange={setMonthlyEnabled}
                     />
@@ -932,9 +1034,9 @@ function CampaignEditor({
                           ))}
                         </select>
                         {crossAccount && (
-                          <p className="note-amber">
-                            This appeal uses a different Stripe account, so donations are taken by keyed card entry (typed card), not the reader. The reader only works
-                            for your primary account.
+                          <p className="hint">
+                            The card reader works for this appeal too — it moves onto this account when someone donates,
+                            which takes a few seconds the first time. Your main appeal is unaffected.
                           </p>
                         )}
                       </div>
@@ -1053,10 +1155,163 @@ function CampaignEditor({
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+  );
+}
+
+/**
+ * The campaign editor as a PAGE, for its own browser tab (`#campaign/<id>`, or `#campaign/new`).
+ *
+ * A new tab starts with no React state, so this loads the campaign list itself and picks its one
+ * campaign out of it — which also means the URL is shareable and survives a refresh, and an admin can
+ * keep several appeals open side by side while comparing them.
+ */
+export function CampaignEditorPage({ campaignId }: { campaignId: string }) {
+  const [data, setData] = useState<CampaignsData | null>(null);
+  const [err, setErr] = useState('');
+  const isNew = campaignId === 'new';
+
+  useEffect(() => {
+    let alive = true;
+    getCampaigns()
+      .then((d) => alive && setData(d))
+      .catch((e) => alive && setErr(errMsg(e)));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Closing or saving returns this tab to the campaign list. window.close() only works for a tab the
+  // page opened itself, so it is never relied on — navigating always works, whether this is a second
+  // tab or the admin followed the link in place.
+  const backToList = () => {
+    // The editor lives in its own tab, so "Cancel"/"Save" should close it rather than leave the admin
+    // staring at a second copy of the dashboard. window.close() is refused for a tab the browser
+    // opened itself (a middle-click, or a pasted URL) — so check whether we are still here a moment
+    // later and fall back to the campaign list, which is the only sensible place left to be.
+    window.close();
+    window.setTimeout(() => {
+      if (!window.closed) location.hash = 'giving';
+    }, 150);
+  };
+
+  if (err) {
+    return (
+      <section className="panel glass">
+        <p className="form-error">{err}</p>
+        <button className="btn btn--ghost btn--sm" onClick={backToList}>Back to campaigns</button>
+      </section>
+    );
+  }
+  if (!data) return <section className="panel glass"><p className="muted">Loading…</p></section>;
+
+  const campaign = isNew ? null : data.campaigns.find((c) => c.id === campaignId) ?? null;
+  if (!isNew && !campaign) {
+    return (
+      <section className="panel glass">
+        <p className="empty-title">That campaign no longer exists</p>
+        <p className="muted">It may have been deleted in another tab.</p>
+        <button className="btn btn--ghost btn--sm" onClick={backToList}>Back to campaigns</button>
+      </section>
+    );
+  }
+
+  return (
+    <CampaignEditor
+      campaign={campaign}
+      currency={data.currency}
+      accounts={data.accounts}
+      devices={data.devices}
+      primaryAccountId={data.primaryAccountId}
+      hasLocal={data.hasLocal}
+      footerText={data.footerText}
+      onClose={backToList}
+      onSaved={backToList}
+    />
+  );
+}
+
+/**
+ * A colour with a swatch AND a typed hex, so a masjid can use its OWN brand colour.
+ *
+ * The swatch alone was the whole control before, which meant any colour was technically reachable but
+ * only by hunting for it in the OS picker — there was no way to enter the hex a masjid already has
+ * written down, and next to a grid of presets the whole thing read as "presets only".
+ *
+ * The text box is free while you type (you cannot enter "#1f7a5c" without passing through "#1", "#1f"
+ * …), so it keeps its own draft and only commits when the value is a real colour. Leaving it empty
+ * clears back to the default rather than committing a broken value.
+ */
+function ColorField({
+  id,
+  label,
+  sub,
+  value,
+  fallback,
+  unsetLabel,
+  onChange,
+  hint,
+}: {
+  id: string;
+  label: string;
+  sub?: string;
+  value: string;
+  fallback: string;
+  unsetLabel: string;
+  onChange: (v: string) => void;
+  hint: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  // Follow the value when it changes from OUTSIDE this field (a preset was clicked, or Reset).
+  useEffect(() => setDraft(value), [value]);
+
+  const normalise = (raw: string): string | null => {
+    const v = raw.trim().replace(/^#?/, '#');
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) return v.toLowerCase();
+    // Accept the 3-digit shorthand people copy from CSS, expanded to the 6 the picker needs.
+    if (/^#[0-9a-fA-F]{3}$/.test(v)) return `#${v.slice(1).split('').map((c) => c + c).join('')}`.toLowerCase();
+    return null;
+  };
+  const commit = (raw: string) => {
+    if (!raw.trim()) return onChange(''); // cleared → back to the default
+    const hex = normalise(raw);
+    if (hex) onChange(hex);
+    else setDraft(value); // not a colour — snap back rather than keep something unusable
+  };
+  const bad = draft.trim() !== '' && normalise(draft) === null;
+
+  return (
+    <div className="field">
+      <span className="label">{label} {sub && <span className="faint">{sub}</span>}</span>
+      <div className="accent-row">
+        <input
+          type="color"
+          className="accent-swatch-input"
+          aria-label={`${label} — pick`}
+          value={normalise(draft) ?? value ?? fallback ?? '#000000'}
+          onChange={(e) => { setDraft(e.target.value); onChange(e.target.value); }}
+        />
+        <input
+          id={id}
+          className="input color-hex"
+          value={draft}
+          spellCheck={false}
+          placeholder={fallback}
+          aria-label={`${label} — hex code`}
+          aria-invalid={bad}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={(e) => commit(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit((e.target as HTMLInputElement).value); } }}
+        />
+        {value ? (
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => onChange('')}>Reset to default</button>
+        ) : (
+          <span className="hint" style={{ margin: 0 }}>{unsetLabel}</span>
+        )}
       </div>
-    </div>,
-    document.body,
+      {bad && <p className="form-error">Use a hex colour like #1f7a5c.</p>}
+      <p className="hint">{hint}</p>
+    </div>
   );
 }
 

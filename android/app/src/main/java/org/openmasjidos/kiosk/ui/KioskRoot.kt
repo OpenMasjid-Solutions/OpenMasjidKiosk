@@ -37,6 +37,9 @@ import org.openmasjidos.kiosk.ui.theme.InkMutedDark
  * @param onExitKiosk stop lock task and leave the app (wired to the Activity in MainActivity).
  * @param onInstallApk hand a downloaded APK file path to the system installer (in-app update).
  * @param onOpenBrowser drop lock task and open a URL in the browser (FALLBACK app-update install).
+ * @param onLeaveLockdown drop screen pinning / Lock Task so a system dialog can appear (temporary —
+ *   the Activity re-locks on its next resume). Used by every permission-checklist button.
+ * @param onOpenIntent open an Android settings screen from the permission checklist.
  */
 @Composable
 fun KioskRoot(
@@ -47,7 +50,8 @@ fun KioskRoot(
     onOpenBrowser: (String) -> Unit,
     onSetHomeApp: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenAccessibility: () -> Unit,
+    onLeaveLockdown: () -> Unit,
+    onOpenIntent: (android.content.Intent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -106,12 +110,18 @@ fun KioskRoot(
 
             ui.phase == Phase.Loading -> LoadingScreen()
 
+            // NOT a kiosk yet: no server, no config, no donor flow and no exit PIN to check. The
+            // screen is deliberately left unpinned (KioskController.enterKiosk), and it carries a
+            // plain Exit button — otherwise a tablet that was never paired, or one an admin has just
+            // REVOKED, is stranded here: we are the HOME app with a re-launch-on-leave watchdog, and
+            // the 10-tap maintenance gesture only exists on the paired giving screen.
             ui.phase == Phase.Unpaired -> PairingScreen(
                 form = ui.form,
                 onUrlChange = vm::onUrlChange,
                 onCodeChange = vm::onCodeChange,
                 onNameChange = vm::onNameChange,
                 onSubmit = vm::pair,
+                onExit = onExitKiosk,
             )
 
             else -> { // Paired — boot straight into the giving home (campaign tabs; no attract screen)
@@ -129,7 +139,7 @@ fun KioskRoot(
                         locationId = ui.config?.locationId.orEmpty(),
                         noPinSet = ui.config?.pinHash?.isNotBlank() != true,
                         exitAllowed = ui.exitAllowed,
-                        showPinningHint = !isDeviceOwner,
+                        isDeviceOwner = isDeviceOwner,
                         updating = ui.updating,
                         onScanReaders = vm::scanForReaders,
                         onStopReaderScan = vm::stopReaderScan,
@@ -141,7 +151,8 @@ fun KioskRoot(
                         onUpdateApp = vm::requestAppUpdate,
                         onSetHomeApp = onSetHomeApp,
                         onOpenSettings = onOpenSettings,
-                        onOpenAccessibility = onOpenAccessibility,
+                        onLeaveLockdown = onLeaveLockdown,
+                        onOpenIntent = onOpenIntent,
                         onReturn = vm::closeOverlay,
                         onRePair = vm::rePair,
                         onExit = onExitKiosk,

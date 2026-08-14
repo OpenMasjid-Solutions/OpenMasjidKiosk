@@ -132,6 +132,14 @@ test('per-device: campaign targeting filters getKioskConfig, and orientation is 
   s.setDeviceOrientation(a.id, 'nonsense');
   assert.equal(s.getDevice(a.id)!.orientation, '0'); // invalid → no rotation
 
+  // Reader side (NFC hint): per-device, defaults off, only left/right/off are kept, reaches the config.
+  assert.equal(s.getKioskConfig('', a.id).config.nfcSide, 'off'); // default
+  s.setDeviceNfcSide(a.id, 'left');
+  assert.equal(s.getKioskConfig('', a.id).config.nfcSide, 'left');
+  assert.equal(s.getKioskConfig('', b.id).config.nfcSide, 'off'); // per-device, B unaffected
+  s.setDeviceNfcSide(a.id, 'sideways'); // unknown → back to off
+  assert.equal(s.getDevice(a.id)!.nfcSide, 'off');
+
   // Revoking a device scrubs its id from every campaign's targeting, so a campaign aimed only at it
   // doesn't silently vanish fleet-wide — it falls back to "all kiosks" ([] = all).
   const both = s.createCampaign({ title: 'Both', deviceIds: [a.id, b.id] })!;
@@ -155,6 +163,17 @@ test('setGiving clamps the large-donation threshold to ≥0 and only keeps valid
   const { config } = s.getKioskConfig('acct_primary');
   assert.equal(config.largeAmountThresholdMinor, 25000);
   assert.equal(config.largeAmountImage, '/uploads/qr_abcd1234.png');
+});
+
+test('setGiving keeps a valid tabSize (default medium) and rejects junk; it reaches the kiosk config', () => {
+  const s = freshStore();
+  assert.equal(s.getGiving().tabSize, 'medium'); // default: the original tab size
+  s.setGiving({ tabSize: 'large' });
+  assert.equal(s.getGiving().tabSize, 'large');
+  assert.equal(s.getKioskConfig('acct_primary').config.tabSize, 'large'); // delivered to the tablet
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  s.setGiving({ tabSize: 'gigantic' as any }); // unknown value → falls back to medium
+  assert.equal(s.getGiving().tabSize, 'medium');
 });
 
 test('the main campaign cannot be deleted; a normal campaign can', () => {

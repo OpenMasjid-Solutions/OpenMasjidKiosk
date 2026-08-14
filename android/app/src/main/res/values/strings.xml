@@ -29,6 +29,8 @@
     <string name="pairing_error_unreachable">Couldn\'t reach the server. Check the address, and that this tablet and the server are on the same Wi-Fi.</string>
     <string name="pairing_error_cert">Couldn\'t secure the connection to the server. Ask an admin to check the setup.</string>
     <string name="pairing_error_generic">Something went wrong. Please try again.</string>
+    <string name="pairing_exit_note">This tablet isn\'t locked down until it is paired, so you can leave at any time.</string>
+    <string name="pairing_exit">Exit and leave setup</string>
 
     <!-- Re-pair (fail-closed lockout) -->
     <string name="repair_title">Re-pairing needed</string>
@@ -78,7 +80,7 @@
     <string name="maintenance_repair">Re-pair this kiosk</string>
     <string name="maintenance_update_title">App update available</string>
     <string name="maintenance_update_body">Version %1$s is available (this kiosk is on %2$s).</string>
-    <string name="maintenance_update_how">Tapping Update app opens the newest version in this tablet\'s browser to download and install — the same way the app was first installed. You may need to allow your browser to install apps and tap through a security notice for your server.</string>
+    <string name="maintenance_update_how">Tapping Update app downloads the new version from your own masjid server and hands it straight to Android to install — no browser, and the kiosk comes back by itself. It needs \"Install apps from this kiosk\" in the list above; if that is off, Android will ask you to allow it first. Should the download fail, the kiosk falls back to opening the link in this tablet\'s browser.</string>
     <string name="maintenance_update_button">Update app</string>
     <string name="maintenance_update_downloading">Downloading update…</string>
     <string name="maintenance_exit">Exit kiosk</string>
@@ -109,12 +111,52 @@
     <string name="reader_status_not_connected">Not connected</string>
 
     <string name="kiosk_set_home_app">Set as Home app</string>
-    <string name="kiosk_open_settings_pinning">Open tablet Settings (for Screen pinning)</string>
-    <string name="kiosk_open_accessibility">Turn on shade lock (Accessibility)</string>
     <string name="accessibility_service_label">OpenMasjid Kiosk — shade lock</string>
     <string name="accessibility_service_summary">Keeps the notification shade closed while the kiosk is locked.</string>
     <string name="accessibility_service_description">Optional. While the kiosk is locked, this closes the notification shade / quick-settings the moment it is pulled down, so a donor can\'t reach settings from it. It reads no screen content and does nothing when the kiosk is unlocked (maintenance) or unpaired. Turn it on for the strongest lock without a computer.</string>
 
     <!-- Kiosk mode banner -->
-    <string name="kiosk_pinning_hint">Lock this tablet down — no computer needed. On this tablet open Settings → Security and: 1) turn ON \"Screen pinning\" (some tablets call it \"App pinning\"), 2) turn ON \"Ask for PIN/pattern before unpinning\", and 3) set a screen lock (PIN or pattern). The kiosk then pins itself: the notification shade and the Home/Recents buttons are blocked, and leaving needs your device PIN. Also tap \"Set as Home app\" below so Home returns here, and \"Turn on shade lock\" to enable the accessibility helper that keeps the notification shade shut. (An even stronger, fully un-leavable lock is available with one-time device-owner setup — see docs/TABLET_SETUP.md — but it\'s optional.)</string>
+    <string name="kiosk_pinning_hint">Once the list above is green this tablet is set up without needing a computer: the kiosk is the Home app, so Home returns to the giving screen, and it reopens itself if anything sends it to the background. Hide the navigation bar in the tablet\'s own Settings (see below) to take away the Back, Home and Recents buttons, and turn on the shade lock above to keep the notification shade shut. An even stronger, fully un-leavable lock is available with the one-time device-owner setup in docs/TABLET_SETUP.md, but it is optional.</string>
+
+    <!-- Permissions &amp; lockdown checklist (maintenance screen) -->
+    <string name="maintenance_permissions_title">Permissions &amp; lockdown</string>
+    <string name="perm_summary">%1$d of %2$d set</string>
+    <string name="perm_intro">Everything this kiosk asks the tablet for. Tap a button and Android opens the right dialog or settings page, then the kiosk carries on where it left off when you come back.</string>
+    <string name="perm_state_set">Set</string>
+    <string name="perm_state_missing">Not set</string>
+    <string name="perm_state_unknown">Can\'t tell</string>
+    <string name="perm_action_grant">Grant permission</string>
+    <string name="perm_action_open_settings">Open the setting</string>
+    <string name="perm_action_app_settings">Open app settings</string>
+    <string name="perm_blocked_note">Android won\'t show the dialog again on this tablet — it has been declined too many times. Turn it on by hand instead: the button below opens this app\'s settings, where you tap Permissions and allow it.</string>
+
+    <string name="perm_install_title">Install apps from this kiosk</string>
+    <string name="perm_install_detail">Lets the kiosk update itself: it downloads the new version from your own masjid server and hands it straight to Android to install, so nobody has to fetch an APK in a browser. Android calls this \"Install unknown apps\".</string>
+
+    <string name="perm_bluetooth_title">Nearby devices (Bluetooth)</string>
+    <string name="perm_bluetooth_detail">Needed to find and connect a Stripe Reader M2 wirelessly. Not needed if the reader is plugged in by USB, or if this kiosk takes cards by typing them in.</string>
+
+    <string name="perm_location_title">Location access</string>
+    <string name="perm_location_detail">Stripe\'s reader software requires this before it will look for ANY card reader — over USB just as much as over Bluetooth. The kiosk never uses it to track where the tablet is.</string>
+
+    <string name="perm_location_on_title">Location turned on</string>
+    <string name="perm_location_on_detail">The tablet\'s own location switch has to be on as well as the permission above, or no card reader can be found.</string>
+
+    <string name="perm_bluetooth_on_title">Bluetooth turned on</string>
+    <string name="perm_bluetooth_on_detail">Turn Bluetooth on to use a Stripe Reader M2 wirelessly. Leave it off if the reader is connected by USB cable — the kiosk works either way.</string>
+
+    <string name="perm_home_title">Home app</string>
+    <string name="perm_home_detail">Makes this the tablet\'s Home app, so pressing Home returns to the giving screen instead of an Android desktop, and the kiosk starts itself again after a reboot or a power cut.</string>
+
+
+    <string name="perm_shade_title">Shade lock (Accessibility)</string>
+    <string name="perm_shade_detail">Optional extra: shuts the notification shade again if it is ever pulled down. Enable \"OpenMasjid Kiosk — shade lock\" under Settings → Accessibility → Installed apps.</string>
+
+    <string name="perm_owner_title">Full kiosk lock (device owner)</string>
+    <string name="perm_owner_detail_on">This tablet is provisioned as device owner, so the kiosk is locked completely: no status bar, no notification shade, no Home and no Recents. Only the exit PIN gets out.</string>
+    <string name="perm_owner_detail_off">Not set up, and not required — everything above works without it. This is the strongest lock and it removes the status bar entirely, but it needs a one-time setup from a computer on a factory-reset tablet. See docs/TABLET_SETUP.md.</string>
+
+    <!-- The two system bars Android will not let an ordinary app remove. -->
+    <string name="kiosk_bars_note">To finish locking the tablet down, hide the system bars in the tablet\'s own Settings. The wording differs by manufacturer:\n\n• BOTTOM NAVIGATION BAR — Settings → Display → Navigation bar (or System → Gestures), and choose \"Gesture navigation\" / \"Swipe gestures\". That removes the Back, Home and Recents buttons. Some tablets also offer a small pin icon that keeps the bar hidden until you swipe.\n\n• TOP NOTIFICATION BAR — Android gives an ordinary app no way to remove this, and no tablet setting hides it. The optional shade lock above closes it the moment it is pulled down. Removing the bar completely needs the one-time device-owner setup in docs/TABLET_SETUP.md, which the kiosk then does for you automatically.</string>
+    <string name="kiosk_bars_note_owner">This tablet is device owner, so the kiosk already removes the status bar and blocks Home and Recents itself whenever the giving screen is showing — there is nothing to turn off in Settings. If you would also like the navigation bar gone outside the kiosk, set Settings → Display → Navigation bar to \"Gesture navigation\".</string>
 </resources>

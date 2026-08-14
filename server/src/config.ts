@@ -59,6 +59,11 @@ export function applyVersionSuffix(base: string, suffix: string): string {
   // Devices page and shown on the tablet. Anything unexpected is dropped rather than rendered.
   const s = (suffix ?? '').trim();
   if (!s || !/^-[A-Za-z0-9][A-Za-z0-9.-]{0,19}$/.test(s)) return base;
+  // A version that ALREADY carries a prerelease says which channel it is on by itself, so there
+  // is nothing to add — and adding anyway would produce "0.11.0-dev.1-dev", which is not a
+  // version anyone can compare. CI stopped passing a suffix when dev builds started carrying
+  // real X.Y.Z-dev.N versions; this makes re-enabling it harmless rather than corrupting.
+  if (base.includes('-')) return base;
   return base.endsWith(s) ? base : `${base}${s}`;
 }
 

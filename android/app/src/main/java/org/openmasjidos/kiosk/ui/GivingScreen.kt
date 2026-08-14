@@ -235,7 +235,7 @@ private fun AmountStep(
         )
         // One-time vs monthly (only when the campaign enabled it, the reader can take it, and one is
         // connected right now — monthly needs a card-present charge).
-        if (campaign.monthlyEnabled && campaign.readerCapable && readerConnected) {
+        if (campaign.monthlyEnabled && readerConnected) {
             Spacer(Modifier.height(16.dp))
             SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
                 SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("One-time", maxLines = 1, overflow = TextOverflow.Ellipsis) }
@@ -1310,7 +1310,9 @@ private fun ColumnScope.CardStep(
     Text(
         // While the keyed-entry PaymentIntent is being created, show a calm "opening" line instead of
         // the reader's tap prompt, so switching from the reader to keyed entry is seamless.
-        text = if (preparing) "Opening secure card entry…" else (readerPrompt?.takeIf { it.isNotBlank() } ?: "Tap, insert or swipe your card"),
+        // No "swipe": see ReaderManager.onRequestReaderInput. This is only the fallback shown before
+        // the reader has said anything; a real swipe request from the reader still comes through.
+        text = if (preparing) "Opening secure card entry…" else (readerPrompt?.takeIf { it.isNotBlank() } ?: "Tap or insert your card"),
         style = MaterialTheme.typography.headlineMedium,
         color = style.onScene,
         textAlign = TextAlign.Center,

@@ -30,18 +30,21 @@ import org.openmasjidos.kiosk.MainActivity
  *     to HOME-only (Home returns to us; recents / global power menu / system info / notifications are
  *     all blocked), and we register as the persistent HOME so Home always lands back on the kiosk.
  *     In this mode the ONLY way out is this app calling [exitKiosk] — which happens solely behind the
- *     verified exit PIN. There is no OS gesture to escape it.
- *  2. NOT DEVICE OWNER — the SOFT kiosk (no ADB, no computer). We use Android SCREEN PINNING:
- *     a plain app may call [Activity.startLockTask] to pin ITSELF, which blocks the notification
- *     shade / quick-settings AND Home/Recents. When the tablet has a screen lock with "ask before
- *     unpinning" turned on, the manual unpin gesture then requires that device PIN — so a donor can't
- *     get out. We STILL unpin PROGRAMMATICALLY ([exitKiosk] → stopLockTask) behind our OWN verified
- *     exit PIN, so maintenance/exit is unaffected. Belt-and-braces: we're also the HOME launcher with
- *     a re-launch-on-leave watchdog ([MainActivity.onUserLeaveHint]) + boot-into-app + keep-awake +
- *     immersive bars, so even where pinning is unavailable/declined the kiosk still returns itself to
- *     the giving screen. Pinning must be enabled once in Settings → Security (the maintenance screen
- *     explains how, no computer needed). Device owner (tier 1) is still the ONLY way to make the shade
- *     completely unreachable, but the soft kiosk is now much harder to escape.
+ *     verified exit PIN. There is no OS gesture to escape it. Because that is absolute, tier 1 is
+ *     applied ONLY while the kiosk is actually running (`locked`): an unpaired or re-pairing tablet
+ *     is released, or it would be sealed on a screen that has no exit gesture (see [enterKiosk]).
+ *  2. NOT DEVICE OWNER — the SOFT kiosk (no ADB, no computer). We are the HOME launcher, so Home
+ *     returns to the kiosk; a re-launch-on-leave watchdog ([MainActivity.onUserLeaveHint]) brings us
+ *     back if we're backgrounded; an opt-in accessibility helper closes the notification shade; and
+ *     boot-into-app + keep-awake + immersive bars keep the tablet on the giving screen. The volunteer
+ *     hides the navigation bar itself, which is what removes the Home/Recents buttons.
+ *
+ *     ANDROID SCREEN PINNING USED TO BE PART OF THIS AND WAS REMOVED. It existed only to block those
+ *     nav-bar buttons, which hiding the bar already does — and it broke maintenance: a pinned app may
+ *     not launch another package and Android refuses SILENTLY, so Settings, the permission prompts and
+ *     the APK installer all appeared dead or were snatched away, and unpinning around each trip raced
+ *     our own re-pin watchdogs. Device owner (tier 1) remains the only way to make the shade truly
+ *     unreachable, and it has none of these problems.
  *
  * We never crash if a call is not permitted — every OS call is guarded.
  */
@@ -83,12 +86,35 @@ object KioskController {
      * Enter kiosk lockdown. Idempotent: safe to call from onResume. As device owner this is true Lock
      * Task Mode with the status bar disabled and HOME-only features; otherwise it degrades to screen
      * pinning (escapable — see the class note).
+     *
+     * [locked] = a PAIRED kiosk that is not in a re-pair lockout, i.e. a screen a donor may actually
+     * use. When it is false we RELEASE the lock on BOTH tiers, so the setup / re-pair screens (which
+     * carry no donor flow, no configuration and their own plain Exit button) can never strand a
+     * tablet. Pairing flips it back and re-locks on the next call.
      */
     fun enterKiosk(activity: Activity, locked: Boolean) {
         applyWindow(activity)
 
         val owner = dpmIfOwner(activity)
-        if (owner != null) {
+        if (owner != null && !locked) {
+            // NOT a running kiosk (setup screen, or a cert-mismatch re-pair lockout). Release Lock
+            // Task and give the status bar back, exactly as the soft-kiosk branch below does.
+            //
+            // This is the difference between "recoverable" and "needs ADB": with LOCK_TASK_FEATURE_NONE
+            // there is no Home, no Recents, no shade and no power menu, and the only in-app way out —
+            // the 10-tap maintenance gesture — lives on the PAIRED giving screen. So a device-owner
+            // tablet that is unpaired (never set up, or freshly REVOKED by an admin) would otherwise be
+            // sealed shut on a screen with no exit at all. Nothing is lost by unlocking: there is no
+            // donor flow and no configuration on those screens. We stay the persistent HOME, so the
+            // kiosk still owns the Home button and still comes back after a reboot, and pairing
+            // re-locks everything on the very next call.
+            val (dpm, admin) = owner
+            runCatching { dpm.setStatusBarDisabled(admin, false) }
+            val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (am != null && am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
+                runCatching { activity.stopLockTask() }
+            }
+        } else if (owner != null) {
             val (dpm, admin) = owner
             // Allow-list OUR package + the device's browser(s). The browser is needed so Stripe's card
             // authentication (3DS) can open its Chrome Custom Tab during a KEYED card payment — a
@@ -102,6 +128,22 @@ object KioskController {
                     val view = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://stripe.com"))
                     pm.resolveActivity(view, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName?.let { pkgs.add(it) }
                     pm.queryIntentActivities(view, 0).forEach { it.activityInfo?.packageName?.let { p -> pkgs.add(p) } }
+                }
+                // Allow-list SETTINGS and the package installer too. Maintenance drops Lock Task before
+                // opening either, so this is not the primary mechanism — it is the safety net for the
+                // case that made "Open Android Settings" look broken: if the unpin hasn't taken effect
+                // by the time we start the activity, a non-allow-listed package is refused SILENTLY,
+                // with no error and no visible change. Allow-listing costs nothing in security terms —
+                // these can only be launched from behind the maintenance PIN, never by a donor.
+                runCatching {
+                    val pm = activity.packageManager
+                    pm.resolveActivity(Intent(android.provider.Settings.ACTION_SETTINGS), PackageManager.MATCH_DEFAULT_ONLY)
+                        ?.activityInfo?.packageName?.let { pkgs.add(it) }
+                    val install = Intent(Intent.ACTION_VIEW).setDataAndType(
+                        android.net.Uri.parse("file:///dummy.apk"),
+                        "application/vnd.android.package-archive",
+                    )
+                    pm.resolveActivity(install, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName?.let { pkgs.add(it) }
                 }
                 dpm.setLockTaskPackages(admin, pkgs.toTypedArray())
             }
@@ -119,31 +161,32 @@ object KioskController {
                 runCatching { activity.startLockTask() }
             }
         } else {
-            // SOFT KIOSK — no device owner, no ADB, no computer. Use Android SCREEN PINNING: a plain
-            // app may call startLockTask() to pin ITSELF, which blocks the notification shade /
-            // quick-settings AND Home/Recents. When the tablet has a screen lock with "ask before
-            // unpinning" on, the manual unpin gesture then needs that device PIN — so a donor can't get
-            // out. We still unpin PROGRAMMATICALLY (stopLockTask) behind our OWN verified exit PIN, so
-            // maintenance/exit is unaffected. The volunteer turns Screen pinning on once in Settings →
-            // Security (the maintenance screen explains how); if it's unavailable/declined we fall back
-            // to the HOME launcher + the re-launch-on-leave watchdog. First pin shows a one-time OS
-            // confirmation. Keyed-card 3DS renders in our in-app WebView (never an external browser),
-            // so pinning doesn't affect the payment flow.
+            // SOFT KIOSK — no device owner, no ADB, no computer.
             //
-            // Pin ONLY when LOCKED = paired AND not in a re-pair lockout. The sole in-app unpin path
-            // (10-tap → maintenance → Exit/Settings) lives on the paired giving screen; the pairing
-            // screen (after a REVOKE) and the cert-mismatch RE-PAIR screen have no such gesture. So
-            // pinning either of those would trap the tablet with no in-app way out — and because we're
-            // the HOME launcher, a manual unpin just loops back into a re-pin. Releasing the pin when
-            // not locked keeps a revoked / re-pairing tablet recoverable (no donor flow or money on
-            // those screens, so pinning them buys nothing).
+            // WE NO LONGER USE ANDROID SCREEN PINNING. It was here for exactly one reason: to block the
+            // Home and Recents buttons on the navigation bar. On these installs the volunteer hides the
+            // navigation bar itself, so pinning was buying nothing that the bar being gone doesn't
+            // already give — while costing a great deal. A pinned app may not start another package,
+            // and Android refuses SILENTLY, so every maintenance route out (Android Settings, the
+            // permission prompts, the "allow installs" screen, the APK installer) either did nothing or
+            // flickered and was snatched back. Unpinning around each excursion turned into a race with
+            // our own re-pin watchdogs, and getting out by hand needs a device PIN a volunteer often
+            // doesn't have. It made the tablet hard to maintain and never made it meaningfully harder
+            // for a donor to escape.
+            //
+            // What holds the kiosk on screen instead, all of it already here and none of it fighting
+            // the maintainer: we are the HOME launcher (Home returns to the kiosk), the leave-watchdog
+            // relaunches us if we are backgrounded, the shade-guard helper closes the notification shade
+            // if the volunteer opts in, immersive-sticky hides the bars, and the screen is kept awake.
+            // A tablet that needs a HARD lock should be provisioned as device owner (tier 1 above),
+            // which is the only way to make the shade truly unreachable and does not have any of these
+            // problems.
+            //
+            // Anything this app pinned in a PREVIOUS version must still be released, or a tablet
+            // updating into this build would stay pinned for ever with nothing left to unpin it.
             val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-            if (am != null) {
-                if (locked && am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_NONE) {
-                    runCatching { activity.startLockTask() }
-                } else if (!locked && am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_PINNED) {
-                    runCatching { activity.stopLockTask() }
-                }
+            if (am != null && am.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_PINNED) {
+                runCatching { activity.stopLockTask() }
             }
         }
 

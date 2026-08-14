@@ -29,29 +29,70 @@ If it prints anything else, `git checkout dev` first. If you are on `main`, you 
 2. **Never commit to `main`.** Not for a hotfix, not for a typo, not for a one-line docs fix, not because something is urgent. There is no exception that does not start with Hasan saying so.
 3. **Never merge, rebase onto, cherry-pick into, or fast-forward `main` autonomously.** Not even when `dev` is green and `main` is behind. Being obviously-correct is not authorisation.
 4. **`main` moves only when Hasan explicitly says so** — the words **"merge to main"** or **"push to main"**. Nothing else counts: not "ship it", not "release it", not "looks good", not approving a diff, not merging a PR into `dev`. If you think a release is due, *say so and wait*.
-5. **After every push to `dev`, ask.** End the reply with a clear one-line offer — *"Pushed to `dev`. Do you want me to push to main?"* — and then keep working on `dev` until he answers with the words in rule 4. Ask every time, not once per session: the answer is per change, and silence is not a yes. A "no" (or no reply) means carry on pushing to `dev` as normal.
-6. **That merge is a release.** When told, run the full runbook: bump `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and add the `CHANGELOG.md` entry → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → bump the OpenMasjidAPPS `registry.yaml` entry (`ref:` + the immutable 40-char `commit:`). `VERSION` and `CHANGELOG.md` move **only** here, never on a plain `dev` push.
-7. **Restore the pinned image line when merging to `main`.** On `dev`, `docker-compose.yml` points at the moving `:dev` tag with no digest. `main` must always carry `:<version>@sha256:<digest>`. A merge that carries the `:dev` line into `main` would point every stable install at a development build — check this line explicitly, every time. CI enforces it in both directions (below), but do not rely on that to notice for you.
+5. **A change is not done until it is installable.** Hasan runs a real box on the Development
+   channel and presses Update as soon as work is reported. So every change on `dev` goes:
+   commit → push → CI green → confirm the `:dev` image actually published (the workflow's
+   "What was published" step prints the digest and the immutable `:dev-<12-char sha>` tag) →
+   only then report it. Never leave work committed locally, and if CI failed or nothing
+   published, say so plainly instead of reporting the change as shipped — from the box, a
+   change that never reached GHCR is indistinguishable from a broken update.
+6. **After every push to `dev`, ask.** End the reply with a clear one-line offer — *"Pushed to `dev`. Do you want me to push to main?"* — and then keep working on `dev` until he answers with the words in rule 4. Ask every time, not once per session: the answer is per change, and silence is not a yes. A "no" (or no reply) means carry on pushing to `dev` as normal.
+6b. **Version every dev build you want installable.** OpenMasjidOS decides an app has an update by comparing the catalog's `version:` with the installed one, so a dev build that reuses the last stable version is *undetectable* — nothing to notify about, nothing to install. So on `dev`, `version:` is a **semver prerelease `X.Y.Z-dev.N`**: `X.Y.Z` is the release being worked toward, `N` increments on each publishable dev build. Stable 0.10.2 → `0.11.0-dev.1`, `-dev.2`, … → ships as `0.11.0` → dev moves to `0.12.0-dev.1`. It must never equal a stable version; `0.10.2 < 0.11.0-dev.1 < 0.11.0` is exactly right.
+
+    Bump **all six together** — `VERSION`, `manifest.yaml`, `server/package.json`, `web/package.json`, both lockfile `version` fields — **and** the tag in `docker-compose.yml`, which must equal `manifest.yaml`'s version exactly. CI fails the build on drift, on a `:dev` line, and on a non-prerelease version.
+
+    The `-dev.N` **shape is load-bearing**: the platform compares dotted-numeric parts, so `N` must sit in its own dotted position. `0.11.0-dev1` collapses to `0.11.0` and is silently never offered. Pinned by `server/src/config.test.ts`.
+7. **That merge is a release.** When told, run the full runbook: set the release version (drop the `-dev.N`) in `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and write the `CHANGELOG.md` release entry (rule 7b) → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → bump the OpenMasjidAPPS `registry.yaml` entry (`ref:` + the immutable 40-char `commit:`) → start the next dev cycle at `X.Y+1.0-dev.1`. `VERSION` moves on `dev` too (rule 6b), and so does `CHANGELOG.md` (rule 7b).
+
+7b. **`CHANGELOG.md`: two audiences, one file.** The changelog ships *inside the image* — the admin panel's "What's new" reads it from disk — so it is a product surface, not a git artefact, and it has to serve a masjid admin reading release notes and a developer tracking `dev` at the same time. It therefore has two kinds of section, and both branches carry the file:
+
+    | Section | Lives on | Contains | Written |
+    |---|---|---|---|
+    | `## Unreleased` (always at the top) | **`dev` only** | **Every** dev change, in full: fixes, internals, docs sweeps, dead code, anything a tester on the dev channel would notice or want explained. | On each publishable dev build, as part of the same commit. |
+    | `## X.Y.Z` | **both** branches | **MAJOR changes only** — what a masjid actually needs to know: new capability, changed behaviour, a fix for something they hit. Not internals, not refactors, not doc edits. | At release, by distilling `## Unreleased`. |
+
+    **At release:** distil `## Unreleased` down to the major-only `## X.Y.Z` entry. `main` gets that entry and **no `## Unreleased` section at all** — a stable install must never read notes for code it isn't running. `dev` gets the same `## X.Y.Z` entry *plus* a fresh empty `## Unreleased` above it for the next cycle. The two files differ only by that section, and that difference is deliberate and permanent — do not "fix" it by syncing them.
+
+    **Never delete or rewrite a released `## X.Y.Z` section.** They are the notes running installs display. (This has been broken twice: once by merging `main` into a stale branch, which silently dropped twelve of them, and once by an edit whose search text started at the `## Unreleased` heading and whose replacement did not put it back. Check `grep -c '^## ' CHANGELOG.md` before and after any changelog edit.)
+8. **Re-pin the image line when merging to `main`.** `dev` carries `:X.Y.Z-dev.N`; `main` must always carry `:<version>@sha256:<digest>`. A merge that leaves the dev line on `main` would point every stable install at a development build — check it explicitly, every time. CI enforces both directions (a prerelease version or image reaching stable fails the build), but do not rely on that to notice for you.
 
 ### Update channels (how the two branches reach a masjid)
 
 OpenMasjidOS has an Update Channel toggle, and the OpenMasjidAPPS catalog resolves this app per channel:
 
-| Channel | Git ref | Image tag | Digest-pinned? |
-|---|---|---|---|
-| stable | the `vX.Y.Z` tag (registry `ref:` + immutable `commit:`) | `:<version>` | **yes** — `@sha256:…` in compose |
-| dev | the `dev` branch | `:dev` | **no, deliberately** |
+| Channel | Git ref | `version:` | Image the compose installs | Also published |
+|---|---|---|---|---|
+| stable | the `vX.Y.Z` tag (registry `ref:` + immutable `commit:`) | `X.Y.Z` | `:<version>@sha256:…` | `:latest` |
+| dev | the `dev` branch | `X.Y.Z-dev.N` | `:X.Y.Z-dev.N` (exact, immutable) | `:dev`, `:dev-<12-char sha>` |
+
+**Both channels are versioned and both install an immutable image.** They differ only in *how* the image is made immutable — a digest on stable, a per-build version tag on dev — and in who they are for.
+
+`:dev` still exists as a convenience alias for `docker pull`, and `:dev-<sha>` still identifies exactly which commit a box runs. **Neither is what the catalog installs**, and the compose must never name them (CI fails the build if it does).
 
 `.github/workflows/build-image.yml` decides the channel from the **git ref, not the event**, so a manual `workflow_dispatch` run on `dev` can never publish `:latest`. Both channels run the *full* pipeline — Gradle APK → web → server → multi-arch (amd64 + arm64) image — so a dev image ships a dev APK built from the dev branch, and an arm64-only regression surfaces on the channel that exists to catch it.
 
-Every dev build also gets an immutable `:dev-<12-char sha>` tag. `:dev` means "newest"; `:dev-<sha>` identifies exactly which commit a box is running, which is what keeps a bad dev build diagnosable and rollback-able despite the moving tag.
+Every dev build also gets an immutable `:dev-<12-char sha>` tag. `:dev` means "newest"; `:dev-<sha>` identifies exactly which commit a box is running. Both are convenience aliases for `docker pull` — **neither is what the catalog installs**, which is the versioned tag above.
 
-The workflow's **"Check the compose image matches the channel"** step fails the build if `docker-compose.yml` is ever wrong for the ref it is on — a digest pin on `dev` (which would silently freeze the channel on one build), or a `:dev` line on `main` or a `v*` tag (which would ship a development build to every masjid). The catalog build's own digest-pin check is a **warning, not a failure**, so the dev entry builds fine and warns. **That warning is expected on `dev` — do not silence it by pinning a digest there.**
+The workflow's **"Check the compose image matches the channel"** step fails the build if `docker-compose.yml` is ever wrong for the ref it is on:
 
-### Two things that are NOT wired yet
+| On | Fails when |
+|---|---|
+| `dev` | the image says `:dev`; the tag doesn't equal `manifest.yaml`'s `version:`; the version isn't a `X.Y.Z-dev.N` prerelease; the compose has more than one `image:` line (the check only reads the first) |
+| `main` / `v*` | the image says `:dev` or names a prerelease; the version is a prerelease; (tags only) the image isn't `@sha256`-pinned |
 
-- **The catalog has no channel support.** `dev_ref:` is *silently ignored* by `OpenMasjidAPPS/scripts/build-catalog.mjs` (it destructures only `id`, `repo`, `ref`, `path`, `commit`, `sha`), and a second entry reusing `id: kiosk` is a hard `process.exit(1)` that breaks the whole catalog. Making the dev channel actually reachable needs tooling changes in OpenMasjidAPPS **and** a channel concept in OpenMasjidOS. The `:dev` image and this branch are the prerequisites, not the finished feature.
-- **The APK has no channel identity.** `versionCode` is a hardcoded `1` and `versionName` comes from `VERSION`, which is unchanged on `dev` — so a dev tablet reports the same version as a stable one, shows as up to date on the Devices page, and is never offered an update. A dev APK *is* signed with the same key and installs in place in both directions; it just cannot be told apart. See §10 and the release notes in `docs/audit/`.
+A digest pin on `dev` is *allowed* — `:X.Y.Z-dev.N@sha256:…` passes — because the version tag is already immutable, so a digest adds integrity without freezing the channel. It is simply not required.
+
+### The dev channel end to end (all of it is now wired)
+
+Both gaps that used to be listed here are closed. What the path looks like today, and where it has bitten:
+
+- **Catalog.** `OpenMasjidAPPS/registry.yaml` carries `dev_ref: dev` for `kiosk`, and the catalog build is channel-aware: it publishes a **separate catalog per branch**, and OpenMasjidOS reads `OpenMasjidAPPS/<channel>/catalog.json`. The dev entry serves this branch's `docker-compose.yml` verbatim, so that file's image tag is what a masjid actually installs. Confirm with:
+  `curl -s https://raw.githubusercontent.com/OpenMasjid-Solutions/OpenMasjidAPPS/dev/catalog.json`
+- **Never let the catalog entry outrun the image.** The dev tag is exact, so an entry published before its image exists is a pull failure on someone's box. `build-image.yml` dispatches the catalog rebuild *after* the push, which orders it correctly — but OpenMasjidAPPS also rebuilds **hourly**, so a tick landing during the ~7-minute build can still catch a new `version:` before its image. That is why the version bump belongs in the same push as the build that publishes it, and never ahead of it.
+- **APK channel identity.** `VERSION` itself now carries the prerelease, and both the APK (`versionName`) and the server (`config.version`) read it — so a dev tablet reports `0.11.0-dev.1` against a dev server saying the same, and the tablet's string comparison stays honest. The old `APP_VERSION_SUFFIX=-dev` mechanism is retired (CI passes an empty suffix): it existed only because `VERSION` used to be identical on both branches, and appending to a prerelease would give the uncomparable `0.11.0-dev.1-dev`. `applyVersionSuffix` now refuses to touch a version that already has a prerelease, so re-enabling it is harmless. `versionCode` stays a hardcoded `1` **on purpose** — equal versionCode is a permitted reinstall, so dev and stable APKs install over each other in both directions; a higher dev versionCode would make the stable APK a genuine downgrade and trap the tablet.
+- **How an update actually lands.** OpenMasjidOS compares the catalog's `version:` with the installed one — the same mechanism on both channels. That is the whole reason dev builds carry `X.Y.Z-dev.N`: with the old scheme (stable version + moving `:dev` tag) a new dev build changed nothing observable, so the platform could not notify and had nothing to install.
+
+  **Two failure modes are worth knowing, because both were silent.** (1) Before versioned dev builds, the platform fell back to re-pulling `:dev` and comparing image digests — and that comparison read `listContainers().Image`, which moby replaces with the image **ID** as soon as the recorded name resolves elsewhere, i.e. exactly when a pull moves a tag. Every dev update answered *"already running the latest Development build. Nothing was changed."* (2) A suffix applied to only one half. `build-image.yml` stopped passing `APP_VERSION_SUFFIX` while `build-apk.yml` kept appending `-dev`, so the `0.11.0-dev.1` image bundled an APK calling itself `0.11.0-dev.1-dev` — a permanent false "update available" on every dev tablet that installing could never clear. **The server half and the APK half must always change together**; both now refuse to suffix a version that already carries a prerelease.
 
 ---
 
@@ -90,10 +131,15 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
   ├── Dockerfile               # builds web + server → one image; bundles the APK
   ├── LICENSE                  # AGPL-3.0-only
   ├── VERSION                  # single source of truth (server + APK versionName)
-  ├── server/                  # Node 20 + TypeScript + Fastify + better-sqlite3
+  ├── CHANGELOG.md             # ships INSIDE the image — the panel's "What's new" (rule 7b)
+  ├── server/                  # Node 22 + TypeScript + Fastify + better-sqlite3
   ├── web/                     # React + Vite + Tailwind admin panel (+ /new page)
   ├── android/                 # Kotlin + Jetpack Compose kiosk app (Gradle)
-  └── .github/workflows/       # build-image.yml (GHCR multi-arch) + build-apk.yml
+  ├── docs/                    # TABLET_SETUP, READER_SETUP, ARCHITECTURE, REMOTE_ADOPTION,
+  │                            #   STUDENTS_INTEGRATION, FABRIC_BILLING_CONTRACT, audit/
+  ├── assets/                  # README artwork (not shipped in the image)
+  ├── apk/                     # CI drops the built APK here for the Dockerfile to bundle
+  └── .github/workflows/       # build-image.yml (GHCR multi-arch) + build-apk.yml + cla.yml
   ```
   *(The building guide suggests repos named `openmasjid-<id>`; the shipped apps use the `OpenMasjidX` style. Keep `OpenMasjidKiosk` for consistency with Display/Donations — what must match is the **image name**: the compose references the lowercased repo, `ghcr.io/openmasjid-solutions/openmasjidkiosk`.)*
 - **App `id`: `kiosk`** — same everywhere (manifest + registry entry). Category: `donations`.
@@ -104,6 +150,8 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
 ---
 
 ## 4. Scope
+
+> **This section is the original v1.0 plan, kept for the boundaries it draws — especially the ❌ list, which is where the security-relevant "we do not do that" decisions live.** It is not a feature list: the app has grown well past it (campaigns, tuition, branded receipts, remote adoption, recurring-plan management, refunds, the donor cancel link). **`README.md` is the live description of what ships**; struck-through entries below record where the boundary genuinely moved and why.
 
 ### ✅ In scope (v1.0)
 **Server (the OpenMasjidOS app)**
@@ -134,11 +182,20 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
   `/new`, the APK, `/api/app`/appearance, and `/api/kiosk/*` are internet-reachable; the admin panel
   stays LAN-only. Remote pairing uses the real Cloudflare cert (system trust) — the LAN path still uses
   self-signed + trust-on-first-use pinning. See `docs/REMOTE_ADOPTION.md`.
-- Gift Aid, refunds in-app (point admins at the Stripe dashboard), donor accounts, printed receipts, iOS, non-Stripe processors, offline payments (Terminal offline mode is a later feature).
+- ~~refunds in-app (point admins at the Stripe dashboard)~~ — **now supported.** Opening a donation in
+  Admin → Donations offers **Refund** (full or partial, with a Stripe reason). The server refunds the
+  PaymentIntent, records the running refunded total on the row, emails the donor a branded refund note
+  when they left an address, and raises the `donation-refunded` alert (which OpenMasjidOS fans out to
+  the admin's email and/or webhook). **Every donation total is netted** (`amount - refunded`) so the
+  headline figures never overstate what the masjid kept; the CSV gains Refunded/Net/Refund ID columns.
+  Refunding a monthly's payment does **not** cancel the plan — the UI and the alert both say so.
+- Gift Aid, donor accounts, printed receipts, iOS, non-Stripe processors, offline payments (Terminal offline mode is a later feature).
 - Play Store distribution (sideload via `/new` is the model; Play listing is a later decision).
 
 ### 🔭 Later (design for, don't build)
-- Per-device amount presets & campaigns; Gift Aid; `domain: true` public giving links from the kiosk QR; Terminal offline mode; Play Store / managed provisioning (QR device-owner enrolment); WisePOS-style internet readers.
+- ~~Per-device amount presets & campaigns~~ — **built.** Campaigns are first-class (own amounts, colours, images, type, Stripe account, thank-you) and each targets chosen kiosks.
+- ~~`domain: true`~~ — **built**, though not as the "public giving link from a kiosk QR" originally imagined. It carries **remote adoption** (pairing a tablet at another site) and the **donor's monthly-cancel link**. A public giving *page* remains unbuilt.
+- Still later: Gift Aid; Terminal offline mode; Play Store / managed provisioning (QR device-owner enrolment); WisePOS-style internet readers; donor accounts; a screen for the `admin_audit` trail (the data and `GET /api/admin/audit` exist; nothing renders them).
 
 ---
 
@@ -226,9 +283,9 @@ GiveALittle-grade simplicity — a passer-by donates in under 10 seconds without
 ## 10. Kiosk mode, PIN & the launcher (Android)
 
 - **Launcher:** the app declares `CATEGORY_HOME` + `CATEGORY_DEFAULT`, so the tablet boots straight into it and Home goes nowhere else.
-- **Lock Task Mode:** when the app is **device owner**, use `startLockTask()` for true kiosk (no status bar pulldown, no recents/home escape). Document the one-time provisioning in `docs/TABLET_SETUP.md`: factory-reset tablet, skip accounts, `adb shell dpm set-device-owner com.openmasjid.kiosk/.KioskAdminReceiver`. **Fallback** without device owner: screen pinning (one-time confirm) + immersive-sticky; be honest in docs about its limits.
+- **Lock Task Mode:** when the app is **device owner**, use `startLockTask()` for true kiosk (no status bar pulldown, no recents/home escape). Document the one-time provisioning in `docs/TABLET_SETUP.md`: factory-reset tablet, skip accounts, `adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver`. **Fallback** without device owner: **not** screen pinning — that was tried and removed in 0.11.0, because Android forbids a pinned app from launching any other app and says nothing when it refuses, which silently broke Android Settings, the permission prompts and the self-updater. The soft kiosk is: being the HOME launcher, immersive-sticky bars, a bounce-back watchdog, a dead Back button, and an optional accessibility helper that closes the notification shade. Be honest in docs about its limits.
 - **Stay awake:** keep-screen-on flag while in kiosk; recommend "always plugged in" mounts; report charging state so the admin sees a fallen cable.
-- **Unlock:** hidden gesture (10 taps in the top-left corner within 3 s) → PIN pad → verifies against the **PIN set in Admin → Devices** (synced as an argon2 hash in config so unlock works offline; rate-limited with backoff; server-side verify when online). Unlock opens the maintenance screen: reader setup (BT/USB discovery, connect, update, battery), server address/re-pair, diagnostics, app version, **Exit kiosk** and **Return to kiosk**.
+- **Unlock:** hidden gesture (10 taps in the top-left corner within 3 s) → PIN pad → verifies against the **PIN set in Admin → Devices** (synced as a **scrypt** hash in config so unlock works offline; rate-limited with backoff; server-side verify when online). Unlock opens the maintenance screen: reader setup (BT/USB discovery, connect, update, battery), server address/re-pair, diagnostics, app version, **Exit kiosk** and **Return to kiosk**.
 - **Boot & recovery:** BOOT_COMPLETED brings the app up even if not device owner; the app self-heals into the attract screen after crashes (foreground watchdog) and reconnects the reader automatically.
 - **Permissions:** request-and-explain only what Terminal needs — Bluetooth scan/connect (API 31+) or location (older), USB host access — inside the PIN-protected settings, never in the donor flow.
 
@@ -245,60 +302,30 @@ Same SSO + design language as Donations. Sections:
 
 ---
 
-## 12. `manifest.yaml` & `docker-compose.yml` (current contract — note the new rules)
+## 12. `manifest.yaml` & `docker-compose.yml` (the invariants — the files themselves are the spec)
 
-```yaml
-# manifest.yaml (repo root)
-id: kiosk
-name: OpenMasjid Kiosk
-tagline: Tap-to-donate kiosk for a wall-mounted tablet with a Stripe card reader
-category: donations
-version: 0.1.0
-author: OpenMasjid Solutions
-license: AGPL-3.0-only
-icon: icon.svg
-screenshots:
-  - screenshots/1.svg
-description: |
-  Turn an Android tablet and a Stripe Reader M2 into a beautiful donation
-  station. Six one-tap amounts, custom amounts, monthly giving, email
-  receipts — managed from a simple admin page on your OpenMasjidOS.
-sso: true
-stripe: true
-https: true          # required: this app uses Stripe (see BUILDING_AN_APP §2b.5)
-notifications: true
-ports:
-  - container: 8080
-    label: Kiosk admin & setup
-# NO settings: install stays one-click; Stripe account is picked in-app (preferred pattern)
-```
+**Read the two real files at the repo root.** They are heavily commented and they are what the catalog serves; a sketch here would only drift out of date, as the one that used to sit in this section did (it still showed `version: 0.1.0` and four Fabric flags long after there were nine). What this section pins is the set of properties a change must not break:
 
-```yaml
-# docker-compose.yml (repo root)
-services:
-  app:
-    # tag for humans + digest for integrity — bump BOTH every release (§2b.1)
-    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.1.0@sha256:<64-hex-digest>
-    restart: unless-stopped
-    environment:
-      # Fabric — REQUIRED references; without them SSO/Stripe/notify silently no-op:
-      OPENMASJID_BASE_URL: ${OPENMASJID_BASE_URL:-}
-      OPENMASJID_APP_ID: ${OPENMASJID_APP_ID:-}
-      OPENMASJID_APP_SECRET: ${OPENMASJID_APP_SECRET:-}
-    ports:
-      - "7878:8080"
-    volumes:
-      - data:/data
-volumes:
-  data:
-```
-Least-privilege exactly per the contract: no labels, no `privileged`, no host namespaces, no `cap_add`/`devices`/socket/sensitive mounts, no `extends`/`include`. The container is a plain HTTP server; the platform provides the HTTPS endpoint.
+**`manifest.yaml`**
+- `id: kiosk` · `category: donations` · `license: AGPL-3.0-only` · one port (`container: 8080`).
+- **No `settings:` block, ever.** Install stays one-click; the Stripe account is picked in-app.
+- Fabric flags currently declared: `sso`, `https` (mandatory — we take card payments), `stripe`, `notifications`, `email`, `domain`, `tunnel`, plus an `alerts:` list and `fabric.consumes: [students/billing]`. Adding a flag is opting into a platform capability and must be matched by real handling in `server/src/fabric.ts`.
+- `version:` is the release being worked toward, in the shape rule 6b requires, and must equal the compose image tag exactly.
+
+**`docker-compose.yml`**
+- **Exactly one `image:` line** — CI's channel check reads the first and fails the build if there is more than one.
+- The image reference matches the channel (rule 8): `:X.Y.Z-dev.N` on `dev`, `:<version>@sha256:<digest>` on `main`/tags.
+- The three `OPENMASJID_*` vars **must be referenced** in `environment:`, plus `OPENMASJID_PUBLIC_URL` for remote adoption. Without those lines the platform's injected values never reach the container and the whole Fabric silently no-ops — the documented Display trap.
+- Least-privilege per the contract: `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, `tmpfs: [/tmp]`, and **no** labels, `privileged`, host namespaces, `devices`, Docker socket, sensitive mounts, `extends` or `include`.
+- The container is a plain HTTP server; the platform terminates TLS and provides the HTTPS endpoint.
+
+**Known deviation, deliberately not fixed:** the container runs as **root**. `USER node` alone would break every deployed masjid on update — `/data` and `kiosk.db` inside it are root-owned, and `cap_drop: ALL` removes `CAP_CHOWN`/`CAP_SETUID`, so an entrypoint cannot fix it either. It needs the Dockerfile, the compose and a documented one-time `chown` together, coordinated across the OpenMasjid apps. Residual risk is low (no capabilities at all, plus `no-new-privileges`). See `docs/audit/ACTION_REQUIRED.md` §5.
 
 ---
 
 ## 13. Tech stack
 
-- **server/** — Node 20+, TypeScript strict, **Fastify**, **better-sqlite3**, **stripe** SDK, **argon2** (fallback admin password + PIN hashes), **zod** at every boundary. No WebSocket needed in v1 (heartbeat polling is enough); add SSE for the Devices page if live feel demands it.
+- **server/** — Node 22 (`node:22-slim` in the image), TypeScript strict, **Fastify**, **better-sqlite3**, **stripe** SDK, **scrypt** via `node:crypto` for the fallback admin password + PIN hashes (chosen over argon2 by the maintainer, 2026-07-02: zero extra native deps and Pi-friendly — see `docs/ARCHITECTURE.md`), **zod** at every boundary. No WebSocket (heartbeat polling is enough); add SSE for the Devices page if live feel demands it.
 - **web/** — React + Vite + TypeScript + Tailwind, shadcn/ui, **Motion**, lucide-react; tokens + recipes from **DESIGN.md** (Sakīna Glass); inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
 - **android/** — **Kotlin + Jetpack Compose**, minSdk 26 (Terminal SDK floor), **Stripe Terminal Android SDK** (Bluetooth + USB discovery/connect for the M2), DataStore for device config, WorkManager for heartbeats. **No camera/QR** — pairing is a typed 6-digit code (kiosk tablets often have no camera). Recreate the design language natively: same palette tokens, spring motion (`animate*AsState`/`AnimatedContent`), dark default, RTL, reduced-motion.
 - **One container** serves API + admin + `/new` + the bundled APK. Multi-stage Dockerfile; CI: `build-apk.yml` builds + signs the APK (keystore in GH secrets, versionName from `VERSION`), `build-image.yml` builds web+server, **copies the freshly built APK into the image**, pushes multi-arch to GHCR, prints the digest to pin.
@@ -311,7 +338,7 @@ Least-privilege exactly per the contract: no labels, no `privileged`, no host na
 - Tablet↔server: **HTTPS only, certificate pinned** on the first successful pair (trust-on-first-use); never downgrade; re-pair on fingerprint change. Device tokens hashed at rest, revocable, scoped, rate-limited.
 - Amounts validated server-side (presets/min/max, integer minor units); idempotency keys on all Stripe creates; donation recorded only after server-side Stripe verification (+ capture when `requires_capture`).
 - Admin: Fabric SSO as identity assertion only (never call the platform as the admin); fail-closed session check; local-password fallback; signed HTTP-only SameSite cookies; restore-resilience rules (§6) observed to the letter.
-- Kiosk PIN: argon2 hash in synced config; offline verify; exponential backoff on attempts; PIN rotation from admin invalidates old immediately on next heartbeat.
+- Kiosk PIN: scrypt hash in synced config; offline verify; exponential backoff on attempts; PIN rotation from admin invalidates old immediately on next heartbeat.
 - Uploads (wallpapers) validated and size-capped; rich text sanitised; every kiosk route authenticated; `/new` and pairing endpoints rate-limited (6-digit pairing codes single-use, 10-min TTL, attempt-limited so the 1M-code space can't be brute-forced).
 - PCI posture: card data reader→Stripe only (P2PE-style); our code never sees a PAN — state this in the README.
 
@@ -342,7 +369,8 @@ Builds via the commands above and `docker compose up -d`; `tsc`/lint/ktlint clea
 ## 17. Working agreement for Claude (the coding agent)
 
 - **First**, read BUILDING_AN_APP.md (+ its CLAUDE.md and DESIGN.md), then the Donations and Display repos. They are the live contract and precedents; where this file lags them, follow them and flag it.
-- Build in **vertical slices**, each end-to-end and demoable:
+- **All nine slices below shipped in v0.1.0–v0.10.2 and the list is now history, not a plan.** It is kept because it still describes the *shape* of a change worth making: end-to-end and demoable, server + web + tablet together. Everything since has been built the same way. What the app actually does today is `README.md`; what it has done release by release is `CHANGELOG.md`. Features added after the slice plan — multiple campaigns, tuition via OpenMasjid Students, branded receipts, remote adoption, recurring-plan management, refunds, the donor's own cancel link — are documented there and in `docs/`.
+- The original vertical slices, each end-to-end and demoable:
   1. Repo scaffold (all three parts) + Dockerfile + manifest/compose per §12; container boots, serves a themed admin shell, `/healthz`, and a stub `/new`.
   2. **Fabric:** SSO with local fallback + appearance inheritance + restore-resilience.
   3. **Payments setup:** Stripe account picker via Fabric, Location management, test-mode badge, connection-token endpoint.

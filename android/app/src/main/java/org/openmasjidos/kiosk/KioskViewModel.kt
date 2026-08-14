@@ -700,7 +700,11 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         if (g.monthly) {
             // Monthly needs the reader — the reusable card comes from a card-present charge, so it
             // can't be set up by keyed entry or on a cross-account campaign.
-            if (!campaign.readerCapable || !readerConnected) {
+            // readerCapable is NOT consulted any more: this build re-registers the reader against the
+            // campaign's own Stripe account (startReaderCollect → ReaderManager.registerFor), so a
+            // cross-account campaign can use it too. The server still computes the flag for OLDER
+            // tablets, which cannot do that and must keep routing those campaigns to keyed entry.
+            if (!readerConnected) {
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Monthly giving needs the card reader. Please give a one-time gift, or ask a volunteer.") }
                 return
             }
@@ -709,7 +713,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         }
         // Keyed entry when the campaign can't use the reader (a different Stripe account) OR no reader
         // is connected; otherwise collect on the reader (the keyed button is a fallback on the card step).
-        if (!campaign.readerCapable || !readerConnected) startManualCollect() else startReaderCollect(campaign)
+        if (!readerConnected) startManualCollect() else startReaderCollect(campaign)
     }
 
     /** Collect on the M2 reader (card-present), verify server-side, record, thank the donor. */
@@ -724,19 +728,47 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val email = g.donorEmail.trim().ifBlank { null }
             val idem = UUID.randomUUID().toString()
             repo.log("info", "donation_started", "${g.amountMinor} minor · $kind · ${campaign.title}")
-            // NB: rethrow CancellationException on every suspend call below. This job is cancelled
-            // when the donor switches to keyed entry (enterManually → startManualCollect); if we
-            // swallowed the cancellation we'd fall through and briefly flash the "Sorry" error screen
-            // before the card form opened. Rethrowing ends the superseded job silently.
-            val pi = try {
-                repo.createPaymentIntent(g.amountMinor, campaign.id, name, email, monthly, manual = false, coverFees = g.coverFees, idem)
+            // MAKE SURE THE READER ANSWERS TO THIS CAMPAIGN’S STRIPE ACCOUNT before creating the
+            // intent. A reader is registered to one account and is refused a PaymentIntent belonging
+            // to another, so a campaign that settles elsewhere needs the reader re-registered first.
+            // Asking the server for a token scoped to this campaign is also how we learn WHICH account
+            // that is — the tablet never needs to be told the account ids in advance.
+            //
+            // The overwhelmingly common case (the main campaign, already registered) costs one cheap
+            // request and no reader work at all. Only a cross-account campaign pays the re-registration,
+            // and only at the moment someone actually donates to it.
+            val conn = try {
+                repo.getConnectionToken(campaign.id)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
                 null
             }
+            if (conn != null && !ReaderManager.registerFor(campaign.id, conn.accountId, conn.locationId)) {
+                // Could not put the reader on that account — fall back to typed entry rather than
+                // failing the donation. The donor still gives; they just type the card.
+                repo.log("warn", "reader_account_switch_failed", campaign.title)
+                startManualCollect()
+                return@launch
+            }
+            // NB: rethrow CancellationException on every suspend call below. This job is cancelled
+            // when the donor switches to keyed entry (enterManually → startManualCollect); if we
+            // swallowed the cancellation we'd fall through and briefly flash the "Sorry" error screen
+            // before the card form opened. Rethrowing ends the superseded job silently.
+            // Keep the REASON. It used to be discarded here and the log line said only "monthly", so
+            // four separate reports of "Sorry, we couldn't start the payment" had nothing to diagnose
+            // from: a server error, a timeout and a Stripe refusal all looked identical from the tablet.
+            var createWhy = ""
+            val pi = try {
+                repo.createPaymentIntent(g.amountMinor, campaign.id, name, email, monthly, manual = false, coverFees = g.coverFees, idem)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                createWhy = (e.javaClass.simpleName + ": " + e.message.orEmpty()).take(240)
+                null
+            }
             if (pi == null) {
-                repo.log("warn", "donation_create_failed", "$kind")
+                repo.log("warn", "donation_create_failed", "$kind · $createWhy")
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start the payment. Please try again.") }
                 repo.flushLogs()
                 return@launch
@@ -744,17 +776,21 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             // Show the server's authoritative charge from here on (matches what Stripe will take,
             // even if this kiosk's cover-fee/Zakat config hasn't synced yet).
             updateGiving { it.copy(serverChargeMinor = pi.chargeMinor) }
+            var collectWhy = ""
             val piId = try {
-                PaymentController.collectAndConfirm(pi.clientSecret)
+                PaymentController.collectAndConfirm(pi.clientSecret, savingCard = monthly)
             } catch (c: CancellationException) {
                 ReaderManager.clearPrompt()
                 throw c
             } catch (e: Exception) {
+                collectWhy = (e.javaClass.simpleName + ": " + e.message.orEmpty()).take(240)
                 null
             }
             ReaderManager.clearPrompt()
             if (piId == null) {
-                repo.log("warn", "donation_collect_failed", pi.id)
+                // The "tap your card" prompt appearing for a split second and then vanishing lands
+                // HERE, so this line is the one that explains it.
+                repo.log("warn", "donation_collect_failed", pi.id + " · " + collectWhy)
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "That didn’t go through — no charge was made. Try again?") }
                 repo.flushLogs()
                 return@launch
@@ -802,18 +838,24 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val email = g.donorEmail.trim().ifBlank { null }
             val idem = UUID.randomUUID().toString()
             repo.log("info", "donation_started", "${g.amountMinor} minor · manual · ${campaign?.title ?: ""}")
+            var manualWhy = ""
             val pi = try {
                 repo.createPaymentIntent(g.amountMinor, campaign?.id, name, email, monthly = false, manual = true, coverFees = g.coverFees, idem)
             } catch (c: CancellationException) {
                 throw c // superseded/cancelled — don't flash an error
             } catch (e: Exception) {
+                manualWhy = (e.javaClass.simpleName + ": " + e.message.orEmpty()).take(240)
                 null
             }
             // The publishable key comes back with the manual PI; fall back to the one in config (the
             // server always injects it now) so a blank field on the PI can't strand keyed entry.
             val pk = pi?.publishableKey?.takeIf { it.isNotBlank() } ?: ui.value.config?.publishableKey?.takeIf { it.isNotBlank() }
             if (pi == null || pi.clientSecret.isBlank() || pk.isNullOrBlank()) {
-                repo.log("warn", "donation_create_failed", "manual")
+                repo.log(
+                    "warn",
+                    "donation_create_failed",
+                    "manual · " + manualWhy.ifBlank { if (pi == null) "no intent" else "missing client secret or publishable key" },
+                )
                 updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "Couldn’t start card entry. Please try again.", preparingManual = false) }
                 repo.flushLogs()
                 return@launch

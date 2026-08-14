@@ -68,17 +68,17 @@ jobs:
             echo "have_keystore=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # The update-channel suffix, decided from the git ref exactly as build-image.yml decides the
-      # image tags. A dev-branch APK reports "0.10.1-dev"; a release reports "0.10.1". The server
-      # in the same image is built with the SAME value, because the tablet's "update available"
-      # check is a plain string comparison between the two. See android/app/build.gradle.kts.
-      - name: Resolve the channel suffix
-        id: channel
-        run: |
-          if [ "$GITHUB_REF" = 'refs/heads/dev' ]; then suffix=-dev; else suffix=; fi
-          echo "suffix=$suffix" >> "$GITHUB_OUTPUT"
-          echo "APP_VERSION_SUFFIX='$suffix'"
-
+      # NO channel suffix is passed to Gradle, on either channel. This job used to append "-dev" on
+      # the dev branch, because VERSION was identical on both branches and the APK had to be told
+      # apart somehow. VERSION now carries a real prerelease on dev (X.Y.Z-dev.N), so the APK is
+      # already distinguishable — and appending would give "0.11.0-dev.1-dev".
+      #
+      # That is not cosmetic. The server bundled in the SAME image reports VERSION unsuffixed, the
+      # heartbeat sends it to the tablet as latestAppVersion, and the tablet decides an update
+      # exists by plain string inequality against its own versionName. A suffix on one side only
+      # means every kiosk shows "Update available" for ever, and installing never clears it. That
+      # is precisely the failure the suffix was invented to prevent, so the two halves must be
+      # changed together — build-image.yml passes an empty APP_VERSION_SUFFIX for the same reason.
       - name: Build signed release APK
         if: steps.signing.outputs.have_keystore == 'true'
         env:
@@ -86,15 +86,12 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-          APP_VERSION_SUFFIX: ${{ steps.channel.outputs.suffix }}
         run: ./gradlew --no-daemon :app:assembleRelease
 
       # Kept so a run without the signing secrets still proves the Kotlin compiles. Its output is
       # NEVER published — see the collect step below, which refuses anything but a release APK.
       - name: Build debug APK (no signing secrets)
         if: steps.signing.outputs.have_keystore != 'true'
-        env:
-          APP_VERSION_SUFFIX: ${{ steps.channel.outputs.suffix }}
         run: ./gradlew --no-daemon :app:assembleDebug
 
       - name: Collect APK as openmasjidkiosk.apk

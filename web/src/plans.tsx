@@ -122,8 +122,15 @@ function statusOf(p: Plan): { text: string; tone: 'ok' | 'warn' | 'danger' | 'mu
   switch (p.status) {
     case 'active':
       return { text: 'Active', tone: 'ok' };
+    // Stripe says `trialing`, but THIS APP NEVER CREATES A TRIAL and a donation has nothing to try
+    // out. Every kiosk plan carries a `trial_end` one month ahead for one reason: month one was
+    // already collected on the reader, and that is how Stripe is told not to charge again straight
+    // away. Stripe files "no invoice due yet" as a trial; calling that "Free trial" on the Recurring
+    // screen told an admin the exact opposite of the truth — that the donor is giving nothing yet,
+    // when in fact they have already paid. Operationally this is simply a live plan, and the row
+    // already shows the next charge date beside it, so nothing is lost by saying so.
     case 'trialing':
-      return { text: 'Free trial', tone: 'ok' };
+      return { text: 'Active', tone: 'ok' };
     case 'past_due':
       return { text: 'Payment failed', tone: 'danger' };
     case 'unpaid':

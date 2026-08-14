@@ -28,8 +28,9 @@ data class PairingRecord(
  * amounts, colour, background, thank-you and monthly/cover-fees options — designed in the admin
  * panel. Exactly one is the [isMain] campaign (the always-present first tab the kiosk idles on).
  *
- * [readerCapable] is computed by the server: false means this campaign settles to a DIFFERENT
- * Stripe account than the reader is bound to, so it must be taken by keyed (typed) card entry.
+ * [readerCapable] is computed by the server and is now only meaningful to OLDER tablets: it says
+ *  this campaign settles to a different Stripe account. This build ignores it and re-registers the
+ *  reader onto that account instead (ReaderManager.registerFor), so any campaign can use the reader.
  */
 data class Campaign(
     val id: String,
@@ -82,10 +83,17 @@ data class KioskConfig(
     val feeFixedMinor: Long = 30,        //                    + a small fixed fee
     val maxBrightness: Boolean = true,   // force the tablet to full screen brightness
     val footerText: String = "OpenMasjid Solutions", // bottom tagline ('' hides it)
+    /** Campaign-tab size: "small" | "medium" | "large" | "xlarge" ("medium" = the original size).
+     *  Only relevant when 2+ campaigns are shown as tabs (see GivingHome.tabMetricsFor). */
+    val tabSize: String = "medium",
     /** UI rotation in DEGREES, set from the web UI: "0" (as mounted) | "90" | "180" | "270". The app
      *  rotates its own content by this angle (RotatedRoot), so it works even on tablets that ignore
      *  system orientation requests. Legacy named values are still accepted + mapped by orientationDegrees. */
     val orientation: String = "0",
+    /** Which side of the tablet the card reader sits on: "off" | "left" | "right". Drives the on-screen
+     *  reader hint (pulsing NFC symbol + arrows) during the card step. Left/right are in the app's
+     *  LOGICAL landscape space, so RotatedRoot maps them to top/bottom in a portrait mount. */
+    val nfcSide: String = "off",
     /** Large-donation alternative: at/above this many MINOR units the kiosk suggests a cheaper way
      *  to give (bank transfer / Zelle QR) before the card. 0 disables it. */
     val largeAmountThresholdMinor: Long = 0,

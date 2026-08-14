@@ -17,8 +17,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -44,6 +48,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import org.openmasjidos.kiosk.GivingStep
 import org.openmasjidos.kiosk.KIOSK_AUTO_RETURN_MS
@@ -170,6 +175,28 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
                 }
             }
         }
+        // Card reader firmware update, on the DONOR-FACING screen. The progress bar already existed in
+        // maintenance, but that is behind the exit PIN — so from the floor an updating reader looked
+        // exactly like a broken one, and the natural reaction (unplug it, power-cycle the tablet) is
+        // the one thing that can leave an M2 needing a service visit. Stripe's updates are required,
+        // arrive on connect and can take several minutes, so this says plainly what is happening, how
+        // far along it is, and not to touch it.
+        if (ui.reader.conn == ReaderConn.Updating) {
+            ReaderUpdatingBanner(
+                percent = ui.reader.updateProgress,
+                accent = accent,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp),
+            )
+        }
+        // Reader hint: a pulsing NFC symbol + arrows pinned to the reader's side (set per tablet in
+        // Admin → Devices). Shown while the donor is at the card step; turns green when it clears. It
+        // rides inside RotatedRoot with everything else, so "left/right" follow the mount into portrait.
+        NfcReaderHint(
+            side = cfg?.nfcSide ?: "off",
+            active = ui.giving.step == GivingStep.Card || ui.giving.step == GivingStep.Processing,
+            cleared = ui.giving.step == GivingStep.Thanks,
+            accent = accent,
+        )
         // Visual-only countdown ring (no numbers/words): shown while a non-main tab idles OR while a
         // donation is under way (returns to the menu on inactivity).
         (ui.autoReturnStartedMs ?: ui.idleReturnStartedMs)?.let { started ->
@@ -188,13 +215,72 @@ private fun HomeTopBar(ui: UiState, style: SceneStyle, onSelect: (String) -> Uni
     // Tabs appear only when there's more than one campaign; a single-campaign kiosk is chrome-free.
     if (ui.campaigns.size > 1) {
         Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-            CampaignTabs(ui.campaigns, ui.selectedCampaignId, style, onSelect)
+            CampaignTabs(ui.campaigns, ui.selectedCampaignId, style, tabMetricsFor(ui.config?.tabSize), onSelect)
+        }
+    }
+}
+
+/** Font + padding for the campaign tabs, chosen by the admin's kiosk-wide "tab size" setting.
+ *  `medium` reproduces the original hardcoded values, so unset/legacy configs look unchanged.
+ *  Kept in sync with the web picker (campaigns.tsx TAB_SIZES). */
+private data class TabMetrics(val font: androidx.compose.ui.unit.TextUnit, val padH: androidx.compose.ui.unit.Dp, val padV: androidx.compose.ui.unit.Dp)
+
+private fun tabMetricsFor(size: String?): TabMetrics = when (size) {
+    "small" -> TabMetrics(15.sp, 20.dp, 12.dp)
+    "large" -> TabMetrics(22.sp, 34.dp, 22.dp)
+    "xlarge" -> TabMetrics(28.sp, 46.dp, 30.dp)
+    else -> TabMetrics(16.sp, 26.dp, 16.dp) // "medium" (and any unknown value) → the original size
+}
+
+/**
+ * "Card reader is updating — 42%", on the giving screen.
+ *
+ * Deliberately calm and non-alarming: a donor may well be standing there, and this is a normal,
+ * temporary state rather than a fault. The percentage is the point — a bar that only spins gives a
+ * volunteer no way to tell "nearly done" from "stuck", which is what makes people pull the plug.
+ * [percent] is null while the reader hasn't reported progress yet, and then the bar is indeterminate.
+ */
+@Composable
+private fun ReaderUpdatingBanner(percent: Int?, accent: Color, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.widthIn(max = 460.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = Color.Black.copy(alpha = 0.55f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
+    ) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
+            Text(
+                text = if (percent != null) "Card reader is updating — $percent%" else "Card reader is updating…",
+                style = MaterialTheme.typography.titleSmall,
+                color = Color.White,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "This happens automatically and can take a few minutes. Please leave the reader switched on.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.75f),
+            )
+            Spacer(Modifier.height(10.dp))
+            if (percent != null) {
+                LinearProgressIndicator(
+                    progress = { percent / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = accent,
+                    trackColor = Color.White.copy(alpha = 0.18f),
+                )
+            } else {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = accent,
+                    trackColor = Color.White.copy(alpha = 0.18f),
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, style: SceneStyle, onSelect: (String) -> Unit) {
+private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, style: SceneStyle, metrics: TabMetrics, onSelect: (String) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
@@ -215,12 +301,12 @@ private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, style: S
             ) {
                 Text(
                     text = c.title.ifBlank { "Appeal" },
-                    style = MaterialTheme.typography.titleMedium,
+                    fontSize = metrics.font,
                     fontWeight = FontWeight.Bold,
                     color = if (selected) onTab else style.onScene,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 26.dp, vertical = 16.dp),
+                    modifier = Modifier.padding(horizontal = metrics.padH, vertical = metrics.padV),
                 )
             }
         }
