@@ -36,9 +36,13 @@ function readVersion(): string {
 /**
  * Append the update-channel suffix to a version string.
  *
- * A dev image is built with `APP_VERSION_SUFFIX=-dev` (Dockerfile ARG → ENV), and the kiosk APK
- * bundled inside it is built with the SAME value as its Gradle `versionNameSuffix`. Both halves
- * matter, and this is why:
+ * NOTE: no suffix is passed on either channel any more — dev builds carry a real `X.Y.Z-dev.N`
+ * prerelease in VERSION itself. This function is kept for the invariant it encodes, which still
+ * matters: a suffix applied to only one half is a permanent false "update available".
+ *
+ * Historically a dev image was built with `APP_VERSION_SUFFIX=-dev` (Dockerfile ARG → ENV), and
+ * the kiosk APK bundled inside it with the SAME value as its Gradle `versionNameSuffix`. Both
+ * halves matter, and this is why:
  *
  * `latestAppVersion` (this value) is what the heartbeat tells a tablet, and the tablet decides an
  * update is available by plain string inequality against its own versionName. Suffix only the APK
@@ -94,9 +98,10 @@ export const config = {
   apkPath: env('APK_PATH', path.resolve(__dirname, '..', 'public', 'download', 'openmasjidkiosk.apk')),
   /** The release notes this build shipped with (admin panel → "What's new"). */
   changelogPath: findChangelog(),
-  /** This build's version, carrying the update-channel suffix when there is one ("0.10.1-dev" on
-   *  a dev image, "0.10.1" on a release). See [applyVersionSuffix] for why both this and the
-   *  bundled APK must carry it. */
+  /** This build's version, read from the package.json shipped beside the runtime — "0.11.0" on a
+   *  release, "0.11.0-dev.3" on a development build, because VERSION itself now carries the
+   *  prerelease. The suffix pass is a no-op in practice (CI passes none on either channel); it is
+   *  kept only so that re-enabling it could never corrupt a version. See [applyVersionSuffix]. */
   version: applyVersionSuffix(readVersion(), env('APP_VERSION_SUFFIX')),
 
   /** OpenMasjidOS Fabric (the platform↔app SSO + appearance + Stripe + notifications

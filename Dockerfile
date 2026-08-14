@@ -64,10 +64,19 @@ COPY CHANGELOG.md ./CHANGELOG.md
 # before this build; locally the folder holds only a .gitkeep (build still succeeds).
 COPY apk/ ./public/download/
 
-# Update-channel suffix: "-dev" on a dev-branch build, empty on a release. CI passes the same
-# value to the Gradle APK build, so the server's reported version and the bundled APK's
-# versionName always agree — the tablet's "update available" check is a plain string comparison
-# between the two, so they must move together. See server/src/config.ts applyVersionSuffix.
+# Update-channel suffix — RETIRED, and now empty on BOTH channels.
+#
+# It existed because VERSION used to be identical on dev and main, so a dev build had to be told
+# apart from a stable one somehow. Dev builds now carry a real prerelease version (X.Y.Z-dev.N) in
+# VERSION itself, which both the server and the APK read, so they already differ — and appending
+# would produce the uncomparable "0.11.0-dev.1-dev".
+#
+# The ARG stays because the two halves must never move independently: the server bundled in this
+# image and the APK bundled beside it are compared by plain string inequality to decide whether an
+# update is available, so a suffix applied to only one of them is a permanent false "update
+# available" that installing can never clear. That has happened. CI now passes an empty value here
+# and to the Gradle build; `applyVersionSuffix` additionally refuses to touch a version that
+# already carries a prerelease, so re-enabling this is harmless rather than corrupting.
 ARG APP_VERSION_SUFFIX=""
 
 ENV PORT=8080 \
