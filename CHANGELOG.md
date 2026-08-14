@@ -3,6 +3,12 @@
 
 # Changelog
 
+## Unreleased
+_Development builds ahead of 0.11.0. This section is on the `dev` branch only and carries the full
+detail of every change — it is distilled into a major-changes-only entry when 0.12.0 is released._
+
+- Nothing yet.
+
 ## 0.11.0
 **Monthly giving works properly for the first time, and a donation can now be refunded from the
 admin panel. Update your tablets after installing** — several of these fixes are in the tablet app.
