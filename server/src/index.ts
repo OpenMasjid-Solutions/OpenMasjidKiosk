@@ -112,13 +112,23 @@ async function main(): Promise<void> {
   // the upload route allow-lists the MIME type and assigns its own random name and extension,
   // nosniff is what stops a browser reinterpreting a "PNG" whose bytes begin with markup.
   //
-  // NO framing header here on purpose. X-Frame-Options / frame-ancestors would close the
-  // clickjacking gap, but I could not confirm whether OpenMasjidOS ever renders an installed app
-  // inside an iframe, and a framing denial that breaks the dashboard would be worse than the gap it
-  // closes. See docs/audit/ACTION_REQUIRED.md.
+  // FRAMING IS DENIED. This was deliberately left open by the 2026-08-04 audit, which could not
+  // confirm whether OpenMasjidOS renders an installed app inside an iframe — and a framing denial
+  // that broke the dashboard would have been worse than the clickjacking gap it closed. That is now
+  // settled by reading the platform: `openApp()` in OpenMasjidOS `packages/ui/src/lib/apps.ts` calls
+  // `window.open(target, '_blank', 'noopener,noreferrer')`, and the string "iframe" does not appear
+  // anywhere in its source. The dashboard NAVIGATES to us; nothing frames us. So there is no
+  // legitimate frame to break, and every surface here is worth protecting — the admin panel acts on
+  // a session cookie, and the donor's cancel page is a one-press irreversible action.
+  //
+  // Both headers, on purpose: `frame-ancestors` is the modern rule and the only one that governs
+  // nested/`<object>` embedding, while `X-Frame-Options` still covers browsers that never
+  // implemented CSP level 2. They agree, so neither can weaken the other.
   app.addHook('onSend', async (_req, reply) => {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'no-referrer');
+    reply.header('content-security-policy', "frame-ancestors 'none'");
+    reply.header('x-frame-options', 'DENY');
   });
 
   // ── Gently upgrade insecure browser hits to HTTPS ────────────────────────────
@@ -1255,7 +1265,8 @@ async function main(): Promise<void> {
   //     from, nothing to change an amount with, and no way to reach the admin API;
   //   • cancelling is the safe direction. The worst a stolen link achieves is stopping a donation,
   //     which the donor can restart at the kiosk. Money can never move TO anyone through this;
-  //   • it is rate-limited, and an unknown token gets the same answer as a used one.
+  //   • the outbound Stripe traffic it can cause is bounded (donorLookups, below), and an unknown
+  //     token gets the same answer as a used one.
   // Registered as an ENCAPSULATED plugin so the form-encoded body parser below exists for these two
   // routes and nowhere else.
   await app.register(async (donor) => {
@@ -1285,6 +1296,27 @@ async function main(): Promise<void> {
 
     /** Statuses that mean "this is not collecting any more". `incomplete_expired` never got going. */
     const PLAN_OVER = new Set(['canceled', 'incomplete_expired']);
+
+    /**
+     * A ceiling on the outbound Stripe calls this public page can cause.
+     *
+     * Opening the page asks Stripe whether the plan is still live, so one link that reaches the wrong
+     * hands — or simply a bot that follows every URL in a mailbox — turns unlimited page loads into
+     * unlimited Stripe API calls, against the masjid's own account rate limit. Everything else about
+     * the route is already cheap: an unknown token is a single indexed hash lookup and 404s before
+     * any of this, so the budget only has to cover loads that present a REAL token.
+     *
+     * Deliberately a global counter and not a per-peer one: over the Cloudflare tunnel every donor
+     * arrives from the same tunnel daemon, so a per-peer limit would lump them all together anyway.
+     *
+     * WHEN IT RUNS OUT NOBODY IS REFUSED. We skip the liveness check and show the button — exactly
+     * what the page did before that check existed. A donor is never blocked from stopping a donation
+     * to save an API call; the worst case is one press that turns out to be a no-op, and the POST
+     * (which is the action that matters, and is far rarer) always checks properly.
+     *
+     * 120/min is far above real use — a donor opens this once — and far below anything Stripe minds.
+     */
+    const donorLookups = new GlobalAttemptBudget(120, 60_000);
 
     /**
      * Is this plan already finished, according to STRIPE? Unknown (unreachable, no account, no such
@@ -1370,10 +1402,11 @@ ${body}
     //
     // Asked live because Stripe is the truth: the plan may also have been ended from the admin panel,
     // or by the masjid in Stripe's own dashboard, neither of which touches our row. If Stripe cannot
-    // be reached we fall through and show the button — a donor who wants to stop must never be
-    // blocked by our uncertainty, and the POST re-checks anyway.
-    if (await donorPlanIsOver(plan)) {
-      return reply.send(alreadyStoppedPage(money));
+    // be reached — or the lookup budget above is spent — we fall through and show the button. A donor
+    // who wants to stop must never be blocked by our uncertainty, and the POST re-checks anyway.
+    if (donorLookups.retryAfterMs() === 0) {
+      donorLookups.fail();
+      if (await donorPlanIsOver(plan)) return reply.send(alreadyStoppedPage(money));
     }
 
     return reply.send(

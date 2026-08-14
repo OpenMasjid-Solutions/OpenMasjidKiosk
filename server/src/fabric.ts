@@ -428,11 +428,6 @@ export async function fetchFabricStripe(accountName: string, force = false): Pro
   }
 }
 
-/** The last fetched Fabric Stripe account WITHOUT a network call (may be stale/null). */
-export function cachedFabricStripe(): FabricStripeAccount | null {
-  return stripeCache?.value ?? stripeLastGood?.value ?? null;
-}
-
 /** Drop the in-memory Stripe-keys cache so the next fetch re-reads the OS vault (called when
  *  the admin changes the chosen account in-app). */
 export function clearFabricStripeCache(): void {

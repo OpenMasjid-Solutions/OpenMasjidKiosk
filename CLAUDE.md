@@ -42,7 +42,18 @@ If it prints anything else, `git checkout dev` first. If you are on `main`, you 
     Bump **all six together** — `VERSION`, `manifest.yaml`, `server/package.json`, `web/package.json`, both lockfile `version` fields — **and** the tag in `docker-compose.yml`, which must equal `manifest.yaml`'s version exactly. CI fails the build on drift, on a `:dev` line, and on a non-prerelease version.
 
     The `-dev.N` **shape is load-bearing**: the platform compares dotted-numeric parts, so `N` must sit in its own dotted position. `0.11.0-dev1` collapses to `0.11.0` and is silently never offered. Pinned by `server/src/config.test.ts`.
-7. **That merge is a release.** When told, run the full runbook: set the release version (drop the `-dev.N`) in `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and add the `CHANGELOG.md` entry → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → bump the OpenMasjidAPPS `registry.yaml` entry (`ref:` + the immutable 40-char `commit:`) → start the next dev cycle at `X.Y+1.0-dev.1`. `CHANGELOG.md` moves **only** here; `VERSION` now moves on `dev` too (rule 6b).
+7. **That merge is a release.** When told, run the full runbook: set the release version (drop the `-dev.N`) in `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and write the `CHANGELOG.md` release entry (rule 7b) → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → bump the OpenMasjidAPPS `registry.yaml` entry (`ref:` + the immutable 40-char `commit:`) → start the next dev cycle at `X.Y+1.0-dev.1`. `VERSION` moves on `dev` too (rule 6b), and so does `CHANGELOG.md` (rule 7b).
+
+7b. **`CHANGELOG.md`: two audiences, one file.** The changelog ships *inside the image* — the admin panel's "What's new" reads it from disk — so it is a product surface, not a git artefact, and it has to serve a masjid admin reading release notes and a developer tracking `dev` at the same time. It therefore has two kinds of section, and both branches carry the file:
+
+    | Section | Lives on | Contains | Written |
+    |---|---|---|---|
+    | `## Unreleased` (always at the top) | **`dev` only** | **Every** dev change, in full: fixes, internals, docs sweeps, dead code, anything a tester on the dev channel would notice or want explained. | On each publishable dev build, as part of the same commit. |
+    | `## X.Y.Z` | **both** branches | **MAJOR changes only** — what a masjid actually needs to know: new capability, changed behaviour, a fix for something they hit. Not internals, not refactors, not doc edits. | At release, by distilling `## Unreleased`. |
+
+    **At release:** distil `## Unreleased` down to the major-only `## X.Y.Z` entry. `main` gets that entry and **no `## Unreleased` section at all** — a stable install must never read notes for code it isn't running. `dev` gets the same `## X.Y.Z` entry *plus* a fresh empty `## Unreleased` above it for the next cycle. The two files differ only by that section, and that difference is deliberate and permanent — do not "fix" it by syncing them.
+
+    **Never delete or rewrite a released `## X.Y.Z` section.** They are the notes running installs display. (This has been broken twice: once by merging `main` into a stale branch, which silently dropped twelve of them, and once by an edit whose search text started at the `## Unreleased` heading and whose replacement did not put it back. Check `grep -c '^## ' CHANGELOG.md` before and after any changelog edit.)
 8. **Re-pin the image line when merging to `main`.** `dev` carries `:X.Y.Z-dev.N`; `main` must always carry `:<version>@sha256:<digest>`. A merge that leaves the dev line on `main` would point every stable install at a development build — check it explicitly, every time. CI enforces both directions (a prerelease version or image reaching stable fails the build), but do not rely on that to notice for you.
 
 ### Update channels (how the two branches reach a masjid)
@@ -120,10 +131,15 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
   ├── Dockerfile               # builds web + server → one image; bundles the APK
   ├── LICENSE                  # AGPL-3.0-only
   ├── VERSION                  # single source of truth (server + APK versionName)
-  ├── server/                  # Node 20 + TypeScript + Fastify + better-sqlite3
+  ├── CHANGELOG.md             # ships INSIDE the image — the panel's "What's new" (rule 7b)
+  ├── server/                  # Node 22 + TypeScript + Fastify + better-sqlite3
   ├── web/                     # React + Vite + Tailwind admin panel (+ /new page)
   ├── android/                 # Kotlin + Jetpack Compose kiosk app (Gradle)
-  └── .github/workflows/       # build-image.yml (GHCR multi-arch) + build-apk.yml
+  ├── docs/                    # TABLET_SETUP, READER_SETUP, ARCHITECTURE, REMOTE_ADOPTION,
+  │                            #   STUDENTS_INTEGRATION, FABRIC_BILLING_CONTRACT, audit/
+  ├── assets/                  # README artwork (not shipped in the image)
+  ├── apk/                     # CI drops the built APK here for the Dockerfile to bundle
+  └── .github/workflows/       # build-image.yml (GHCR multi-arch) + build-apk.yml + cla.yml
   ```
   *(The building guide suggests repos named `openmasjid-<id>`; the shipped apps use the `OpenMasjidX` style. Keep `OpenMasjidKiosk` for consistency with Display/Donations — what must match is the **image name**: the compose references the lowercased repo, `ghcr.io/openmasjid-solutions/openmasjidkiosk`.)*
 - **App `id`: `kiosk`** — same everywhere (manifest + registry entry). Category: `donations`.
@@ -134,6 +150,8 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
 ---
 
 ## 4. Scope
+
+> **This section is the original v1.0 plan, kept for the boundaries it draws — especially the ❌ list, which is where the security-relevant "we do not do that" decisions live.** It is not a feature list: the app has grown well past it (campaigns, tuition, branded receipts, remote adoption, recurring-plan management, refunds, the donor cancel link). **`README.md` is the live description of what ships**; struck-through entries below record where the boundary genuinely moved and why.
 
 ### ✅ In scope (v1.0)
 **Server (the OpenMasjidOS app)**
@@ -175,7 +193,9 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
 - Play Store distribution (sideload via `/new` is the model; Play listing is a later decision).
 
 ### 🔭 Later (design for, don't build)
-- Per-device amount presets & campaigns; Gift Aid; `domain: true` public giving links from the kiosk QR; Terminal offline mode; Play Store / managed provisioning (QR device-owner enrolment); WisePOS-style internet readers.
+- ~~Per-device amount presets & campaigns~~ — **built.** Campaigns are first-class (own amounts, colours, images, type, Stripe account, thank-you) and each targets chosen kiosks.
+- ~~`domain: true`~~ — **built**, though not as the "public giving link from a kiosk QR" originally imagined. It carries **remote adoption** (pairing a tablet at another site) and the **donor's monthly-cancel link**. A public giving *page* remains unbuilt.
+- Still later: Gift Aid; Terminal offline mode; Play Store / managed provisioning (QR device-owner enrolment); WisePOS-style internet readers; donor accounts; a screen for the `admin_audit` trail (the data and `GET /api/admin/audit` exist; nothing renders them).
 
 ---
 
@@ -263,9 +283,9 @@ GiveALittle-grade simplicity — a passer-by donates in under 10 seconds without
 ## 10. Kiosk mode, PIN & the launcher (Android)
 
 - **Launcher:** the app declares `CATEGORY_HOME` + `CATEGORY_DEFAULT`, so the tablet boots straight into it and Home goes nowhere else.
-- **Lock Task Mode:** when the app is **device owner**, use `startLockTask()` for true kiosk (no status bar pulldown, no recents/home escape). Document the one-time provisioning in `docs/TABLET_SETUP.md`: factory-reset tablet, skip accounts, `adb shell dpm set-device-owner com.openmasjid.kiosk/.KioskAdminReceiver`. **Fallback** without device owner: screen pinning (one-time confirm) + immersive-sticky; be honest in docs about its limits.
+- **Lock Task Mode:** when the app is **device owner**, use `startLockTask()` for true kiosk (no status bar pulldown, no recents/home escape). Document the one-time provisioning in `docs/TABLET_SETUP.md`: factory-reset tablet, skip accounts, `adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver`. **Fallback** without device owner: **not** screen pinning — that was tried and removed in 0.11.0, because Android forbids a pinned app from launching any other app and says nothing when it refuses, which silently broke Android Settings, the permission prompts and the self-updater. The soft kiosk is: being the HOME launcher, immersive-sticky bars, a bounce-back watchdog, a dead Back button, and an optional accessibility helper that closes the notification shade. Be honest in docs about its limits.
 - **Stay awake:** keep-screen-on flag while in kiosk; recommend "always plugged in" mounts; report charging state so the admin sees a fallen cable.
-- **Unlock:** hidden gesture (10 taps in the top-left corner within 3 s) → PIN pad → verifies against the **PIN set in Admin → Devices** (synced as an argon2 hash in config so unlock works offline; rate-limited with backoff; server-side verify when online). Unlock opens the maintenance screen: reader setup (BT/USB discovery, connect, update, battery), server address/re-pair, diagnostics, app version, **Exit kiosk** and **Return to kiosk**.
+- **Unlock:** hidden gesture (10 taps in the top-left corner within 3 s) → PIN pad → verifies against the **PIN set in Admin → Devices** (synced as a **scrypt** hash in config so unlock works offline; rate-limited with backoff; server-side verify when online). Unlock opens the maintenance screen: reader setup (BT/USB discovery, connect, update, battery), server address/re-pair, diagnostics, app version, **Exit kiosk** and **Return to kiosk**.
 - **Boot & recovery:** BOOT_COMPLETED brings the app up even if not device owner; the app self-heals into the attract screen after crashes (foreground watchdog) and reconnects the reader automatically.
 - **Permissions:** request-and-explain only what Terminal needs — Bluetooth scan/connect (API 31+) or location (older), USB host access — inside the PIN-protected settings, never in the donor flow.
 
@@ -282,60 +302,30 @@ Same SSO + design language as Donations. Sections:
 
 ---
 
-## 12. `manifest.yaml` & `docker-compose.yml` (current contract — note the new rules)
+## 12. `manifest.yaml` & `docker-compose.yml` (the invariants — the files themselves are the spec)
 
-```yaml
-# manifest.yaml (repo root)
-id: kiosk
-name: OpenMasjid Kiosk
-tagline: Tap-to-donate kiosk for a wall-mounted tablet with a Stripe card reader
-category: donations
-version: 0.1.0
-author: OpenMasjid Solutions
-license: AGPL-3.0-only
-icon: icon.svg
-screenshots:
-  - screenshots/1.svg
-description: |
-  Turn an Android tablet and a Stripe Reader M2 into a beautiful donation
-  station. Six one-tap amounts, custom amounts, monthly giving, email
-  receipts — managed from a simple admin page on your OpenMasjidOS.
-sso: true
-stripe: true
-https: true          # required: this app uses Stripe (see BUILDING_AN_APP §2b.5)
-notifications: true
-ports:
-  - container: 8080
-    label: Kiosk admin & setup
-# NO settings: install stays one-click; Stripe account is picked in-app (preferred pattern)
-```
+**Read the two real files at the repo root.** They are heavily commented and they are what the catalog serves; a sketch here would only drift out of date, as the one that used to sit in this section did (it still showed `version: 0.1.0` and four Fabric flags long after there were nine). What this section pins is the set of properties a change must not break:
 
-```yaml
-# docker-compose.yml (repo root)
-services:
-  app:
-    # tag for humans + digest for integrity — bump BOTH every release (§2b.1)
-    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.1.0@sha256:<64-hex-digest>
-    restart: unless-stopped
-    environment:
-      # Fabric — REQUIRED references; without them SSO/Stripe/notify silently no-op:
-      OPENMASJID_BASE_URL: ${OPENMASJID_BASE_URL:-}
-      OPENMASJID_APP_ID: ${OPENMASJID_APP_ID:-}
-      OPENMASJID_APP_SECRET: ${OPENMASJID_APP_SECRET:-}
-    ports:
-      - "7878:8080"
-    volumes:
-      - data:/data
-volumes:
-  data:
-```
-Least-privilege exactly per the contract: no labels, no `privileged`, no host namespaces, no `cap_add`/`devices`/socket/sensitive mounts, no `extends`/`include`. The container is a plain HTTP server; the platform provides the HTTPS endpoint.
+**`manifest.yaml`**
+- `id: kiosk` · `category: donations` · `license: AGPL-3.0-only` · one port (`container: 8080`).
+- **No `settings:` block, ever.** Install stays one-click; the Stripe account is picked in-app.
+- Fabric flags currently declared: `sso`, `https` (mandatory — we take card payments), `stripe`, `notifications`, `email`, `domain`, `tunnel`, plus an `alerts:` list and `fabric.consumes: [students/billing]`. Adding a flag is opting into a platform capability and must be matched by real handling in `server/src/fabric.ts`.
+- `version:` is the release being worked toward, in the shape rule 6b requires, and must equal the compose image tag exactly.
+
+**`docker-compose.yml`**
+- **Exactly one `image:` line** — CI's channel check reads the first and fails the build if there is more than one.
+- The image reference matches the channel (rule 8): `:X.Y.Z-dev.N` on `dev`, `:<version>@sha256:<digest>` on `main`/tags.
+- The three `OPENMASJID_*` vars **must be referenced** in `environment:`, plus `OPENMASJID_PUBLIC_URL` for remote adoption. Without those lines the platform's injected values never reach the container and the whole Fabric silently no-ops — the documented Display trap.
+- Least-privilege per the contract: `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, `tmpfs: [/tmp]`, and **no** labels, `privileged`, host namespaces, `devices`, Docker socket, sensitive mounts, `extends` or `include`.
+- The container is a plain HTTP server; the platform terminates TLS and provides the HTTPS endpoint.
+
+**Known deviation, deliberately not fixed:** the container runs as **root**. `USER node` alone would break every deployed masjid on update — `/data` and `kiosk.db` inside it are root-owned, and `cap_drop: ALL` removes `CAP_CHOWN`/`CAP_SETUID`, so an entrypoint cannot fix it either. It needs the Dockerfile, the compose and a documented one-time `chown` together, coordinated across the OpenMasjid apps. Residual risk is low (no capabilities at all, plus `no-new-privileges`). See `docs/audit/ACTION_REQUIRED.md` §5.
 
 ---
 
 ## 13. Tech stack
 
-- **server/** — Node 20+, TypeScript strict, **Fastify**, **better-sqlite3**, **stripe** SDK, **argon2** (fallback admin password + PIN hashes), **zod** at every boundary. No WebSocket needed in v1 (heartbeat polling is enough); add SSE for the Devices page if live feel demands it.
+- **server/** — Node 22 (`node:22-slim` in the image), TypeScript strict, **Fastify**, **better-sqlite3**, **stripe** SDK, **scrypt** via `node:crypto` for the fallback admin password + PIN hashes (chosen over argon2 by the maintainer, 2026-07-02: zero extra native deps and Pi-friendly — see `docs/ARCHITECTURE.md`), **zod** at every boundary. No WebSocket (heartbeat polling is enough); add SSE for the Devices page if live feel demands it.
 - **web/** — React + Vite + TypeScript + Tailwind, shadcn/ui, **Motion**, lucide-react; tokens + recipes from **DESIGN.md** (Sakīna Glass); inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
 - **android/** — **Kotlin + Jetpack Compose**, minSdk 26 (Terminal SDK floor), **Stripe Terminal Android SDK** (Bluetooth + USB discovery/connect for the M2), DataStore for device config, WorkManager for heartbeats. **No camera/QR** — pairing is a typed 6-digit code (kiosk tablets often have no camera). Recreate the design language natively: same palette tokens, spring motion (`animate*AsState`/`AnimatedContent`), dark default, RTL, reduced-motion.
 - **One container** serves API + admin + `/new` + the bundled APK. Multi-stage Dockerfile; CI: `build-apk.yml` builds + signs the APK (keystore in GH secrets, versionName from `VERSION`), `build-image.yml` builds web+server, **copies the freshly built APK into the image**, pushes multi-arch to GHCR, prints the digest to pin.
@@ -348,7 +338,7 @@ Least-privilege exactly per the contract: no labels, no `privileged`, no host na
 - Tablet↔server: **HTTPS only, certificate pinned** on the first successful pair (trust-on-first-use); never downgrade; re-pair on fingerprint change. Device tokens hashed at rest, revocable, scoped, rate-limited.
 - Amounts validated server-side (presets/min/max, integer minor units); idempotency keys on all Stripe creates; donation recorded only after server-side Stripe verification (+ capture when `requires_capture`).
 - Admin: Fabric SSO as identity assertion only (never call the platform as the admin); fail-closed session check; local-password fallback; signed HTTP-only SameSite cookies; restore-resilience rules (§6) observed to the letter.
-- Kiosk PIN: argon2 hash in synced config; offline verify; exponential backoff on attempts; PIN rotation from admin invalidates old immediately on next heartbeat.
+- Kiosk PIN: scrypt hash in synced config; offline verify; exponential backoff on attempts; PIN rotation from admin invalidates old immediately on next heartbeat.
 - Uploads (wallpapers) validated and size-capped; rich text sanitised; every kiosk route authenticated; `/new` and pairing endpoints rate-limited (6-digit pairing codes single-use, 10-min TTL, attempt-limited so the 1M-code space can't be brute-forced).
 - PCI posture: card data reader→Stripe only (P2PE-style); our code never sees a PAN — state this in the README.
 
@@ -379,7 +369,8 @@ Builds via the commands above and `docker compose up -d`; `tsc`/lint/ktlint clea
 ## 17. Working agreement for Claude (the coding agent)
 
 - **First**, read BUILDING_AN_APP.md (+ its CLAUDE.md and DESIGN.md), then the Donations and Display repos. They are the live contract and precedents; where this file lags them, follow them and flag it.
-- Build in **vertical slices**, each end-to-end and demoable:
+- **All nine slices below shipped in v0.1.0–v0.10.2 and the list is now history, not a plan.** It is kept because it still describes the *shape* of a change worth making: end-to-end and demoable, server + web + tablet together. Everything since has been built the same way. What the app actually does today is `README.md`; what it has done release by release is `CHANGELOG.md`. Features added after the slice plan — multiple campaigns, tuition via OpenMasjid Students, branded receipts, remote adoption, recurring-plan management, refunds, the donor's own cancel link — are documented there and in `docs/`.
+- The original vertical slices, each end-to-end and demoable:
   1. Repo scaffold (all three parts) + Dockerfile + manifest/compose per §12; container boots, serves a themed admin shell, `/healthz`, and a stub `/new`.
   2. **Fabric:** SSO with local fallback + appearance inheritance + restore-resilience.
   3. **Payments setup:** Stripe account picker via Fabric, Location management, test-mode badge, connection-token endpoint.

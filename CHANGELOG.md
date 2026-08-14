@@ -4,6 +4,32 @@
 # Changelog
 
 ## Unreleased
+- **No other site can put this app in a frame any more.** Every response now carries a framing
+  denial, so the admin panel and the donor's cancel page can't be loaded invisibly inside someone
+  else's page to trick a click out of you. This was left open by the August security audit only
+  because it wasn't known whether the OpenMasjidOS dashboard displays apps inside a frame — it
+  doesn't, it opens them in a new tab, so there was nothing to break.
+- **The donor's cancel link can no longer be used to hammer Stripe.** Opening it asks Stripe whether
+  the donation is still running, and nothing capped how often that could happen — so one link in the
+  wrong hands, or an email scanner following every URL, could have used up the masjid's Stripe
+  request allowance. There is now a ceiling on those checks, and reaching it never turns a donor
+  away: the page falls back to simply offering the button, and pressing it still checks properly.
+- **A full repository sweep** — documentation, security and dead code — before the 0.11.0 release:
+  - Every claim in `README.md` re-checked against the code. Corrected: refunds are no longer listed
+    as something the app can't do, the card reader is no longer described as primary-account-only,
+    screen pinning is no longer described as part of the kiosk lockdown, the alert list said three
+    when there are six, and the dev channel is described as it now works (a real version per build,
+    not a `-dev` suffix on the stable one).
+  - `CLAUDE.md` corrected where it had drifted from the code: scrypt rather than argon2, Node 22
+    rather than 20, the real Android package name in the device-owner command, and a manifest/compose
+    sketch that still showed `version: 0.1.0` replaced with the invariants that actually matter.
+  - The build pipeline's own notes said dev builds publish only a moving `:dev` tag, which stopped
+    being true when the dev channel became versioned — it contradicted the code directly below it.
+  - Four unused functions deleted, including one whose comment claimed a single-use protection it
+    never implemented. Every documentation link and external URL checked.
+  - Known gaps now listed honestly in the README rather than discovered later: the inert "allow
+    manual card entry" setting, the audit trail with no screen, donation totals using UTC day
+    boundaries, and the container running as root.
 - **A cancel link for a donation that has already stopped now says so.** Opening the link again — or
   pressing the button twice — used to show the same "Stop my monthly donation" page as if it were
   still running. It now says the donation has already stopped and there is nothing to do. It checks

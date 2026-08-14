@@ -179,11 +179,6 @@ export async function studentsInfo(force = false): Promise<InfoResult> {
   return value;
 }
 
-/** Last cached info without a network call — for cheap sync paths. */
-export function cachedStudentsInfo(): InfoResult {
-  return infoCache?.value ?? { available: false };
-}
-
 // ── Student ID (the whole credential at v2) ─────────────────────────────────
 /** Normalise a typed Student ID exactly as the provider does (trim, uppercase, drop the spaces and
  *  hyphens a parent might add), so "yus-1234" and "YUS 1234" reach it as `YUS1234`. The provider
@@ -522,6 +517,20 @@ export function createTuitionSession(input: Omit<TuitionSession, 'id' | 'expires
   return s;
 }
 
+/**
+ * A tuition session is REUSABLE until it expires, not single-use.
+ *
+ * That is deliberate: a parent whose card is declined, or who pays one child's bill and then wants to
+ * pay another's, should not have to type the Student ID and re-confirm the child again. The session
+ * is only a cached view of the family's bills — every PaymentIntent minted from it recomputes the
+ * amount server-side from that view and re-checks the device binding, so replaying a session id
+ * cannot mint an amount the family does not owe.
+ *
+ * (There used to be a `consumeTuitionSession` here, never called, whose doc claimed the single-use
+ * property the code did not implement. Removed in the 2026-08-13 sweep rather than wired up:
+ * switching it on is a product decision — "must a declined card force the parent to look their
+ * balance up again?" — not a defect.)
+ */
 export function getTuitionSession(id: string): TuitionSession | null {
   const s = sessions.get(id);
   if (!s) return null;
@@ -530,11 +539,6 @@ export function getTuitionSession(id: string): TuitionSession | null {
     return null;
   }
   return s;
-}
-
-/** Drop a session once it has been used to mint a PaymentIntent (single-use for the pay step). */
-export function consumeTuitionSession(id: string): void {
-  sessions.delete(id);
 }
 
 // ── Amount computation (PURE — the security-critical bit; unit-tested) ──────

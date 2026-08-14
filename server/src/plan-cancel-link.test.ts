@@ -13,6 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Store } from './store';
+import { GlobalAttemptBudget } from './rateLimit';
 import { blockedOverTunnel } from './tunnel';
 import { renderMonthlyStarted } from './email';
 
@@ -159,6 +160,39 @@ test('a plan Stripe no longer has at all counts as stopped', () => {
   const over = (live: { status: string } | null) => (live === null ? true : ['canceled', 'incomplete_expired'].includes(live.status));
   assert.equal(over(null), true);
   assert.equal(over({ status: 'active' }), false);
+});
+
+test('the liveness lookup is budgeted, and running out never refuses a donor', () => {
+  // Opening the page asks Stripe whether the plan is still live, so an internet-reachable link in the
+  // wrong hands (or a mailbox-scanning bot) could turn unlimited page loads into unlimited Stripe API
+  // calls against the masjid's own rate limit. The budget caps that — but it must degrade by showing
+  // the button, never by blocking. A donor kept from stopping a donation to save an API call would be
+  // a far worse outcome than the amplification it prevents.
+  const budget = new GlobalAttemptBudget(120, 60_000);
+  const t0 = 1_000_000;
+
+  // The page's actual decision: check with Stripe only while there is budget for it.
+  const checksStripe = (now: number): boolean => {
+    if (budget.retryAfterMs(now) !== 0) return false;
+    budget.fail(now);
+    return true;
+  };
+
+  for (let i = 0; i < 120; i++) assert.equal(checksStripe(t0), true, `load ${i + 1} is within budget`);
+  assert.equal(checksStripe(t0), false, 'the 121st load in the window skips the lookup');
+  // …and the window refills, so a spent budget is never a permanent downgrade.
+  assert.equal(checksStripe(t0 + 60_000), true, 'the next minute checks again');
+});
+
+test('a skipped liveness lookup shows the button — the POST is what must be right', () => {
+  // Fail-open has one visible cost: on an already-stopped plan the donor sees the button and presses
+  // it for nothing. That is the pre-existing behaviour, and the POST re-checks unconditionally, so
+  // the money outcome is identical either way. Encoded here so nobody "optimises" the POST later.
+  const page = (checked: boolean, over: boolean) => (checked && over ? 'already-stopped' : 'button');
+  assert.equal(page(true, true), 'already-stopped', 'checked and over');
+  assert.equal(page(true, false), 'button', 'checked and live');
+  assert.equal(page(false, true), 'button', 'not checked — show the button rather than guess');
+  assert.equal(page(false, false), 'button');
 });
 
 test('an already-stopped press changes nothing, so it raises no alert', () => {

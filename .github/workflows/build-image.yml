@@ -12,19 +12,20 @@ name: Build image
 #
 # TWO CHANNELS (the org's Update Channel toggle in OpenMasjidOS — CLAUDE.md "Branching policy"):
 #
-#   main / v* tags  ->  :<manifest version>  +  :latest        the stable channel
-#   dev             ->  :dev  +  :dev-<12-char sha>            the development channel
+#   main / v* tags  ->  :<manifest version>  +  :latest                        the stable channel
+#   dev             ->  :<manifest version>  +  :dev  +  :dev-<12-char sha>    the development channel
 #
-# The two tag sets are disjoint, and that is the load-bearing part of this file. `dev` carries
-# main's manifest version for most of its life, so publishing :<version> from a dev push would
-# overwrite an ALREADY-RELEASED stable tag with unreviewed content, and every masjid that
-# reinstalled that app would pull a dev build under a released version number. Never add the
-# version tag or :latest to the dev tag list.
+# BOTH channels publish the manifest version, and the two can never collide because a dev version
+# is always a PRERELEASE — `0.11.0-dev.3`, never `0.11.0`. The "Check the compose image matches the
+# channel" step below enforces that in both directions: dev must be a prerelease, stable must not
+# be. That invariant is what makes it safe to publish :<version> from a dev push, and it is the
+# load-bearing part of this file — without it a dev build would overwrite an already-released
+# stable tag with unreviewed content. Never add :latest to the dev tag list.
 #
-# `:dev` is a MOVING tag — that is the point of it, and the one place this repo knowingly gives up
-# the digest pin §12 otherwise requires. Every dev build therefore also gets an immutable
-# `:dev-<sha>` tag: `:dev` means "newest", `:dev-<sha>` says exactly which commit a box is running,
-# so a bad dev build stays diagnosable and rollback-able despite the moving tag.
+# The VERSIONED tag is what the catalog installs on both channels, so both are immutable. `:dev`
+# and `:dev-<sha>` remain as conveniences only — `:dev` is a MOVING tag meaning "newest", and
+# `:dev-<sha>` says exactly which commit a box is running, so a bad dev build stays diagnosable
+# and rollback-able. Nothing installs either of them, and the compose must never name them.
 #
 # BOTH channels run the FULL pipeline — Gradle APK -> web -> server -> multi-arch image — so a dev
 # image ships a dev APK built from the dev branch, and an arm64-only regression is caught on the
@@ -214,10 +215,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Tags come from the channel resolved above: version + :latest on main / v* tags, the moving
-      # :dev + immutable :dev-<sha> pair on the dev branch. Multi-arch is not optional on either
-      # channel — masajid run this on Raspberry Pis (arm64) as well as amd64 hosts, and the dev
-      # channel is precisely where a Pi-only regression should surface.
+      # Tags come from the channel resolved above: the manifest version on BOTH channels, plus
+      # :latest on main / v* tags, and the moving :dev + immutable :dev-<sha> conveniences on the
+      # dev branch. Multi-arch is not optional on either channel — masajid run this on Raspberry
+      # Pis (arm64) as well as amd64 hosts, and the dev channel is precisely where a Pi-only
+      # regression should surface.
       - name: Build and push
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -238,18 +240,21 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ steps.meta.outputs.channel }}
 
       # On the stable channel the @sha256 digest is the real integrity pin — copy it into
-      # docker-compose.yml. On dev there is nothing to pin: the channel tracks the moving tag, and
-      # the immutable :dev-<sha> companion is how you identify or roll back a specific dev build.
+      # docker-compose.yml. On dev the compose already names this build's own version tag, which is
+      # immutable in its own right, so there is nothing further to pin; a digest there is allowed
+      # but not required. :dev-<sha> is how you identify or roll back one specific dev build.
       - name: What was published
         run: |
           echo "channel: ${{ steps.meta.outputs.channel }}"
+          echo "version: ${{ steps.meta.outputs.version }}"
           echo "digest:  ${{ steps.build.outputs.digest }}"
           if [ "${{ steps.meta.outputs.channel }}" = stable ]; then
             echo "Pin this in docker-compose.yml:"
             echo "  image: ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:${{ steps.meta.outputs.version }}@${{ steps.build.outputs.digest }}"
           else
-            echo "The moving :dev tag now points here. Nothing to pin — the dev channel tracks the tag."
-            echo "To identify or roll back this exact build, use the immutable companion tag:"
+            echo "The dev channel installs the versioned tag, which is already immutable:"
+            echo "  image: ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:${{ steps.meta.outputs.version }}"
+            echo "Nothing to pin. To identify or roll back this exact build, use the commit tag:"
             echo "  ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:dev-$(echo ${{ github.sha }} | cut -c1-12)"
           fi
 

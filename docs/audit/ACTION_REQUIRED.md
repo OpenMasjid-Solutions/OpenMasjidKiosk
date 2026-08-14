@@ -56,17 +56,19 @@ If that returns anything other than 404, the guard is being walked past.
 
 ---
 
-## 4. Confirm whether OpenMasjidOS iframes installed apps
+## 4. ~~Confirm whether OpenMasjidOS iframes installed apps~~ — RESOLVED 2026-08-13, nothing for you to do
 
-I shipped `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` but **deliberately left out a framing header** (`X-Frame-Options` / CSP `frame-ancestors`), because I could not determine whether the dashboard's "Open" renders an app inside an iframe or navigates to it.
+The 2026-08-04 audit shipped `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` but deliberately left out a framing header, because it could not determine whether the dashboard's "Open" renders an app inside an iframe or navigates to it — and a framing denial that broke the dashboard would have been worse than the gap it closed.
 
-- If it **navigates** (which the `#omos=` fragment hand-off and `history.replaceState` strongly suggest), add this to the `onSend` hook in `server/src/index.ts` and the clickjacking gap closes:
-  ```ts
-  reply.header('content-security-policy', "frame-ancestors 'none'");
-  ```
-- If it **iframes**, use `frame-ancestors 'self' <the platform origin>` instead.
+**Settled by reading the platform.** `openApp()` in OpenMasjidOS `packages/ui/src/lib/apps.ts` ends with:
 
-Low urgency: exploiting it needs an admin to be logged in and to visit a hostile page.
+```ts
+window.open(target, '_blank', 'noopener,noreferrer');
+```
+
+and the string `iframe` does not appear anywhere in the OpenMasjidOS source. The dashboard **navigates**; nothing frames us. So `frame-ancestors 'none'` (plus `X-Frame-Options: DENY` for browsers predating CSP level 2) now ships in the `onSend` hook in `server/src/index.ts`, verified against a running server on `/healthz`, the admin SPA and the donor cancel page.
+
+If OpenMasjidOS ever starts embedding apps, this is the one line that would need to become `frame-ancestors 'self' <platform origin>`.
 
 ---
 
@@ -103,8 +105,8 @@ I did not guess at this because picking a masjid's timezone for them is exactly 
 
 ## 7. Two small product decisions I left alone
 
-- **`consumeTuitionSession` is dead code** ([KIOSK-014](SECURITY_AUDIT.md#kiosk-014)) and its comment claims a single-use property the code does not have. Deleting it or wiring it up turns on "should a declined tuition card force the parent to look their balance up again?" — a product question. Not a vulnerability either way: every mint recomputes the amount server-side and re-checks the device binding.
-- **Android has no unit tests at all.** `KioskViewModel.backoffUntil` and `ScryptPin.verify` are pure functions guarding a public terminal, and neither can be tested today. A `test/` source set with a handful of JVM tests would have caught KIOSK-002 outright. Worth an issue.
+- ~~**`consumeTuitionSession` is dead code**~~ ([KIOSK-014](SECURITY_AUDIT.md#kiosk-014)) — **deleted 2026-08-13.** It was never called, so removing it changed no behaviour, and it took its misleading "single-use" comment with it. `getTuitionSession` now documents the truth: a session is **reusable until it expires**, deliberately, so a parent whose card is declined doesn't have to type the Student ID and re-confirm the child again. Wiring single-use *on* remains the open product question ("should a declined tuition card force a fresh lookup?") and is still nobody's call but yours. Not a vulnerability either way: every mint recomputes the amount server-side and re-checks the device binding.
+- **Android has no unit tests at all.** `KioskViewModel.backoffUntil` and `ScryptPin.verify` are pure functions guarding a public terminal, and neither can be tested today. A `test/` source set with a handful of JVM tests would have caught KIOSK-002 outright. Worth an issue — and it is the only compile-and-behaviour gap left, since the dev machine has no Android SDK and CI's `build-apk` job proves compilation but nothing else.
 
 ---
 
