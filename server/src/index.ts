@@ -26,6 +26,7 @@ import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricS
 import { escapeHtml, renderMonthlyStarted, renderReceipt, renderRefund, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
+import { authorizeCommandCall, findCommand, runCommand, tidyReply } from './commands';
 import { blockedOverTunnel } from './tunnel';
 import { toCsv } from './csv';
 import {
@@ -204,6 +205,62 @@ async function main(): Promise<void> {
 
   // ── Health check ────────────────────────────────────────────────────────────
   app.get('/healthz', async () => ({ ok: true }));
+
+  // ── Admin commands from WhatsApp (platform → us) ────────────────────────────
+  // The ONLY route the platform calls on us; everything else in fabric.ts is us calling it. An
+  // admin messages the masjid's own WhatsApp number, the platform decides who may run what and
+  // renders the menu from our manifest, and we are asked to execute one command we declared.
+  //
+  // Refused over the tunnel (tunnel.ts blocks all of /fabric), so the caller is always on the LAN.
+  // See commands.ts for the two-header trust boundary and why an absent secret fails closed.
+  app.post('/fabric/commands/run', async (req, reply) => {
+    const auth = authorizeCommandCall(
+      typeof req.headers['x-openmasjid-app-secret'] === 'string' ? (req.headers['x-openmasjid-app-secret'] as string) : undefined,
+      typeof req.headers['x-openmasjid-caller-app'] === 'string' ? (req.headers['x-openmasjid-caller-app'] as string) : undefined,
+      config.omosAppSecret,
+    );
+    if (!auth.ok) {
+      // 503 for "we hold no secret": the platform is telling us to run something we were never
+      // issued credentials for, which is a not-ready condition on THIS side, not a bad caller.
+      if (auth.reason === 'not_configured') {
+        return reply.code(503).send({ ok: false, code: 'not_ready', error: 'This app is not linked to OpenMasjidOS yet.' });
+      }
+      // Everything else is one flat 403 with no detail. Distinguishing "wrong secret" from "wrong
+      // caller" on the wire would tell someone probing which half they had already got right.
+      log.warn(`rejected a command call (${auth.reason})`);
+      return reply.code(403).send({ ok: false, error: 'Not authorised.' });
+    }
+
+    const parsed = z
+      .object({
+        command: z.string().min(1).max(64),
+        text: z.string().max(2000).optional(),
+        requestId: z.string().max(120).optional(),
+        locale: z.string().max(35).optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ ok: false, error: 'That command request wasn’t valid.' });
+
+    const cmd = findCommand(parsed.data.command);
+    if (!cmd) {
+      // 404 + unknown_command is the contract's own signal, and it is the honest answer while the
+      // command set is still empty: the platform renders it rather than showing a broken menu.
+      return reply.code(404).send({ ok: false, code: 'unknown_command' });
+    }
+
+    const ctx = {
+      text: (parsed.data.text ?? '').trim(),
+      requestId: parsed.data.requestId ?? '',
+      locale: parsed.data.locale ?? 'en',
+    };
+    const result = await runCommand(cmd, ctx);
+    // Note it locally too: a command changes something on the masjid's hardware from outside the
+    // building, and the admin panel should be able to show that it happened.
+    log.info(`command ${cmd.id} (${ctx.requestId || 'no id'}) -> ${result.ok ? 'ok' : 'failed'}`);
+    return result.ok
+      ? { ok: true, text: tidyReply(result.text) }
+      : reply.code(200).send({ ok: false, error: tidyReply(result.error) });
+  });
 
   // ── Public bootstrap the web app reads on load (no secrets) ─────────────────
   app.get('/api/app', async () => ({

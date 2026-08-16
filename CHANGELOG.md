@@ -7,7 +7,27 @@
 _Development builds ahead of 0.11.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.12.0 is released._
 
-- Nothing yet.
+- **Groundwork: an admin will be able to ask the kiosk questions over WhatsApp.** OpenMasjidOS can
+  now take admin commands sent to the masjid's own WhatsApp number and pass them to an app. That
+  matters for a kiosk more than for most apps: a kiosk is unattended hardware in a lobby, and when
+  a card reader stops responding the person who can fix it is usually not in the building. This
+  build adds the plumbing — the handler, the security around it, and the tests — so that
+  **nothing is visible or usable yet**; the actual list of commands is still to be decided, and no
+  commands are declared, so the kiosk will not appear in anyone's WhatsApp menu.
+  - **It is refused from the internet.** These commands can act on hardware, so the handler is
+    reachable only from the masjid's own network, even on a server that has Remote access turned
+    on. This needed a real fix rather than a review: the rule that keeps the admin panel off the
+    internet only ever examined `/api` addresses, and this new handler does not live under `/api`,
+    so it would have been reachable the day it shipped.
+  - **It cannot be run without OpenMasjidOS having issued this app its credential**, and it refuses
+    rather than assuming when it has not been — a server not linked to OpenMasjidOS answers "not
+    linked yet" instead of accepting an empty password from anyone on the network.
+  - A command that fails can never put technical detail — a payment reference, a file path — into a
+    WhatsApp message, and one that takes too long says "still working, ask again in a moment"
+    instead of leaving the sender with no reply at all.
+- **No donor phone numbers, and no WhatsApp sending.** Deliberately: a donor at a kiosk gives their
+  details for a receipt, not for messages. Nothing about the giving screen changes, and no phone
+  field has been added anywhere.
 
 ## 0.11.0
 **Monthly giving works properly for the first time, and a donation can now be refunded from the

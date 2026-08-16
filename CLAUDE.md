@@ -413,3 +413,67 @@ Builds via the commands above and `docker compose up -d`; `tsc`/lint/ktlint clea
   8. **Giving-screen designer** (amounts, messages, wallpapers, accent, live preview) + live config push.
   9. Donations log + CSV; polish pass (motion, empty states, RTL, reduced-motion); docs; tag `v0.1.0`; APK bundling in CI; registry PR.
 - Never put a Stripe secret anywhere the tablet or browser can see; never record a donation the server hasn't verified with Stripe; never let the kiosk be escapable without the PIN; ask before heavy dependencies or contract deviations.
+
+---
+
+## 18. WhatsApp: admin commands (and why we do not send)
+
+OpenMasjidOS can send WhatsApp on a masjid's behalf through **OpenWA**, a self-hosted gateway the
+masjid installs and links to their own phone, and it can now take **admin commands** back over it.
+We never see the gateway, its credentials, or the number: we POST to the platform, which owns a
+**single serialised queue** shared by every app and by its own alerts.
+
+**Ban risk attaches to the NUMBER**, so the platform paces everything — randomised gaps, typing
+indicators, per-recipient cooldowns, hourly/daily caps, a 7-day warm-up, and quiet hours that queue
+rather than drop. Hence `202 { queued: true }` and never "sent": delivery is seconds to hours away.
+**Nothing auth-critical may ever depend on it.** It is an unofficial client and the number can be
+restricted. Email stays the fallback.
+
+### What we implement: `POST /fabric/commands/run`
+
+An admin messages the masjid's number and gets an answer about hardware nobody is standing next to.
+The platform decides who may run what, renders the numbered menu **from our manifest order**, asks
+for confirmation, and formats the reply. **We do not build a menu.** We execute one command.
+
+Code: `server/src/commands.ts` (registry + pure rules), the route in `index.ts`, tests in
+`commands.test.ts`. Rules that will bite if missed:
+
+- **Verify BOTH headers.** `X-OpenMasjid-App-Secret` must equal our own `OPENMASJID_APP_SECRET`,
+  **and** `X-OpenMasjid-Caller-App` must be exactly `omos:platform` — a value no app id can hold,
+  because the colon is outside the app-id charset. It identifies the platform *by construction*,
+  not by an allow-list.
+- **An absent secret fails CLOSED** (`503 not_ready`). A standalone install has an empty
+  `OPENMASJID_APP_SECRET`, and a naive equality check would let empty match empty — anyone on the
+  LAN running admin commands with no credential at all. Pinned by a test.
+- **`/fabric/*` is LAN-only** and must never cross the tunnel. This is *not* covered by the `/api`
+  allowlist — `tunnel.ts` had to learn `/fabric` separately, because every non-`/api` path fell
+  through as allowed. A credential check is the wrong last line of defence for something that can
+  act on hardware.
+- **10 second timeout, 16 KB response cap.** We give up at 8s and answer "still working" so *we*
+  own the message rather than having the connection cut. If a job is long, start it and say so.
+- Reply shapes: `{ok:true,text}` · `{ok:false,error}` · `404 {ok:false,code:'unknown_command'}` ·
+  `503 {ok:false,code:'not_ready'}`. Text is plain, ≤1000 chars, control characters stripped.
+- **Never let an exception reach a phone** — messages here can carry a Stripe id or a file path.
+- Manifest: at most **12** commands; `id` kebab-case, **not all digits** (`!kiosk 2` must only mean
+  "the second option"), never `help`/`yes`/`no`/`cancel`/`stop`; `confirm: true` on anything that
+  changes hardware state (it also puts the command in the admin's audit alert); `argument` must be
+  an **object with a label** — `argument: true` is **rejected** at the catalog build, not coerced.
+- **Never put `commands` in `fabric.provides`.** Reserved: it would expose the same handler to other
+  apps through the app-to-app broker, a different trust boundary sharing a path prefix.
+
+The platform already offers `!os restart <app>`, which restarts our whole container. A kiosk-level
+command is the finer-grained, more useful thing.
+
+### What we deliberately do NOT do
+
+- **No `whatsapp: true`.** We send nothing, so declaring the capability would break §12's rule that
+  a flag must be matched by real handling. Add it the day there is something to send.
+- **No donor phone numbers, and no phone field on the kiosk** (maintainer, 2026-08-16). A donor at a
+  kiosk gave their number for a receipt, not for announcements. If that ever changes: receipts
+  one-to-one only, nothing else without a separate explicit opt-in.
+- **Do not expect a WhatsApp column in the alerts matrix.** There isn't one for apps, on purpose —
+  it routes to the admin's single number and the platform cannot know which person an alert is
+  about. Recipient choice would live in *our* settings. Email and the webhook remain the channels
+  for genuine "tell the admin" cases.
+
+Full contract: OpenMasjidOS `docs/WHATSAPP.md` and `docs/APP_MANIFEST_SPEC.md`, **dev** branch.
