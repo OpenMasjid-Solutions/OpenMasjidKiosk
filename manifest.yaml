@@ -5,7 +5,7 @@ id: kiosk
 name: OpenMasjid Kiosk
 tagline: Tap-to-donate kiosk for a wall-mounted tablet with a Stripe card reader
 category: donations
-version: 0.12.0-dev.2
+version: 0.12.0-dev.3
 author: OpenMasjid-Solutions
 license: AGPL-3.0-only
 icon: icon.svg
@@ -79,6 +79,29 @@ alerts:
   - id: test
     label: Test message
     description: A test you trigger from the app to confirm OpenMasjidOS is reaching you.
+# Things an authorised admin can run by messaging the masjid's WhatsApp number (!kiosk).
+# The PLATFORM renders the numbered menu from THIS ORDER and formats the reply; we only execute,
+# on POST /fabric/commands/run (see server/src/commands.ts, CLAUDE.md §18).
+#
+# READ-ONLY, every one of them. That is what makes the follow-up conversation safe: the platform's
+# exchange can end without telling us, and a question that only reads has nothing half-applied to
+# leave behind. None changes hardware state, so none needs `confirm: true`; none takes text up
+# front, so none declares an `argument:` (the takings drill-down is a follow-up question instead,
+# which means an admin need not remember what their kiosks are called).
+#
+# NO DONOR DETAILS ARE EVER SENT over this channel — amounts, times, kiosks and funds only. A
+# WhatsApp thread keeps a copy forever on at least two phones.
+commands:
+  - id: takings
+    label: What's been given
+    description: Today, this week, this month and all time — after refunds. Then per kiosk if you want it.
+  - id: kiosks
+    label: Are the kiosks working
+    description: Each tablet — online or not, its card reader, and its app version.
+  - id: recent
+    label: The last few donations
+    description: Amount, time, kiosk and fund for the five most recent. No donor details.
+
 # Learn our public address (GET /api/fabric/site → publicUrl + basePath) so a tablet at a
 # DIFFERENT site can be "remotely adopted" over the masjid's Cloudflare tunnel. We stay
 # base-path aware: the OS forwards the full /<basePath> prefix without stripping it.

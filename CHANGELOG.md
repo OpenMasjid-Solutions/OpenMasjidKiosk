@@ -7,18 +7,29 @@
 _Development builds ahead of 0.11.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.12.0 is released._
 
-- **Groundwork: an admin will be able to ask the kiosk questions over WhatsApp.** OpenMasjidOS can
-  now take admin commands sent to the masjid's own WhatsApp number and pass them to an app. That
-  matters for a kiosk more than for most apps: a kiosk is unattended hardware in a lobby, and when
-  a card reader stops responding the person who can fix it is usually not in the building. This
-  build adds the plumbing — the handler, the security around it, and the tests — so that
-  **nothing is visible or usable yet**; the actual list of commands is still to be decided, and no
-  commands are declared, so the kiosk will not appear in anyone's WhatsApp menu.
-  - **It is refused from the internet.** These commands can act on hardware, so the handler is
-    reachable only from the masjid's own network, even on a server that has Remote access turned
-    on. This needed a real fix rather than a review: the rule that keeps the admin panel off the
-    internet only ever examined `/api` addresses, and this new handler does not live under `/api`,
-    so it would have been reachable the day it shipped.
+- **Ask the kiosk how it's doing from WhatsApp.** OpenMasjidOS can now take admin commands sent to
+  the masjid's own WhatsApp number, and the kiosk answers three of them. That matters for a kiosk
+  more than for most apps: it is unattended hardware in a lobby, and when a card reader stops
+  responding the person who can fix it is usually not in the building. Message the masjid's number
+  with `!kiosk` and pick from the menu:
+  - **What's been given** — today, this week, this month and all time, after refunds, with the
+    number of gifts and the average. If you run more than one kiosk it then offers to break it down:
+    just reply with a kiosk's name, or "all". **No need to type another command** — the reply is
+    read as your answer. Get the name wrong and it tells you the options and lets you try once more.
+  - **Are the kiosks working** — every tablet, whether it has checked in, what its card reader is
+    doing and which app version it's on, led by a count of how many need attention. This is the one
+    worth sending when someone says the reader isn't taking cards.
+  - **The last few donations** — amount, time, kiosk and fund for the five most recent, so you can
+    see at a glance whether money is still coming in.
+  - **Donor details are never sent.** No name, no email, no card — a WhatsApp thread keeps a copy
+    forever on at least two phones. Amounts, times, kiosks and funds only.
+  - **Nothing can be changed from WhatsApp** — every one of these only reads. Turn it on in
+    OpenMasjidOS → Settings → WhatsApp → Commands, and add the people you trust.
+  - **It is refused from the internet.** This is where your takings live, so the handler answers
+    only on the masjid's own network — even on a server that has Remote access turned on. That
+    needed a real fix rather than a review: the rule that keeps the admin panel off the internet
+    only ever examined `/api` addresses, and this new handler does not live under `/api`, so it
+    would have been reachable the day it shipped.
   - **It cannot be run without OpenMasjidOS having issued this app its credential**, and it refuses
     rather than assuming when it has not been — a server not linked to OpenMasjidOS answers "not
     linked yet" instead of accepting an empty password from anyone on the network.

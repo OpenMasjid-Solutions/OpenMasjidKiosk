@@ -26,7 +26,7 @@ import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricS
 import { escapeHtml, renderMonthlyStarted, renderReceipt, renderRefund, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
-import { authorizeCommandCall, findCommand, runCommand, tidyReply } from './commands';
+import { authorizeCommandCall, buildCommands, findCommand, runCommand, tidyReply, validFollowUpToken } from './commands';
 import { blockedOverTunnel } from './tunnel';
 import { toCsv } from './csv';
 import {
@@ -61,6 +61,11 @@ import {
 const log = makeLog('main');
 
 const LOOPBACK_RE = /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[?::1)/i;
+
+/** A kiosk that hasn't checked in within this window is reported offline. Check-ins are every 10s,
+ *  so ~35s is three missed beats — long enough not to flap on one dropped packet. Module-level so
+ *  the Devices page and the WhatsApp `kiosks` command can never disagree about who is online. */
+const ONLINE_MS = 35_000;
 
 /** The download filename we hand the tablet — versioned so a stale cached copy is obvious.
  *  The URL path stays stable at /download/openmasjidkiosk.apk. */
@@ -213,6 +218,14 @@ async function main(): Promise<void> {
   //
   // Refused over the tunnel (tunnel.ts blocks all of /fabric), so the caller is always on the LAN.
   // See commands.ts for the two-header trust boundary and why an absent secret fails closed.
+  //
+  // `money` is passed as a closure rather than a value because formatMoney is defined further down
+  // this function; it is only ever called while handling a request, long after startup.
+  const commands = buildCommands({
+    store,
+    money: (minor, currency) => formatMoney(minor, currency),
+    onlineWithinMs: ONLINE_MS,
+  });
   app.post('/fabric/commands/run', async (req, reply) => {
     const auth = authorizeCommandCall(
       typeof req.headers['x-openmasjid-app-secret'] === 'string' ? (req.headers['x-openmasjid-app-secret'] as string) : undefined,
@@ -237,29 +250,39 @@ async function main(): Promise<void> {
         text: z.string().max(2000).optional(),
         requestId: z.string().max(120).optional(),
         locale: z.string().max(35).optional(),
+        // The token WE handed back last turn. Shape-checked on the way IN as well as out: it
+        // arrives in a request body and is compared against our own constants, so anything
+        // malformed is simply not one of ours and starts a fresh turn.
+        followUpToken: z.string().max(200).optional(),
       })
       .safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ ok: false, error: 'That command request wasn’t valid.' });
 
-    const cmd = findCommand(parsed.data.command);
+    const cmd = findCommand(commands, parsed.data.command);
     if (!cmd) {
-      // 404 + unknown_command is the contract's own signal, and it is the honest answer while the
-      // command set is still empty: the platform renders it rather than showing a broken menu.
+      // 404 + unknown_command is the contract's own signal: the platform renders it rather than
+      // leaving the sender with a menu entry that answers nothing.
       return reply.code(404).send({ ok: false, code: 'unknown_command' });
     }
 
+    const token = parsed.data.followUpToken ?? '';
     const ctx = {
       text: (parsed.data.text ?? '').trim(),
       requestId: parsed.data.requestId ?? '',
       locale: parsed.data.locale ?? 'en',
+      followUpToken: validFollowUpToken(token) ? token : '',
     };
     const result = await runCommand(cmd, ctx);
-    // Note it locally too: a command changes something on the masjid's hardware from outside the
-    // building, and the admin panel should be able to show that it happened.
     log.info(`command ${cmd.id} (${ctx.requestId || 'no id'}) -> ${result.ok ? 'ok' : 'failed'}`);
-    return result.ok
-      ? { ok: true, text: tidyReply(result.text) }
-      : reply.code(200).send({ ok: false, error: tidyReply(result.error) });
+    if (!result.ok) return reply.code(200).send({ ok: false, error: tidyReply(result.error) });
+    // Only echo a follow-up token we know the platform will accept. An invalid one is OUR bug, and
+    // sending it would surface as a conversation that silently stops answering — the hardest thing
+    // to diagnose from a chat window. Dropping it ends the exchange cleanly instead.
+    const next = result.followUp?.token;
+    if (next && !validFollowUpToken(next)) log.warn(`dropped a malformed follow-up token from ${cmd.id}`);
+    return next && validFollowUpToken(next)
+      ? { ok: true, text: tidyReply(result.text), followUp: { token: next } }
+      : { ok: true, text: tidyReply(result.text) };
   });
 
   // ── Public bootstrap the web app reads on load (no secrets) ─────────────────
@@ -636,7 +659,7 @@ async function main(): Promise<void> {
 
   // Kiosks heartbeat every ~10s; treat one as offline after ~3 missed beats (+ a little slack for
   // jitter) so a fallen/unplugged tablet shows offline in the admin panel within ~35s, not minutes.
-  const ONLINE_MS = 35_000;
+  // ONLINE_MS is module-level (top of file) so the WhatsApp `kiosks` command uses the same window.
   const deviceView = (d: Device) => ({
     ...d,
     online: !!d.lastSeen && Date.now() - Date.parse(d.lastSeen) < ONLINE_MS,

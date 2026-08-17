@@ -4,29 +4,73 @@
 // ADMIN COMMANDS FROM WHATSAPP.
 //
 // This is the first route the PLATFORM calls on us rather than the other way round, and the first
-// place this app checks a credential instead of presenting one. It can be made to act on hardware
-// in a building nobody is standing in, from a phone. So the transport is tested here even though
-// the command set itself is still empty — the rules have to be right BEFORE there is anything
-// worth running, not after.
+// place this app checks a credential instead of presenting one. It answers questions about a
+// masjid's money to a phone, so two things are tested here with equal weight: that only the
+// platform can ever reach it, and that what comes back is true, readable, and free of anything a
+// donor would not expect to find in someone's chat history.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
-  COMMANDS,
   COMMAND_BUDGET_MS,
   COMMAND_TEXT_MAX,
   COMMAND_TIMEOUT_MS,
+  FOLLOWUP_TOKEN_MAX,
   MAX_COMMANDS,
   PLATFORM_CALLER,
   authorizeCommandCall,
+  buildCommands,
   findCommand,
+  matchKiosk,
   runCommand,
   tidyReply,
   validCommandId,
+  validFollowUpToken,
+  type CommandStore,
   type KioskCommand,
 } from './commands';
 import { blockedOverTunnel } from './tunnel';
 
 const SECRET = 'a'.repeat(48);
+
+// ── A stand-in store, so the commands are tested on their wording and their arithmetic rather
+//    than on a database. Every field the commands read, and nothing else.
+function fakeStore(over: Partial<CommandStore> = {}): CommandStore {
+  return {
+    getCurrency: () => 'GBP',
+    donationTotals: () => ({
+      today: 12_00,
+      thisWeek: 43_00,
+      thisMonth: 191_00,
+      allTime: 1422_00,
+      count: 31,
+      average: 45_87,
+      byDevice: [
+        { deviceId: 'd1', deviceName: 'Foyer', amountMinor: 900_00, count: 20 },
+        { deviceId: 'd2', deviceName: 'Hall', amountMinor: 522_00, count: 11 },
+      ],
+    }),
+    listDevices: () => [
+      { id: 'd1', name: 'Foyer', lastSeen: new Date().toISOString(), readerStatus: 'connected', appVersion: '0.12.0', revoked: false },
+      { id: 'd2', name: 'Hall', lastSeen: new Date(Date.now() - 3 * 3600_000).toISOString(), readerStatus: 'disconnected', appVersion: '0.11.0', revoked: false },
+    ],
+    listDonations: () => [
+      { deviceName: 'Foyer', campaignTitle: 'General Fund', amountMinor: 10_00, currency: 'GBP', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
+      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 50_00, currency: 'GBP', kind: 'monthly', status: 'succeeded', createdAt: new Date(Date.now() - 90 * 60_000).toISOString() },
+    ],
+    ...over,
+  };
+}
+
+const money = (minor: number, currency: string) => `${currency === 'GBP' ? '£' : ''}${(minor / 100).toFixed(2)}`;
+const cmds = (over: Partial<CommandStore> = {}) => buildCommands({ store: fakeStore(over), money, onlineWithinMs: 35_000 });
+const turn = (text = '', followUpToken = '') => ({ text, requestId: 'r', locale: 'en', followUpToken });
+const run = async (id: string, text = '', token = '') => {
+  const list = cmds();
+  const c = findCommand(list, id);
+  assert.ok(c, `no command ${id}`);
+  return runCommand(c, turn(text, token));
+};
 
 test('both headers are required — neither alone is enough', () => {
   assert.deepEqual(authorizeCommandCall(SECRET, PLATFORM_CALLER, SECRET), { ok: true });
@@ -100,11 +144,12 @@ test('command ids are checked against the platform’s own rules', () => {
 });
 
 test('the declared command set obeys every rule the catalog build enforces', () => {
-  // Guards the moment a command IS added: a bad id or a duplicate should fail here, in one second,
-  // rather than at the catalog build after a push.
-  assert.ok(COMMANDS.length <= MAX_COMMANDS, 'a numbered menu longer than 12 does not fit in one message');
+  // A bad id or a duplicate should fail here, in one second, rather than at the catalog build
+  // after a push.
+  const list = cmds();
+  assert.ok(list.length <= MAX_COMMANDS, 'a numbered menu longer than 12 does not fit in one message');
   const seen = new Set<string>();
-  for (const c of COMMANDS) {
+  for (const c of list) {
     assert.ok(validCommandId(c.id), `invalid command id: ${c.id}`);
     assert.ok(!seen.has(c.id), `duplicate command id: ${c.id}`);
     seen.add(c.id);
@@ -112,13 +157,25 @@ test('the declared command set obeys every rule the catalog build enforces', () 
   }
 });
 
-test('an unknown command is not found — including while the set is empty', () => {
-  assert.equal(findCommand('reader-status'), null);
-  assert.equal(findCommand(''), null);
+test('the code and manifest.yaml declare the SAME commands', () => {
+  // The two halves are read by different things — the platform reads the manifest to build the
+  // menu, we read the code to answer — so drift shows up as a menu entry that replies "I don't
+  // know that one". Parsed rather than hard-coded, so adding a command to only one side fails.
+  const manifest = readFileSync(new URL('../../manifest.yaml', import.meta.url), 'utf8');
+  const block = manifest.slice(manifest.indexOf('\ncommands:'));
+  const declared = [...block.slice(0, block.indexOf('\ndomain:')).matchAll(/^\s+- id:\s*(\S+)/gm)].map((m) => m[1]);
+  assert.deepEqual(declared.slice().sort(), cmds().map((c) => c.id).sort());
+  for (const id of declared) assert.ok(validCommandId(id), `manifest declares an invalid id: ${id}`);
+});
+
+test('an unknown command is not found', () => {
+  const list = cmds();
+  assert.equal(findCommand(list, 'reader-status'), null);
+  assert.equal(findCommand(list, ''), null);
   // Not reachable through prototype keys, which is the classic way a registry lookup goes wrong.
-  assert.equal(findCommand('toString'), null);
-  assert.equal(findCommand('constructor'), null);
-  assert.equal(findCommand('__proto__'), null);
+  assert.equal(findCommand(list, 'toString'), null);
+  assert.equal(findCommand(list, 'constructor'), null);
+  assert.equal(findCommand(list, '__proto__'), null);
 });
 
 test('our own budget sits inside the platform’s timeout', () => {
@@ -188,4 +245,255 @@ test('empty and odd replies do not throw', () => {
   assert.equal(tidyReply(''), '');
   assert.equal(tidyReply('\n\n\n'), '');
   assert.equal(tidyReply(undefined as unknown as string), '');
+});
+
+// ── The stats commands themselves ────────────────────────────────────────────
+
+test('takings answers in full on the first turn, then offers to narrow down', async () => {
+  // The most-used command must not interrogate anyone: the numbers come first, and the follow-up
+  // is an offer, not a gate.
+  const r = await run('takings');
+  assert.equal(r.ok, true);
+  const text = r.ok ? r.text : '';
+  assert.match(text, /Today: £12\.00/);
+  assert.match(text, /This week: £43\.00/);
+  assert.match(text, /This month: £191\.00/);
+  assert.match(text, /All time: £1422\.00 from 31 gifts/);
+  assert.match(text, /after refunds/i, 'says which figure it is, so nobody quotes gross to a committee');
+  assert.ok(r.ok && r.followUp, 'offers the drill-down when there is more than one kiosk');
+  assert.equal(r.ok && r.followUp?.token, 'takings:pick');
+});
+
+test('takings does NOT ask anything when there is only one kiosk', async () => {
+  // Nothing to choose between, so asking would be a wasted turn on a phone.
+  const one = buildCommands({
+    store: fakeStore({
+      donationTotals: () => ({
+        today: 0,
+        thisWeek: 0,
+        thisMonth: 500,
+        allTime: 500,
+        count: 1,
+        average: 500,
+        byDevice: [{ deviceId: 'd1', deviceName: 'Foyer', amountMinor: 500, count: 1 }],
+      }),
+    }),
+    money,
+    onlineWithinMs: 35_000,
+  });
+  const r = await runCommand(findCommand(one, 'takings')!, turn());
+  assert.equal(r.ok, true);
+  assert.equal(r.ok && r.followUp, undefined);
+});
+
+test('the follow-up turn resolves a kiosk name, and ends the exchange', async () => {
+  const r = await run('takings', 'Foyer', 'takings:pick');
+  assert.equal(r.ok, true);
+  assert.match(r.ok ? r.text : '', /Foyer — £900\.00 from 20 gifts/);
+  assert.equal(r.ok && r.followUp, undefined, 'answered, so stop capturing their conversation');
+});
+
+test('a partial or differently-cased kiosk name still resolves', async () => {
+  for (const typed of ['foyer', 'FOYER', ' foy ', 'hal']) {
+    const r = await run('takings', typed, 'takings:pick');
+    assert.equal(r.ok, true, typed);
+    assert.match(r.ok ? r.text : '', /—/, typed);
+  }
+});
+
+test('"all" lists every kiosk', async () => {
+  const r = await run('takings', 'all', 'takings:pick');
+  assert.equal(r.ok, true);
+  const text = r.ok ? r.text : '';
+  assert.match(text, /Foyer — £900\.00/);
+  assert.match(text, /Hall — £522\.00/);
+  assert.equal(r.ok && r.followUp, undefined);
+});
+
+test('an unrecognised name gets ONE more go, then stops', async () => {
+  // A typo should not mean starting over — but nor should we keep reading their messages forever
+  // over a name we are not going to guess. The step lives in the token; we hold no state.
+  const first = await run('takings', 'kitchen', 'takings:pick');
+  assert.equal(first.ok, true);
+  assert.match(first.ok ? first.text : '', /kiosk called "kitchen"/i);
+  assert.match(first.ok ? first.text : '', /Foyer, Hall/, 'and says what the options are');
+  assert.equal(first.ok && first.followUp?.token, 'takings:pick2');
+
+  const second = await run('takings', 'kitchen', 'takings:pick2');
+  assert.equal(second.ok, true);
+  assert.equal(second.ok && second.followUp, undefined, 'second miss ends it');
+  assert.match(second.ok ? second.text : '', /Run the command again/i);
+});
+
+test('an ambiguous name resolves to nothing rather than the wrong kiosk', () => {
+  const list = [{ deviceName: 'Hall North' }, { deviceName: 'Hall South' }];
+  assert.equal(matchKiosk('hall', list), null, 'two matches is not a match');
+  assert.equal(matchKiosk('north', list)?.deviceName, 'Hall North');
+  assert.equal(matchKiosk('', list), null);
+  assert.equal(matchKiosk('   ', list), null);
+  // An exact name wins even when it is also a prefix of another.
+  assert.equal(matchKiosk('Hall North', list)?.deviceName, 'Hall North');
+});
+
+test('a stray follow-up token is ignored and treated as a fresh turn', async () => {
+  // The platform could hand back a token from an exchange we no longer recognise. It must read as
+  // "start again", never as an answer to a question we did not ask.
+  const r = await run('takings', 'Foyer', 'someone-elses-token');
+  assert.equal(r.ok, true);
+  assert.match(r.ok ? r.text : '', /Today: £12\.00/, 'gave the headline figures, not a drill-down');
+});
+
+test('kiosks leads with what needs attention', async () => {
+  const r = await run('kiosks');
+  assert.equal(r.ok, true);
+  const text = r.ok ? r.text : '';
+  assert.match(text, /1 of 2 need attention/);
+  assert.match(text, /Foyer — online, reader connected, v0\.12\.0/);
+  assert.match(text, /Hall — OFFLINE \(last seen 3h ago\), NO READER, v0\.11\.0/);
+  assert.equal(r.ok && r.followUp, undefined);
+});
+
+test('kiosks says so plainly when all is well, and when there are none', async () => {
+  const healthy = buildCommands({
+    store: fakeStore({
+      listDevices: () => [
+        { id: 'd1', name: 'Foyer', lastSeen: new Date().toISOString(), readerStatus: 'connected', appVersion: '0.12.0', revoked: false },
+      ],
+    }),
+    money,
+    onlineWithinMs: 35_000,
+  });
+  const ok = await runCommand(findCommand(healthy, 'kiosks')!, turn());
+  assert.match(ok.ok ? ok.text : '', /All 1 kiosk/);
+
+  const none = buildCommands({ store: fakeStore({ listDevices: () => [] }), money, onlineWithinMs: 35_000 });
+  const empty = await runCommand(findCommand(none, 'kiosks')!, turn());
+  assert.match(empty.ok ? empty.text : '', /No kiosks are paired yet/);
+});
+
+test('a revoked kiosk is not reported as offline hardware', async () => {
+  // Revoking is how an admin retires a tablet. Listing it forever as a fault would train them to
+  // ignore the one command whose whole job is flagging faults.
+  const withRevoked = buildCommands({
+    store: fakeStore({
+      listDevices: () => [
+        { id: 'd1', name: 'Foyer', lastSeen: new Date().toISOString(), readerStatus: 'connected', appVersion: '0.12.0', revoked: false },
+        { id: 'd9', name: 'Old tablet', lastSeen: '2020-01-01T00:00:00.000Z', readerStatus: 'disconnected', appVersion: '0.1.0', revoked: true },
+      ],
+    }),
+    money,
+    onlineWithinMs: 35_000,
+  });
+  const r = await runCommand(findCommand(withRevoked, 'kiosks')!, turn());
+  assert.ok(!(r.ok ? r.text : '').includes('Old tablet'));
+});
+
+test('recent lists the last few gifts and NEVER a donor', async () => {
+  const r = await run('recent');
+  assert.equal(r.ok, true);
+  const text = r.ok ? r.text : '';
+  assert.match(text, /£10\.00/);
+  assert.match(text, /Foyer/);
+  assert.match(text, /General Fund/);
+  assert.match(text, /monthly/, 'a standing order is worth distinguishing');
+  assert.ok(!/@/.test(text), 'no email address');
+});
+
+test('NO DONOR IDENTITY reaches WhatsApp from any command', async () => {
+  // A chat thread keeps a copy forever on at least two phones, which is why the platform refuses
+  // to hand out app logs over this channel. The same reasoning binds us.
+  const nosy = fakeStore({
+    listDonations: () => [
+      {
+        deviceName: 'Foyer',
+        campaignTitle: 'General Fund',
+        amountMinor: 1000,
+        currency: 'GBP',
+        kind: 'one_time',
+        status: 'succeeded',
+        createdAt: new Date().toISOString(),
+        // Fields a future refactor might spread in by accident:
+        donorName: 'Aisha Rahman',
+        donorEmail: 'aisha@example.com',
+        cardLast4: '4242',
+      } as never,
+    ],
+  });
+  const list = buildCommands({ store: nosy, money, onlineWithinMs: 35_000 });
+  for (const c of list) {
+    const r = await runCommand(c, turn());
+    const text = r.ok ? r.text : r.error;
+    assert.ok(!text.includes('Aisha'), c.id + ' leaked a donor name');
+    assert.ok(!text.includes('aisha@example.com'), c.id + ' leaked an email');
+    assert.ok(!text.includes('4242'), c.id + ' leaked card digits');
+  }
+});
+
+test('every command copes with an empty install', async () => {
+  const blank = fakeStore({
+    donationTotals: () => ({ today: 0, thisWeek: 0, thisMonth: 0, allTime: 0, count: 0, average: 0, byDevice: [] }),
+    listDevices: () => [],
+    listDonations: () => [],
+  });
+  for (const c of buildCommands({ store: blank, money, onlineWithinMs: 35_000 })) {
+    const r = await runCommand(c, turn());
+    assert.equal(r.ok, true, c.id + ' failed on an empty install');
+    const text = r.ok ? r.text : '';
+    assert.ok(text.length > 0 && text.length < COMMAND_TEXT_MAX, c.id + ' said nothing useful');
+    assert.ok(!/NaN|undefined|null/.test(text), c.id + ' rendered a placeholder: ' + text);
+  }
+});
+
+test('every reply fits in a WhatsApp message even with a big fleet', async () => {
+  const many = fakeStore({
+    listDevices: () =>
+      Array.from({ length: 40 }, (_, i) => ({
+        id: 'd' + i,
+        name: 'Kiosk number ' + i,
+        lastSeen: new Date().toISOString(),
+        readerStatus: 'connected',
+        appVersion: '0.12.0',
+        revoked: false,
+      })),
+  });
+  const list = buildCommands({ store: many, money, onlineWithinMs: 35_000 });
+  const r = await runCommand(findCommand(list, 'kiosks')!, turn());
+  // tidyReply is what the route applies; the cap must hold after it.
+  assert.ok(tidyReply(r.ok ? r.text : '').length <= COMMAND_TEXT_MAX);
+});
+
+// ── Follow-up tokens ─────────────────────────────────────────────────────────
+
+test('follow-up tokens are validated before we ever echo one', () => {
+  // Ours land in a later request body, so a malformed one is our bug surfacing as a conversation
+  // that silently stops answering.
+  assert.equal(validFollowUpToken('takings:pick'), true);
+  assert.equal(validFollowUpToken('A1.b-c:d'), true);
+  assert.equal(validFollowUpToken('x'.repeat(FOLLOWUP_TOKEN_MAX)), true);
+
+  assert.equal(validFollowUpToken(''), false);
+  assert.equal(validFollowUpToken('x'.repeat(FOLLOWUP_TOKEN_MAX + 1)), false);
+  assert.equal(validFollowUpToken('has space'), false);
+  assert.equal(validFollowUpToken('new\nline'), false);
+  assert.equal(validFollowUpToken('quote"'), false);
+  assert.equal(validFollowUpToken('brace{}'), false);
+  assert.equal(validFollowUpToken(undefined as unknown as string), false);
+});
+
+test('the tokens the commands actually emit are all valid', async () => {
+  // Belt and braces: whatever a handler returns must pass the same check the route applies, or the
+  // route would drop it and the conversation would end a turn early for no visible reason.
+  const emitted = [await run('takings'), await run('takings', 'nope', 'takings:pick')];
+  for (const r of emitted) {
+    const tok = r.ok ? r.followUp?.token : undefined;
+    if (tok) assert.ok(validFollowUpToken(tok), 'emitted an invalid token: ' + tok);
+  }
+});
+
+test('a failed turn can never carry a follow-up', () => {
+  // The type forbids it, and the platform ends the exchange on ok:false regardless — so a failure
+  // cannot leave someone's ordinary conversation being read as input. Encoded so a later refactor
+  // that widens the type has to think about it.
+  const failure: Awaited<ReturnType<KioskCommand['run']>> = { ok: false, error: 'nope' };
+  assert.equal('followUp' in failure, false);
 });

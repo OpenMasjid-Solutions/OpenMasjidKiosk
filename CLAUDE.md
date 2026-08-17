@@ -435,6 +435,18 @@ An admin messages the masjid's number and gets an answer about hardware nobody i
 The platform decides who may run what, renders the numbered menu **from our manifest order**, asks
 for confirmation, and formats the reply. **We do not build a menu.** We execute one command.
 
+**The command set is three read-only questions** (`takings`, `kiosks`, `recent`) — declared in
+`manifest.yaml` and implemented in `buildCommands()`. A test parses the manifest and asserts the two
+lists match, because drift shows up as a menu entry that answers "I don't know that one".
+
+**Every command only reads, and that is a design decision rather than a starting point.** It is what
+makes the follow-up conversation safe: see below.
+
+**No donor identity is ever sent** — amounts, times, kiosks and funds only, never a name, an email
+or a card. A WhatsApp thread keeps a copy forever on at least two phones, which is exactly why the
+platform refuses to hand out app logs over this channel. A test feeds the commands a store whose
+rows carry a donor name, email and card digits and asserts none of it reaches any reply.
+
 Code: `server/src/commands.ts` (registry + pure rules), the route in `index.ts`, tests in
 `commands.test.ts`. Rules that will bite if missed:
 
@@ -463,6 +475,40 @@ Code: `server/src/commands.ts` (registry + pure rules), the route in `index.ts`,
 
 The platform already offers `!os restart <app>`, which restarts our whole container. A kiosk-level
 command is the finer-grained, more useful thing.
+
+### Follow-up questions (platform v0.51.0-dev.11+)
+
+Return `followUp: { token }` beside your text and the platform treats the sender's **next message**
+as an answer — no `!` prefix — and posts it back with `followUpToken` set. Omit `followUp` to finish.
+
+**The token is the only state that survives a turn.** The platform stores it against that one sender
+and keeps nothing else about the flow, so whatever a step needs to remember has to be encoded in it.
+`takings` uses exactly that: `takings:pick` for the first ask and `takings:pick2` for the one retry
+after a typo, so the retry counter lives in the token and this app holds no conversation state at
+all. Charset `A-Za-z0-9._:-`, ≤128 chars.
+
+**Validate a token before echoing it** (`validFollowUpToken`). It lands in a later request body, so
+a malformed one is our bug arriving as a platform error — and the symptom is a conversation that
+silently stops answering, which is near-undiagnosable from a chat window. The route drops an invalid
+token rather than sending it, ending the exchange cleanly instead of half-opening one.
+
+**THE THING THAT WILL BITE: the exchange can end without you.** Three minutes idle, fifteen minutes
+total, twelve turns, the sender typing `exit`/`cancel`/`done`, or starting any new `!` command. You
+just stop receiving answers, with no notification. **Never leave a half-applied change waiting on a
+reply that may not come** — apply on the last answer, or keep your own draft with its own expiry.
+
+This is the strongest argument for the command set being read-only: a question that only reads has
+nothing to half-apply, so an abandoned conversation costs nothing and needs no draft, no expiry and
+no reconciliation. **The day a command starts writing, that stops being free** — and that is the
+moment to add a draft with its own expiry rather than trusting the sender to finish.
+
+Also: **any `ok:false` ends the exchange**, which is why `CommandResult` only permits `followUp` on
+the success side — a failed turn must never leave someone's ordinary conversation being read as
+input. **Ask one thing at a time**; these are WhatsApp messages, not a form. And the sender is
+re-authorised every turn, so a permission removed mid-conversation takes effect immediately.
+
+A stray or unrecognised token must read as a **fresh turn**, never as an answer to a question we did
+not ask — the route blanks anything that is not one of ours, and a test covers it.
 
 ### What we deliberately do NOT do
 
