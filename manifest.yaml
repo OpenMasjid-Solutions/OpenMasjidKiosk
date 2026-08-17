@@ -5,7 +5,7 @@ id: kiosk
 name: OpenMasjid Kiosk
 tagline: Tap-to-donate kiosk for a wall-mounted tablet with a Stripe card reader
 category: donations
-version: 0.12.0-dev.3
+version: 0.12.0-dev.4
 author: OpenMasjid-Solutions
 license: AGPL-3.0-only
 icon: icon.svg
@@ -57,9 +57,21 @@ notifications: true
 # no provider is set up we leave Stripe's own receipt in place, so a donor is never left
 # with none.
 email: true
+# Send WhatsApp through the platform's paced queue (POST /api/fabric/whatsapp). Used ONLY for
+# admin alerts the admin has explicitly switched on, per alert, with a number they entered in our
+# own Settings → Notifications — never for donors, and there is no phone field anywhere in the
+# giving flow. Off for every alert until they turn it on. We never see the gateway, its
+# credentials, or the masjid's number; the platform paces everything because ban risk attaches to
+# the NUMBER. Delivery is "queued", not "sent", so nothing here is ever depended on.
+whatsapp: true
 # Admin alerts we can raise (POST /api/fabric/alert). The admin picks the channel
 # (email/webhook/both/off) per alert in OpenMasjidOS → Settings → Alerts; declaring an alert
 # here is the opt-in. Each fails soft — a muted alert is normal, never an error.
+#
+# THIS APP ALSO HAS ITS OWN per-alert routing (Settings → Notifications): the platform relay above
+# stays ON by default, and on top of it each alert can carry a direct email address and a WhatsApp
+# number. The platform's matrix routes to the admin's ONE address and has no WhatsApp column for
+# apps; a masjid needs "reader offline" to reach the caretaker and "refund" to reach the treasurer.
 alerts:
   - id: reader-offline
     label: Card reader offline
@@ -78,7 +90,7 @@ alerts:
     description: An admin gave a donation back from the Donations screen — says how much, to whom, whether the donor was emailed, and whether a monthly plan is still running.
   - id: test
     label: Test message
-    description: A test you trigger from the app to confirm OpenMasjidOS is reaching you.
+    description: A test you trigger from the app's Settings → Notifications, to confirm your alerts are reaching you. It follows the same per-alert routing a real one does.
 # Things an authorised admin can run by messaging the masjid's WhatsApp number (!kiosk).
 # The PLATFORM renders the numbered menu from THIS ORDER and formats the reply; we only execute,
 # on POST /fabric/commands/run (see server/src/commands.ts, CLAUDE.md §18).

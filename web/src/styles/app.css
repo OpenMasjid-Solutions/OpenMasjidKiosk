@@ -830,3 +830,24 @@ button.status-pill:hover { filter: brightness(1.08); }
   width: 8.5rem; flex: none; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: lowercase;
 }
 .color-hex[aria-invalid="true"] { box-shadow: inset 0 0 0 1px var(--color-danger); }
+
+/* ── Settings → Notifications (per-alert routing) ─────────────────────────── */
+/* One block per alert: the name and what it means, then the channels it can go to. The channels
+   wrap on a narrow screen rather than scrolling sideways, since this is often opened on a phone
+   while standing next to the kiosk that has just gone quiet. */
+.alert-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.9rem; }
+.alert-row { border: 1px solid var(--color-border); border-radius: 12px; padding: 0.85rem 0.9rem; background: var(--glass-bg-inset); }
+.alert-row__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
+.alert-row__desc { margin: 0.15rem 0 0; font-size: 0.85rem; }
+.alert-row__hint { margin: 0.55rem 0 0; font-size: 0.82rem; display: flex; align-items: center; gap: 0.35rem; }
+.alert-row__channels {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin-top: 0.7rem;
+}
+.alert-ch { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
+.alert-ch span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.alert-ch--wide { flex: 1 1 15rem; min-width: 0; }
+.alert-ch--wide .input { flex: 1 1 auto; min-width: 0; }
+.alert-ch__label { font-size: 0.82rem; color: var(--color-ink-muted); white-space: nowrap; }
+/* A disabled channel (no WhatsApp gateway on this server) should read as "not available here",
+   not as something the admin failed to fill in. */
+.alert-ch input:disabled, .alert-ch input:disabled + span { opacity: 0.5; cursor: not-allowed; }

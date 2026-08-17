@@ -247,6 +247,111 @@ export async function fabricAlert(
   }
 }
 
+// ── WhatsApp, through the platform's paced queue (manifest `whatsapp: true`) ──
+// We never see the gateway, its credentials, or the masjid's number. Ban risk attaches to the
+// NUMBER, so the platform owns a single serialised queue shared by every app and by its own alerts:
+// randomised gaps, typing indicators, per-recipient cooldowns, hourly/daily caps, a warm-up ramp,
+// and quiet hours that queue rather than drop. That is why success here is `202 { queued: true }`
+// and never "sent" — delivery is seconds to hours away, so NOTHING auth-critical may depend on it.
+
+export type WhatsAppReason = 'ready' | 'not-configured' | 'not-linked' | 'unreachable';
+
+export interface WhatsAppStatus {
+  available: boolean;
+  reason: WhatsAppReason;
+}
+
+let waCache: { at: number; value: WhatsAppStatus } | null = null;
+const WA_CACHE_MS = 60_000;
+
+/**
+ * Can this masjid send WhatsApp at all?
+ *
+ * Asked before offering the feature, so a toggle is never live on an install where it could only
+ * ever fail at the moment a real alert was due. Cached for a minute: the settings screen polls it
+ * and a masjid does not link a phone twice a minute.
+ */
+export async function fabricWhatsAppStatus(force = false): Promise<WhatsAppStatus> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { available: false, reason: 'not-configured' };
+  const now = Date.now();
+  if (!force && waCache && now - waCache.at < WA_CACHE_MS) return waCache.value;
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp`, {
+      headers: { 'x-openmasjid-app-secret': config.omosAppSecret },
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    // A platform too old to know about WhatsApp 404s here. That is "not set up", not an error.
+    if (!res.ok) {
+      const value: WhatsAppStatus = { available: false, reason: res.status === 404 ? 'not-configured' : 'unreachable' };
+      waCache = { at: now, value };
+      return value;
+    }
+    const j = (await res.json().catch(() => ({}))) as { available?: boolean; reason?: string };
+    const reason: WhatsAppReason =
+      j.reason === 'ready' || j.reason === 'not-configured' || j.reason === 'not-linked' || j.reason === 'unreachable'
+        ? j.reason
+        : j.available === true
+          ? 'ready'
+          : 'not-configured';
+    const value: WhatsAppStatus = { available: j.available === true, reason };
+    waCache = { at: now, value };
+    return value;
+  } catch (err) {
+    log.debug(`Fabric whatsapp status failed: ${err instanceof Error ? err.message : String(err)}`);
+    const value: WhatsAppStatus = { available: false, reason: 'unreachable' };
+    waCache = { at: now, value };
+    return value;
+  }
+}
+
+/** Drop the cached availability so the next read re-asks (called when the admin presses Refresh). */
+export function clearWhatsAppCache(): void {
+  waCache = null;
+}
+
+/**
+ * Queue one WhatsApp message to one person.
+ *
+ * ONE recipient per call, by the shape of the platform's API — the API discourages a blast, and so
+ * does this. `to` must be digits in international form with no plus; the platform refuses a number
+ * with no country code rather than guessing one, which is why [normalisePhone] refuses too.
+ *
+ * `queued: true` means ACCEPTED FOR LATER, not delivered. Fails soft in every case: an alert that
+ * could not be queued must never disturb the donation, refund or reader event that raised it.
+ */
+export async function fabricWhatsApp(to: string, text: string): Promise<{ queued: boolean; reason?: string }> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { queued: false, reason: 'no-fabric' };
+  if (!to.trim() || !text.trim()) return { queued: false, reason: 'empty' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-openmasjid-app-secret': config.omosAppSecret },
+      body: JSON.stringify({ to, text }),
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) {
+      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      log.debug(`whatsapp send refused (${res.status}): ${j.error ?? ''}`);
+      return { queued: false, reason: j.error || `http_${res.status}` };
+    }
+    const j = (await res.json().catch(() => ({}))) as { queued?: boolean; error?: string };
+    return j.queued === true ? { queued: true } : { queued: false, reason: j.error || 'refused' };
+  } catch (err) {
+    log.debug(`Fabric whatsapp send failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { queued: false, reason: 'unreachable' };
+  }
+}
+
 /** Pull the platform's session token out of the raw Cookie header. */
 function omosCookie(cookieHeader: string | undefined): string | null {
   if (!cookieHeader) return null;

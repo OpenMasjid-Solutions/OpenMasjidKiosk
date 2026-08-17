@@ -510,16 +510,50 @@ re-authorised every turn, so a permission removed mid-conversation takes effect 
 A stray or unrecognised token must read as a **fresh turn**, never as an answer to a question we did
 not ask — the route blanks anything that is not one of ours, and a test covers it.
 
+### Sending: per-alert routing lives in OUR settings (`whatsapp: true`)
+
+The platform's alerts matrix has **no WhatsApp column for apps**, on purpose — it routes to the
+admin's single number and the platform cannot know which person a given app's alert is about. So
+recipient choice is ours, and lives in **Settings → Notifications** (`server/src/alerts.ts`,
+`web/src/alerts.tsx`). Each declared alert carries an `AlertRoute`:
+
+| Field | Default | What it does |
+|---|---|---|
+| `os` | **true** | Relay via `POST /api/fabric/alert` → the platform's own matrix (email/webhook/off) |
+| `email` | `''` | **Also** email this address directly, via the Fabric email provider |
+| `whatsapp` | **false** | **Also** send a WhatsApp |
+| `phone` | `''` | Where to. Digits, international, no plus |
+
+**The three are ADDITIVE and each fails soft independently.** An alert exists to tell someone
+something is wrong, so one channel being broken must never suppress another, and none may disturb
+the donation, refund or reader event that raised it.
+
+**The defaults are the load-bearing part.** `os: true` everywhere means an upgrade changes nothing —
+nobody has to visit the new screen to keep the alerts they rely on. `whatsapp: false` means the new
+channel is opt-in per alert, which is right for a channel that spends the masjid's own number's
+reputation. Both are pinned by tests, as is "an alert added in a later release arrives at its
+default rather than missing from the saved blob".
+
+**Every alert goes through `raiseAlert`/`alert()` in `index.ts` — never `fabricAlert` directly**, or
+the admin's choices are bypassed. Including the in-app **Send test**, which follows the same routing
+on purpose: a test that took a different path would prove nothing about their configuration.
+
+**A phone number with no country code is REFUSED, not guessed at.** The platform refuses one rather
+than guessing, and so must we — a UK admin typing `07700 900123` means +44, but assuming that would
+one day message a stranger in another country. A refused number does not wipe the saved one (a box
+that empties itself reads as the app losing it, and they retype the same number).
+
+`routeSummary()` reports what a route will *actually* do, so "WhatsApp on" with no number shows as
+sending nothing rather than looking covered.
+
 ### What we deliberately do NOT do
 
-- **No `whatsapp: true`.** We send nothing, so declaring the capability would break §12's rule that
-  a flag must be matched by real handling. Add it the day there is something to send.
 - **No donor phone numbers, and no phone field on the kiosk** (maintainer, 2026-08-16). A donor at a
-  kiosk gave their number for a receipt, not for announcements. If that ever changes: receipts
-  one-to-one only, nothing else without a separate explicit opt-in.
-- **Do not expect a WhatsApp column in the alerts matrix.** There isn't one for apps, on purpose —
-  it routes to the admin's single number and the platform cannot know which person an alert is
-  about. Recipient choice would live in *our* settings. Email and the webhook remain the channels
-  for genuine "tell the admin" cases.
+  kiosk gave their details for a receipt, not for announcements. WhatsApp here reaches **only the
+  numbers an admin typed into Settings → Notifications**. If that ever changes: receipts one-to-one
+  only, nothing else without a separate explicit opt-in.
+- **Never depend on a WhatsApp send.** `202 { queued: true }` means accepted for later — the
+  platform paces everything (randomised gaps, cooldowns, caps, quiet hours), so delivery is seconds
+  to hours away. Email stays the fallback and nothing auth-critical may ride on it.
 
 Full contract: OpenMasjidOS `docs/WHATSAPP.md` and `docs/APP_MANIFEST_SPEC.md`, **dev** branch.

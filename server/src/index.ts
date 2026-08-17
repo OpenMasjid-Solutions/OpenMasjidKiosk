@@ -22,7 +22,8 @@ import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
 import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus, emailCanSend } from './fabric';
+import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppStatus, clearWhatsAppCache, emailStatus, emailCanSend } from './fabric';
+import { ALERT_META, DEFAULT_ROUTE, alertEmailLooksValid, isAlertId, normalisePhone, phoneLooksValid, routeSummary, type AlertId } from './alerts';
 import { escapeHtml, renderMonthlyStarted, renderReceipt, renderRefund, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
@@ -559,18 +560,103 @@ async function main(): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: 'Please check the details and try again.' });
     return { data: emailReceiptView(store.setEmailReceipt(parsed.data)) };
   });
-  // In-app "send me a test": fire the declared `test` alert. The platform delivers it to the ADMIN's
-  // own email + webhook (per their Settings → Alerts matrix) — the app never learns the admin's
-  // address. (Donor receipts still go via /api/fabric/email with the donor's address; the admin's
-  // email is never exposed to apps, so this alert is the only way the app can reach the admin.)
+  // ── Raising an alert: one entry point, three possible destinations ──────────
+  // EVERY alert in this app goes through here rather than calling fabricAlert directly, so the
+  // admin's per-alert choices (Settings → Notifications) are impossible to bypass by accident.
+  //
+  // The three channels are ADDITIVE and independent, and each fails soft on its own. That is the
+  // whole point: an alert exists to tell someone something is wrong, so one channel being broken
+  // must never suppress the others, and none of them may ever disturb the donation, refund or
+  // reader event that raised it. Hence every path is caught and nothing is awaited by the caller.
+  const raiseAlert = async (
+    id: AlertId,
+    title: string,
+    text: string,
+    level: 'info' | 'success' | 'warning' | 'error' = 'warning',
+  ): Promise<{ os: boolean; email: boolean; whatsapp: boolean; reasons: string[] }> => {
+    const route = store.getAlertRoutes()[id] ?? DEFAULT_ROUTE;
+    const reasons: string[] = [];
+    let os = false;
+    let email = false;
+    let whatsapp = false;
+
+    if (route.os) {
+      const r = await fabricAlert(id, title, text, level).catch(() => ({ delivered: false, reason: 'threw' }));
+      os = r.delivered;
+      if (!r.delivered && r.reason) reasons.push(`OpenMasjidOS: ${r.reason}`);
+    }
+    if (alertEmailLooksValid(route.email)) {
+      // Plain text on purpose. An alert is one paragraph read on a phone at an awkward moment; a
+      // branded HTML shell would add nothing and one more thing to render wrong.
+      const r = await fabricEmail({ to: route.email.trim(), subject: title, text }).catch(() => ({ sent: false, reason: 'threw' }));
+      email = r.sent;
+      if (!r.sent && r.reason) reasons.push(`email: ${r.reason}`);
+    }
+    const digits = route.whatsapp ? normalisePhone(route.phone) : '';
+    if (digits) {
+      // The platform paces and queues; `queued` means accepted for later, never delivered.
+      const r = await fabricWhatsApp(digits, `${title}\n\n${text}`).catch(() => ({ queued: false, reason: 'threw' }));
+      whatsapp = r.queued;
+      if (!r.queued && r.reason) reasons.push(`WhatsApp: ${r.reason}`);
+    }
+    if (reasons.length) log.warn(`alert ${id} partially undelivered — ${reasons.join('; ')}`);
+    return { os, email, whatsapp, reasons };
+  };
+
+  // Fire-and-forget wrapper for the call sites that must never block on an alert.
+  const alert = (id: AlertId, title: string, text: string, level: 'info' | 'success' | 'warning' | 'error' = 'warning'): void => {
+    void raiseAlert(id, title, text, level).catch(() => {});
+  };
+
+  // ── Notification settings: where each alert goes ────────────────────────────
+  const alertsView = async () => ({
+    alerts: ALERT_META.map((m) => ({ ...m, route: store.getAlertRoutes()[m.id], summary: routeSummary(store.getAlertRoutes()[m.id]) })),
+    whatsapp: await fabricWhatsAppStatus(),
+    embedded: ssoConfigured(),
+    emailStatus: emailStatus(),
+  });
+  app.get('/api/admin/alerts', { preHandler: requireAdmin }, async () => ({ data: await alertsView() }));
+  app.put('/api/admin/alerts/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = String((req.params as { id: string }).id || '');
+    if (!isAlertId(id)) return reply.code(404).send({ error: 'No such notification.' });
+    const parsed = z
+      .object({
+        os: z.boolean().optional(),
+        email: z.string().max(200).optional(),
+        whatsapp: z.boolean().optional(),
+        phone: z.string().max(40).optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check those details.' });
+    // Tell the admin WHY rather than saving a blank: a phone box that empties itself on save looks
+    // like the app lost it, and they would try again with the same number.
+    const p = parsed.data;
+    if (p.phone && p.phone.trim() && !phoneLooksValid(p.phone)) {
+      return reply.code(400).send({ error: 'That number needs its country code and no leading zero — e.g. +44 7700 900123 or +1 555 010 1234.' });
+    }
+    if (p.email && p.email.trim() && !alertEmailLooksValid(p.email)) {
+      return reply.code(400).send({ error: 'That doesn’t look like an email address.' });
+    }
+    store.setAlertRoute(id, p);
+    await audit(req, 'alert-route-changed', id, `os=${p.os ?? '-'} email=${p.email ? 'set' : '-'} whatsapp=${p.whatsapp ?? '-'}`);
+    return { data: await alertsView() };
+  });
+  app.post('/api/admin/alerts/whatsapp/refresh', { preHandler: requireAdmin }, async () => {
+    clearWhatsAppCache();
+    return { data: { whatsapp: await fabricWhatsAppStatus(true) } };
+  });
+
+  // In-app "send me a test": fire the declared `test` alert THROUGH THE SAME ROUTING as a real one,
+  // so what it proves is the admin's actual configuration — not merely that the platform is up. A
+  // test that took a different path would be the least useful kind of test.
   app.post('/api/admin/test-alert', { preHandler: requireAdmin }, async () => {
-    const res = await fabricAlert(
+    const res = await raiseAlert(
       'test',
       'Test from OpenMasjid Kiosk',
-      'If you received this, OpenMasjidOS is reaching you by email/webhook. Your donation receipts go to donors through the same email provider.',
+      'If you received this, your kiosk notifications are reaching you on this channel. Nothing is wrong — you pressed Send test.',
       'info',
     );
-    return { data: res };
+    return { data: { ...res, delivered: res.os || res.email || res.whatsapp } };
   });
 
   // ── Terminal Locations (a reader must connect with a locationId) ─────────────
@@ -1268,8 +1354,9 @@ async function main(): Promise<void> {
       }
     }
 
-    // ── The admin: one alert, which OpenMasjidOS fans out to email and/or webhook per their choice ──
-    void fabricAlert(
+    // ── The admin: one alert, fanned out per Settings → Notifications (OpenMasjidOS, a direct
+    //    email address, and/or WhatsApp — whichever they turned on for THIS alert) ──
+    alert(
       'donation-refunded',
       'A donation was refunded',
       [
@@ -1284,7 +1371,7 @@ async function main(): Promise<void> {
         .filter(Boolean)
         .join(' '),
       'warning',
-    ).catch(() => {});
+    );
 
     log.info(`refunded ${refund.amountMinor || want} ${after.currency} of donation ${after.id} (${refund.refundId})`);
     return {
@@ -1546,12 +1633,12 @@ ${body}
     log.info(`donor cancelled plan ${plan.subscriptionId} via their own link`);
     // Tell the masjid: a standing order ending is something an admin should know about, and the donor
     // did it outside the admin panel so nothing else would ever surface it.
-    void fabricAlert(
+    alert(
       'monthly-cancelled',
       'A donor stopped their monthly donation',
       `${plan.donorName || 'A donor'}${plan.donorEmail ? ` (${plan.donorEmail})` : ''} stopped their ${formatMoney(plan.firstAmountMinor, plan.currency)}/month donation${plan.campaignTitle ? ` to ${plan.campaignTitle}` : ''} using the link in their confirmation email. Nothing further will be collected.`,
       'info',
-    ).catch(() => {});
+    );
     return reply.send(
       cancelPage(
         `<h1 class="ok">Your monthly donation has stopped</h1>
@@ -1643,7 +1730,7 @@ ${body}
     const everConnected = st.everConnected || status === 'connected' || status === 'updating' || !!readerSerial.trim();
     if (status === 'connected' || status === 'updating') {
       if (st.alerted) {
-        void fabricAlert('reader-offline', 'Card reader back online', `The card reader on ${deviceName || 'a kiosk'} is connected again — donations can be taken.`, 'info').catch(() => {});
+        alert('reader-offline', 'Card reader back online', `The card reader on ${deviceName || 'a kiosk'} is connected again — donations can be taken.`, 'info');
       }
       readerAlert.set(deviceId, { offlineSince: null, alerted: false, everConnected: true });
       return;
@@ -1651,7 +1738,7 @@ ${body}
     if ((status === 'not_connected' || status === 'error') && everConnected) {
       const offlineSince = st.offlineSince ?? now;
       if (!st.alerted && now - offlineSince >= READER_OFFLINE_DEBOUNCE_MS) {
-        void fabricAlert('reader-offline', 'Card reader offline', `The card reader on ${deviceName || 'a kiosk'} stopped responding — donations can't be taken until it's back. Check the reader is powered on and paired.`, 'warning').catch(() => {});
+        alert('reader-offline', 'Card reader offline', `The card reader on ${deviceName || 'a kiosk'} stopped responding — donations can't be taken until it's back. Check the reader is powered on and paired.`, 'warning');
         readerAlert.set(deviceId, { offlineSince, alerted: true, everConnected: true });
       } else {
         readerAlert.set(deviceId, { offlineSince, alerted: st.alerted, everConnected });
@@ -2066,12 +2153,12 @@ ${body}
         store.addLogs(d.id, [
           { level: 'warn', event: 'monthly_intent_rejected', detail: `Stripe refused the card-saving payment; taking it as a one-off instead · ${why}` },
         ]);
-        void fabricAlert(
+        alert(
           'monthly-failed',
           'Monthly donations are not being set up',
           `Stripe refused to set up a repeat payment at ${d.name || 'the kiosk'}, so this gift was taken as a ONE-OFF instead. Donors choosing "Monthly" are being charged once and no standing order is created. Reason: ${why}`,
           'warning',
-        ).catch(() => {});
+        );
         // A DIFFERENT idempotency key: same key + different body is itself a Stripe error, and this
         // body deliberately differs (no customer, no setup_future_usage).
         pi = await create(
@@ -2091,7 +2178,7 @@ ${body}
       store.addLogs(d.id, [{ level: 'warn', event: 'payment_create_failed', detail: `${manual ? 'manual' : 'reader'} · ${why}` }]);
       // Alert the admin donations are broken (bad/expired keys, Stripe down). Fire-and-forget; the
       // .catch() is REQUIRED — an unhandled async rejection would crash the process.
-      void fabricAlert('payment-failed', 'A donation payment failed to start', 'Stripe rejected a payment setup — donors can’t give until it’s fixed. Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.', 'error').catch(() => {});
+      alert('payment-failed', 'A donation payment failed to start', 'Stripe rejected a payment setup — donors can’t give until it’s fixed. Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.', 'error');
       return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
     }
   });
@@ -2223,12 +2310,12 @@ ${body}
       // this kiosk's log, and an alert to the admin.
       if (result.succeeded && wantsMonthly && !monthly.created) {
         store.addLogs(d.id, [{ level: 'warn', event: 'monthly_setup_failed', detail: monthlyProblem || 'No standing order was created.' }]);
-        void fabricAlert(
+        alert(
           'monthly-failed',
           'A monthly donation could not be set up',
           `${formatMoney(result.amountMinor, result.currency)} was taken once at ${d.name || 'the kiosk'}, but the donor's monthly plan could NOT be created, so nothing will be collected again and there is nothing to cancel. ${monthlyProblem} If the donor expected a standing order, please contact them.`,
           'warning',
-        ).catch(() => {});
+        );
       }
       // Branded receipt owed ONLY when the PI was minted branded (Stripe's receipt suppressed at
       // intent) AND it succeeded AND the donor gave an email. recordDonation persists that decision
@@ -2619,7 +2706,7 @@ ${body}
       log.warn(`tuition payment-intent create failed: ${why}`);
       store.addLogs(d.id, [{ level: 'warn', event: 'tuition_pi_failed', detail: why.slice(0, 200) }]);
       // Same admin alert as a failed donation — parents can't pay tuition until it's fixed. Fail-soft.
-      void fabricAlert('payment-failed', 'A tuition payment failed to start', 'Stripe rejected a payment setup — parents can’t pay tuition until it’s fixed. Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.', 'error').catch(() => {});
+      alert('payment-failed', 'A tuition payment failed to start', 'Stripe rejected a payment setup — parents can’t pay tuition until it’s fixed. Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.', 'error');
       return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
     }
   });

@@ -35,6 +35,7 @@ import { CampaignEditorPage, CampaignsSection } from './campaigns';
 import { DonationsSection } from './donations';
 import { PlansSection } from './plans';
 import { EmailReceiptSection } from './email';
+import { NotificationsSection } from './alerts';
 import { Brand, Clock, Crescent, ProfileMenu, Scene } from './ui';
 
 const SOURCE_URL = 'https://github.com/OpenMasjid-Solutions/OpenMasjidKiosk';
@@ -390,6 +391,8 @@ function SettingsTab({ app, session, embedded }: { app: AppInfo | null; session:
         )}
         {err && <p className="form-error">{err}</p>}
       </section>
+
+      <NotificationsSection />
 
       <EmailReceiptSection />
 

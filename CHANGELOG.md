@@ -36,9 +36,29 @@ detail of every change — it is distilled into a major-changes-only entry when 
   - A command that fails can never put technical detail — a payment reference, a file path — into a
     WhatsApp message, and one that takes too long says "still working, ask again in a moment"
     instead of leaving the sender with no reply at all.
-- **No donor phone numbers, and no WhatsApp sending.** Deliberately: a donor at a kiosk gives their
-  details for a receipt, not for messages. Nothing about the giving screen changes, and no phone
-  field has been added anywhere.
+- **Decide who gets told what, in Settings → Notifications.** Until now every alert this app raises
+  went wherever OpenMasjidOS was set to send it — one place, one address, for all of them. Each
+  alert now has its own row, and can go to any combination of three places:
+  - **OpenMasjidOS**, exactly as before — it forwards by email or webhook as you've set it up there.
+    **This stays on for everything**, so nothing changes for you unless you want it to.
+  - **An email address of your choosing**, per alert. "The card reader is offline" can go to whoever
+    walks past the kiosk while "a donation was refunded" goes to the treasurer.
+  - **WhatsApp**, to a number you enter — **off by default, and off for every alert** until you turn
+    it on. It needs WhatsApp set up on your OpenMasjidOS; the screen tells you if it isn't and what
+    to do about it.
+  - The three are independent: turning one on never turns another off, and a channel that fails
+    never stops the others. An alert with nothing switched on is flagged **"goes nowhere"** so it
+    can't quietly stop reaching anyone.
+  - **Send test message** now follows those same settings and tells you which channels it went by,
+    so it proves your actual setup rather than just that the server is up.
+  - A phone number must include its country code (`+44 7700 900123`, `+1 555 010 1234`). Leaving it
+    off is refused rather than guessed at — guessing would eventually message a stranger abroad —
+    and a rejected number never overwrites the one you already had saved.
+- **Donors are still never messaged.** WhatsApp reaches only the numbers you type into these
+  settings. There is no phone field anywhere in the giving flow, and none is planned.
+  **A note on WhatsApp generally:** messages go through the masjid's own number and OpenMasjidOS
+  paces them deliberately to protect it, so one can take anywhere from seconds to a few minutes.
+  It's for things worth interrupting someone about; email remains the reliable channel.
 
 ## 0.11.0
 **Monthly giving works properly for the first time, and a donation can now be refunded from the

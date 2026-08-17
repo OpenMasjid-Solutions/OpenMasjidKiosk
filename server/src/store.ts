@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { config } from './config';
 import { makeLog } from './logger';
+import { ALERT_IDS, defaultRoutes, sanitizeRoute, type AlertId, type AlertRoute, type AlertRoutes } from './alerts';
 import type { Cred } from './auth';
 
 const log = makeLog('store');
@@ -826,6 +827,26 @@ export class Store {
     };
     this.setRaw('masjid', JSON.stringify(merged));
     return merged;
+  }
+
+  // ── Where each admin alert goes (see alerts.ts) ─────────────────────────────
+  /** Stored per alert, merged over the defaults on read — so an alert added in a later release
+   *  arrives at its default (OS on, WhatsApp off) rather than missing from a saved blob. */
+  getAlertRoutes(): AlertRoutes {
+    const saved = this.getJson<Partial<Record<string, Partial<AlertRoute>>>>('alert_routes', {});
+    const out = defaultRoutes();
+    for (const id of ALERT_IDS) {
+      const s = saved?.[id];
+      if (s) out[id] = sanitizeRoute(s, out[id]);
+    }
+    return out;
+  }
+
+  setAlertRoute(id: AlertId, patch: Partial<AlertRoute>): AlertRoutes {
+    const all = this.getAlertRoutes();
+    all[id] = sanitizeRoute(patch, all[id]);
+    this.setRaw('alert_routes', JSON.stringify(all));
+    return all;
   }
 
   /** The emailed donation-receipt template (admin-editable). Off by default. */

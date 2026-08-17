@@ -129,6 +129,67 @@ export const logout = () => request<{ ok: true }>('/api/logout', { method: 'POST
 
 export const sendTestNotification = () => request<NotifyTestResult>('/api/admin/notify-test', { method: 'POST' });
 
+// ── Notifications: where each alert goes ─────────────────────────────────────
+// The platform's own alerts matrix stays underneath this (that is the `os` flag) — these settings
+// add a direct email address and a WhatsApp number PER ALERT, because "the reader is offline" and
+// "a donation was refunded" are usually two different people.
+
+/** Where one alert goes. All three are additive; none is a fallback for another. */
+export interface AlertRoute {
+  /** Relay via OpenMasjidOS → its alerts matrix (email/webhook/off). On by default. */
+  os: boolean;
+  /** Also email this address directly. '' = don't. */
+  email: string;
+  /** Also send a WhatsApp. Off by default. */
+  whatsapp: boolean;
+  /** Digits, international, no plus. '' = nowhere, so `whatsapp: true` alone sends nothing. */
+  phone: string;
+}
+
+/** What the route will ACTUALLY do once blank addresses are taken into account. */
+export interface AlertSummary {
+  os: boolean;
+  email: boolean;
+  whatsapp: boolean;
+  /** Nothing at all is switched on — worth saying out loud on the screen. */
+  silent: boolean;
+}
+
+export interface AlertSetting {
+  id: string;
+  label: string;
+  description: string;
+  route: AlertRoute;
+  summary: AlertSummary;
+}
+
+export interface WhatsAppAvailability {
+  available: boolean;
+  reason: 'ready' | 'not-configured' | 'not-linked' | 'unreachable';
+}
+
+export interface AlertsView {
+  alerts: AlertSetting[];
+  whatsapp: WhatsAppAvailability;
+  embedded: boolean;
+  emailStatus: string;
+}
+
+export const getAlerts = () => request<AlertsView>('/api/admin/alerts');
+export const setAlertRoute = (id: string, patch: Partial<AlertRoute>) =>
+  request<AlertsView>(`/api/admin/alerts/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(patch) });
+export const refreshWhatsApp = () =>
+  request<{ whatsapp: WhatsAppAvailability }>('/api/admin/alerts/whatsapp/refresh', { method: 'POST' });
+
+export interface AlertTestResult {
+  os: boolean;
+  email: boolean;
+  whatsapp: boolean;
+  reasons: string[];
+  delivered: boolean;
+}
+export const sendTestAlert = () => request<AlertTestResult>('/api/admin/test-alert', { method: 'POST' });
+
 // ── Payments (in-app Stripe setup) ────────────────────────────────────────────
 // The Stripe SECRET key never reaches the browser: the server holds it in memory (fetched
 // from the OpenMasjidOS Fabric per process start) and only ever tells us *about* it
@@ -275,9 +336,8 @@ export const getEmailReceipt = () => request<EmailReceipt>('/api/admin/email-rec
 export const saveEmailReceipt = (patch: Partial<Pick<EmailReceipt, 'enabled' | 'subject' | 'heading' | 'body' | 'accent'>>) =>
   request<EmailReceipt>('/api/admin/email-receipt', { method: 'PUT', body: JSON.stringify(patch) });
 
-/** Fire the declared `test` alert — the platform delivers it to the ADMIN's own email/webhook. */
-export const sendTestAlert = () =>
-  request<{ delivered: boolean; reason?: string; email?: boolean; webhook?: boolean }>('/api/admin/test-alert', { method: 'POST' });
+// `sendTestAlert` lives with the other notification calls above — it now follows the SAME per-alert
+// routing a real alert does, so what it proves is the admin's actual configuration.
 
 export const listLocations = () => request<{ locations: TerminalLocation[] }>('/api/admin/payments/locations');
 

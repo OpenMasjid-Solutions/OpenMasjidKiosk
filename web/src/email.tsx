@@ -147,14 +147,15 @@ export function EmailReceiptSection() {
     setTesting(true);
     try {
       const res = await sendTestAlert();
+      // The test now follows whatever Settings → Notifications says for the `test` message, so the
+      // useful answer names the channels it actually went by rather than just "sent".
+      const went = [res.os && 'OpenMasjidOS', res.email && 'email', res.whatsapp && 'WhatsApp'].filter(Boolean).join(', ');
       setTestMsg(
         res.delivered
-          ? 'Sent — check your own inbox/webhook (this goes to you, the admin, not a donor).'
-          : res.reason === 'disabled_by_admin'
-            ? 'The “test” alert is muted in OpenMasjidOS → Settings → Alerts. Turn it on to receive it.'
-            : res.reason === 'no-fabric'
-              ? 'Not embedded under OpenMasjidOS, so there’s nowhere to send it (that’s fine).'
-              : 'Couldn’t deliver — check your OpenMasjidOS alert settings.',
+          ? `Sent via ${went} — this goes to you, the admin, not a donor.`
+          : res.reasons.length
+            ? `Couldn’t deliver — ${res.reasons.join('; ')}. Check Settings → Notifications.`
+            : 'Nothing is switched on for the test message in Settings → Notifications.',
       );
     } catch (e) {
       setTestMsg(e instanceof Error ? e.message : 'Something went wrong.');
