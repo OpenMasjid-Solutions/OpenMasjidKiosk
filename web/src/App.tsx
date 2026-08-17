@@ -74,15 +74,22 @@ export function App() {
   // Follow the dashboard's theme/wallpaper/accent live when opened from OpenMasjidOS.
   useOmosAppearanceSync(app?.embedded);
 
-  // On-scene text colour follows the WALLPAPER, not the light/dark toggle: preset
-  // wallpapers are dark → light on-scene text in both themes; a light custom wallpaper
-  // image flips data-scene to "light" so on-scene text goes dark and stays readable.
+  // On-scene text colour follows whatever is ACTUALLY behind it, which is not always the theme.
+  // With a preset wallpaper the theme decides (both now have their own light/dark gradient), so
+  // `data-scene` is left off entirely and tokens.css picks the ink from data-theme.
+  //
+  // A CUSTOM wallpaper image overrides both: it is whatever the masjid uploaded, in either theme.
+  // So when one is set we state the sampled tone EXPLICITLY — "dark" as well as "light" — because
+  // the case that breaks otherwise is a dark photo under light theme: light theme would put dark
+  // ink on it, and merely removing the attribute would leave that standing. tokens.css orders the
+  // two data-scene rules after the theme rules so a stated tone always wins.
+  const hasImage = prefs.wallpaperImage.trim().length > 0;
   const sceneTone = useReadableTheme(prefs.wallpaperImage.trim() || undefined, 'dark');
   useEffect(() => {
     const html = document.documentElement;
-    if (sceneTone === 'light') html.setAttribute('data-scene', 'light');
+    if (hasImage) html.setAttribute('data-scene', sceneTone);
     else html.removeAttribute('data-scene');
-  }, [sceneTone]);
+  }, [hasImage, sceneTone]);
 
   return (
     <>

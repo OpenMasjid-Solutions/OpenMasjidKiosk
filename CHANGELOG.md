@@ -36,6 +36,21 @@ detail of every change — it is distilled into a major-changes-only entry when 
   - A command that fails can never put technical detail — a payment reference, a file path — into a
     WhatsApp message, and one that takes too long says "still working, ask again in a moment"
     instead of leaving the sender with no reply at all.
+- **Light mode is properly light now.** Choosing the light theme lightened the panels but left the
+  background dark, so the admin panel was half one thing and half the other — and the page titles,
+  the top bar and the clock stayed pale because they had to sit on that dark backdrop. The whole
+  page is light now, taken from OpenMasjid Students where it was already right.
+  - **Your wallpaper is still your wallpaper.** Each one has a light version that keeps its colour —
+    Ocean is still blue, Forest still green, Berry still pink — so the panel looks like the same
+    choice, just in daylight.
+  - **Text follows whatever is actually behind it.** If you use your own background image, the
+    kiosk still reads the image and picks the readable ink for it, in either theme. A dark photo
+    with light mode on keeps light text, which is the combination that would otherwise disappear.
+  - Every combination of theme and wallpaper was checked for contrast against the accessibility
+    standard, and one that had never met it — the Sunset wallpaper in **dark** mode, where page
+    titles sit on its brightest orange — is very slightly deeper so that it now does.
+  - Switching between light and dark also got lighter on the browser: the colour fade used to be
+    attached to every element on the page, including ones that never change colour.
 - **Decide who gets told what, in Settings → Notifications.** Until now every alert this app raises
   went wherever OpenMasjidOS was set to send it — one place, one address, for all of them. Each
   alert now has its own row, and can go to any combination of three places:

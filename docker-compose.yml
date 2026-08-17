@@ -22,7 +22,7 @@ services:
     # same version string, same image reference — so the platform could not notify anyone and had
     # nothing to point at. Stable works precisely because each release has a distinct version and
     # a pinned image; dev now has the same property, via the prerelease version instead of a
-    # digest. (0.11.0 < 0.12.0-dev.4 < 0.12.0: ahead of the last release, behind the next.)
+    # digest. (0.11.0 < 0.12.0-dev.5 < 0.12.0: ahead of the last release, behind the next.)
     #
     # Bump BOTH this line and manifest.yaml's `version:` on every dev build you want installable,
     # and never publish the catalog entry before CI has pushed the matching image — the tag is
@@ -33,7 +33,7 @@ services:
     # catalog installs. On `main` this line carries the release tag + @sha256 digest; a "merge to
     # main" must restore that form, and CI's "Check the compose image matches the channel" step
     # fails the build in both directions.
-    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.12.0-dev.4
+    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.12.0-dev.5
     restart: unless-stopped
     environment:
       PORT: "8080"

@@ -140,12 +140,29 @@
   --color-btn-hover: #075985;
   --color-on-primary: #FFFFFF;
 
-  /* NOTE: the ambient SCENE (page backdrop) is deliberately NOT lightened in light mode.
-     Light mode only lightens the glass content cards. The backdrop stays the dark gradient
-     (like every preset wallpaper, which is dark in both themes) so the light on-scene ink
-     below is always readable. Lightening the scene here was the "white tint" that made
-     on-scene text (titles, top bar, donations ledger) vanish in light mode. Scene tokens
-     therefore inherit the dark values from :root. */
+  /* THE SCENE IS LIGHTENED TOO — the panel is light all the way down (ported from
+     OpenMasjidStudents, 2026-08-17).
+     This used to inherit :root's dark backdrop on purpose, because lightening it here was
+     what made on-scene text vanish. That was the right call at the time but it treated the
+     symptom: the real cause is that every [data-wallpaper] block below is a dark gradient and
+     sits at the SAME specificity as this block, so it simply overwrote whatever scene light
+     mode set. Light glass (white at ~55% alpha) then composited over a near-black wallpaper to
+     mid-grey, with #0C4A6E ink on top — under AA, everywhere at once.
+     Fixed properly in two parts: each wallpaper now has a light counterpart at two-attribute
+     specificity (further down), and the on-scene ink follows the scene rather than the theme. */
+  --scene-base: #EAF6FF;
+  --scene-gradient: linear-gradient(150deg, #dbeafe 0%, #eef6ff 50%, #f0f9ff 100%);
+  --aurora-cyan: rgba(2, 132, 199, 0.14);
+  --aurora-navy: rgba(186, 230, 253, 0.42);
+  --aurora-gold: rgba(217, 119, 6, 0.07);
+  --aurora-blur: 56px;
+  --scene-vignette: rgba(2, 40, 70, 0.06);
+  --pattern-opacity: 0.4;
+  /* The same motif, drawn in the light theme's primary instead of cyan-on-black. */
+  --geometric-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60' viewBox='0 0 60 60'%3E%3Cg fill='none' stroke='%230284C7' stroke-width='0.5' opacity='0.1'%3E%3Cpolygon points='30,4 34.5,21 51,15 39,28 56,30 39,32 51,45 34.5,39 30,56 25.5,39 9,45 21,32 4,30 21,28 9,15 25.5,21'/%3E%3Crect x='19' y='19' width='22' height='22' transform='rotate(45 30 30)'/%3E%3Cline x1='0' y1='30' x2='60' y2='30'/%3E%3Cline x1='30' y1='0' x2='30' y2='60'/%3E%3C/g%3E%3C/svg%3E");
+  /* A custom background IMAGE keeps its own veil, but light mode's should lighten rather than
+     darken — otherwise a light photo gets a dark wash under dark ink. */
+  --scrim: linear-gradient(180deg, rgba(240, 249, 255, 0.30), rgba(240, 249, 255, 0.58));
 }
 
 :root,
@@ -159,13 +176,37 @@
   --font-display: "Segoe UI", system-ui, ui-sans-serif, var(--font-sans);
 }
 
-/* On-scene ("on the wallpaper") text — INDEPENDENT of the light/dark content theme.
-   All preset wallpapers are dark, so on-scene text defaults to light (readable in BOTH
-   themes; glass-card text still uses the theme's --color-ink). A light custom wallpaper
-   image flips this to dark via data-scene="light" (set from JS luminance). */
+/* ── On-scene ("on the wallpaper") text ───────────────────────────────────────
+ * This follows THE SCENE, never the theme directly, because the two can disagree: the scene is
+ * whichever of three things is actually behind the text —
+ *
+ *   1. a preset wallpaper in dark theme   -> dark scene   -> light ink
+ *   2. a preset wallpaper in light theme  -> light scene   -> dark ink   (new)
+ *   3. a custom wallpaper IMAGE           -> whatever the image is, in EITHER theme
+ *
+ * Case 3 is why `data-scene` exists (set from the image's sampled luminance in App.tsx) and why it
+ * is written LAST here: with an image present its answer must win outright, in both themes. The
+ * case that would otherwise break is a dark photo under light theme — the theme rule would put
+ * dark ink on a dark image — so `data-scene` is now set to "dark" as well as "light", rather than
+ * being removed, and the pair below covers both directions.
+ * ─────────────────────────────────────────────────────────────────────────── */
 :root,
-[data-theme="dark"],
+[data-theme="dark"] {
+  --ink-scene: #F4F7FB;
+  --ink-scene-muted: #AEBACD;
+  --ink-scene-faint: #8593AD;
+  --text-shadow-scene: 0 1px 12px rgba(0, 0, 0, 0.55);
+}
+/* Light theme's preset scene is light, so chrome sitting on it takes the same inks the glass
+   panels use — titles and panel text then read alike instead of as two different palettes. */
 [data-theme="light"] {
+  --ink-scene: #0C4A6E;
+  --ink-scene-muted: #44515F;
+  --ink-scene-faint: #647281;
+  --text-shadow-scene: 0 1px 10px rgba(255, 255, 255, 0.65);
+}
+/* A custom image overrides both. Last wins at equal specificity, which is the point. */
+[data-scene="dark"] {
   --ink-scene: #F4F7FB;
   --ink-scene-muted: #AEBACD;
   --ink-scene-faint: #8593AD;
@@ -200,7 +241,11 @@
 }
 [data-wallpaper="sunset"] {
   --scene-base: #190d08;
-  --scene-gradient: linear-gradient(150deg, #b8632a 0%, #7a2a3a 50%, #190d08 100%);
+  /* First stop taken from #b8632a down to #a95b27 — same hue, ~8% darker. It was the only
+     wallpaper in either theme where on-scene text fell under WCAG AA (4.02:1 against the near-white
+     ink); this clears it at 4.64:1. Found by the contrast sweep written for the light-mode port,
+     and pre-dates it — the page title sits exactly on this stop. */
+  --scene-gradient: linear-gradient(150deg, #a95b27 0%, #7a2a3a 50%, #190d08 100%);
   --aurora-cyan: rgba(251, 191, 36, 0.36); --aurora-navy: rgba(244, 63, 94, 0.34); --aurora-gold: rgba(251, 146, 60, 0.30);
 }
 [data-wallpaper="ember"] {
@@ -224,10 +269,79 @@
   --aurora-cyan: rgba(148, 163, 184, 0.20); --aurora-navy: rgba(51, 65, 85, 0.50); --aurora-gold: rgba(203, 213, 225, 0.10);
 }
 
-*,
-*::before,
-*::after {
-  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+/* ── Light-theme wallpapers ───────────────────────────────────────────────────
+ * THE FIX that lets light mode have a light backdrop at all. Every [data-wallpaper] block above
+ * is a dark gradient, and they sit at the SAME specificity as [data-theme="light"] but later in
+ * the file — so they overwrote light mode's own scene, which is why light mode previously had to
+ * give up and keep the dark backdrop.
+ *
+ * Rather than force light theme onto a dark scene (and lose its adaptive ink), each wallpaper gets
+ * a light counterpart that KEEPS ITS HUE and inverts the lightness: ocean is still blue, forest
+ * still green, so a masjid's chosen wallpaper is still recognisably theirs in either theme.
+ * Two-attribute selectors, so they win no matter where they sit in the file.
+ * ─────────────────────────────────────────────────────────────────────────── */
+[data-theme="light"][data-wallpaper="aurora"] {
+  --scene-base: #EAF6FF;
+  --scene-gradient: linear-gradient(150deg, #cfeaf7 0%, #e3f2fb 50%, #f4fbff 100%);
+  --aurora-cyan: rgba(2, 132, 199, 0.16); --aurora-navy: rgba(186, 230, 253, 0.50); --aurora-gold: rgba(217, 119, 6, 0.08);
+}
+[data-theme="light"][data-wallpaper="ocean"] {
+  --scene-base: #E8F2FD;
+  --scene-gradient: linear-gradient(150deg, #c7dcf7 0%, #dceafc 50%, #f0f7ff 100%);
+  --aurora-cyan: rgba(56, 189, 248, 0.22); --aurora-navy: rgba(37, 99, 235, 0.16); --aurora-gold: rgba(45, 212, 191, 0.12);
+}
+[data-theme="light"][data-wallpaper="twilight"] {
+  --scene-base: #F2EDFC;
+  --scene-gradient: linear-gradient(150deg, #ded0f7 0%, #ebe2fb 50%, #f7f3ff 100%);
+  --aurora-cyan: rgba(147, 51, 234, 0.16); --aurora-navy: rgba(124, 58, 237, 0.14); --aurora-gold: rgba(236, 72, 153, 0.10);
+}
+[data-theme="light"][data-wallpaper="berry"] {
+  --scene-base: #FCEDF6;
+  --scene-gradient: linear-gradient(150deg, #f7d3e8 0%, #fae3f1 50%, #fff2f9 100%);
+  --aurora-cyan: rgba(219, 39, 119, 0.16); --aurora-navy: rgba(162, 28, 175, 0.14); --aurora-gold: rgba(251, 113, 133, 0.12);
+}
+[data-theme="light"][data-wallpaper="sunset"] {
+  --scene-base: #FFF1E8;
+  --scene-gradient: linear-gradient(150deg, #fbd9c0 0%, #fde8d8 50%, #fff6ef 100%);
+  --aurora-cyan: rgba(245, 158, 11, 0.20); --aurora-navy: rgba(244, 63, 94, 0.14); --aurora-gold: rgba(251, 146, 60, 0.18);
+}
+[data-theme="light"][data-wallpaper="ember"] {
+  --scene-base: #FFEDE8;
+  --scene-gradient: linear-gradient(150deg, #fbd2c4 0%, #fde3d8 50%, #fff4f0 100%);
+  --aurora-cyan: rgba(234, 88, 12, 0.20); --aurora-navy: rgba(220, 38, 38, 0.14); --aurora-gold: rgba(250, 204, 21, 0.16);
+}
+[data-theme="light"][data-wallpaper="forest"] {
+  --scene-base: #E9F7EE;
+  --scene-gradient: linear-gradient(150deg, #c8ecd5 0%, #ddf3e5 50%, #f1fbf5 100%);
+  --aurora-cyan: rgba(22, 163, 74, 0.18); --aurora-navy: rgba(21, 128, 61, 0.14); --aurora-gold: rgba(132, 204, 22, 0.14);
+}
+[data-theme="light"][data-wallpaper="night"] {
+  --scene-base: #EBF0FC;
+  --scene-gradient: linear-gradient(150deg, #cdd9f7 0%, #e0e8fb 50%, #f2f6ff 100%);
+  --aurora-cyan: rgba(96, 165, 250, 0.20); --aurora-navy: rgba(30, 58, 138, 0.14); --aurora-gold: rgba(99, 102, 241, 0.10);
+}
+[data-theme="light"][data-wallpaper="graphite"] {
+  --scene-base: #EFF2F6;
+  --scene-gradient: linear-gradient(150deg, #d6dce5 0%, #e6eaf0 50%, #f5f7fa 100%);
+  --aurora-cyan: rgba(100, 116, 139, 0.14); --aurora-navy: rgba(51, 65, 85, 0.12); --aurora-gold: rgba(148, 163, 184, 0.10);
+}
+
+/* Smooth theme transition.
+ * Scoped to the surfaces and text that actually re-colour on a theme flip, rather than every node
+ * in the tree — a universal selector put a four-property transition, including the paint-heavy
+ * box-shadow, on SVG internals, spacers and motion wrappers permanently. Same fade for the things
+ * that already animated; just no longer applied to everything. (Ported from OpenMasjidStudents.) */
+body,
+h1, h2, h3, h4, p, a, span, small, label, button, input, select, textarea, pre,
+.glass, .glass-raised, .glass-inset, .glass-dock,
+.btn, .panel, .input, .select, .menu, .menu-item, .icon-btn,
+.tag, .toast, .card, .stat-card, .status-pill, .kv-row, .alert-row,
+.page-title, .page-sub, .section-title, .section-title-inline, .hint, .muted {
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 @media (prefers-reduced-motion: reduce) {
