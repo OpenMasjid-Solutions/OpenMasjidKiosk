@@ -3,9 +3,102 @@
 
 # Action required — things only you can do
 
-From the 2026-08-04 security audit. Everything here is outside what I should decide or do on my own.
+From the 2026-08-04 security audit, plus §§9–12 from the 2026-08-17 repo-wide sweep. Everything here
+is outside what I should decide or do on my own.
 
 ---
+
+## From the 2026-08-17 sweep — four decisions, in the order I would take them
+
+Fixed and shipped in that sweep (listed so you know what is *not* waiting on you): the partial-refund
+scale bug, refunds failing after 7 days on a campaign's own Stripe account, refunds missing from the
+audit trail, `/complete` swallowing exceptions, the email circuit breaker ignoring "unreachable", CI
+never running the tests, and a batch of dead code and stale documentation. The four below are left
+because each needs a judgement that is yours, and I have said plainly why rather than guessing.
+
+### 9. A kiosk with no exit PIN gives any passer-by Android Settings — HIGH
+
+**No exit PIN is the default state.** `pinHash` is empty until an admin sets one in Devices, and
+nothing requires it. On such a kiosk, `KioskViewModel.kt:1250` deliberately opens the maintenance
+screen without a PIN prompt — the comment explains why, and the reasoning is sound as far as it goes:
+*"so a fresh kiosk isn't bricked for reader setup/diagnostics"*. `exitAllowed` is correctly withheld,
+so **Exit kiosk** stays hidden.
+
+But two other controls on that screen are escapes, not diagnostics, and neither is gated:
+
+- **Open Android Settings** — whose own comment says it "drops kiosk lockdown so Settings can open".
+  From Settings, the tablet is entirely open.
+- **Re-pair** — which can point the tablet at a different server.
+
+Ten taps on the background of the giving screen is all it takes. The fix the audit proposes is small
+and obvious — gate those two on `exitAllowed` as well — but it changes the kiosk lockdown on a path
+that **cannot be compiled or run on the dev machine**, and it interacts with first-run setup, which is
+exactly what the current behaviour exists to protect. Getting it wrong strands a volunteer at a
+tablet with no way into Settings to join Wi-Fi.
+
+**What I would do:** set an exit PIN on every kiosk today (Devices → the kiosk → exit PIN) — that
+alone closes it completely. Then make the change deliberately, with a tablet in hand. Worth
+considering alongside it: the admin panel could simply refuse to leave the PIN unset, or warn on the
+Devices page, which is a web-only change that can be tested here.
+
+**`README.md` was also wrong about this** and has been corrected: it described the gesture as always
+leading to "your exit PIN", which is only true once one is set.
+
+### 10. Keyed-card donations are captured on the tablet, not by the server — HIGH
+
+`createCardPaymentIntent` (`stripe.ts`) sets no `capture_method`, so keyed intents **auto-capture** on
+confirm. The reader path sets `capture_method: 'manual'` and the server captures only after
+re-checking with Stripe — which is the invariant the whole app is built on ("never trust the
+tablet's word"). The keyed path does not have it.
+
+The consequence: if the tablet's `/complete` call is lost — a dropped connection, a crash, a server
+restart at the wrong second — **Stripe has taken the money and this app has no record of it**, and the
+donor is shown *"That didn't complete. If your card was charged it will be refunded."* Nothing
+refunds it, because nothing knows. Keyed entry is not a rare path: the tablet falls back to it
+automatically whenever no reader is connected.
+
+**Why I did not just fix it.** The one-line change (`capture_method: 'manual'`) is almost certainly
+right, and the server already handles `requires_capture` on this route. But it changes the
+**semantics of a live payment path** that I cannot compile, run, or put a card through from here. If
+the WebView's confirm treats a non-`succeeded` status as failure, every keyed donation breaks — and
+keyed entry is the fallback that keeps a masjid taking money when its reader dies. The blast radius
+of being wrong is much larger than the bug.
+
+**What I would do:** make the change, then put one real card through a kiosk with the reader
+unplugged, on test keys, before it ships. It is a fifteen-minute check that can only be done with
+hardware. Consider a reconciliation sweep too — PaymentIntents we created that never completed —
+since that closes the class rather than this instance.
+
+### 11. The local admin password can never be changed
+
+There is **no route and no UI** to change it. `setAdmin` is called from exactly one place —
+`POST /api/setup` — which refuses once an admin exists.
+
+This matters most because **§1 of this very document tells you to rotate it**, as the response to a
+possible exposure. That instruction cannot be carried out. If you only ever sign in through
+OpenMasjidOS SSO there is nothing to rotate and this is moot; if a local password was set at first
+run, it is currently fixed for the life of the install.
+
+**What I would do:** add `PUT /api/admin/password` behind `requireAdmin`, requiring the current
+password when one is set, and skipping that check for an SSO-minted session so an SSO admin can set a
+recovery password. Small and testable — I left it out because it is a feature, not a fix, and adding
+an auth route is not something to slip into a sweep unannounced.
+
+### 12. Two smaller ones I judged were yours
+
+- **Donor names and email addresses go to WhatsApp verbatim** when an admin switches that channel on
+  for `donation-refunded` or `monthly-cancelled` (`raiseAlert` sends one identical body to all three
+  channels). `CLAUDE.md` §18 forbids donor identity in WhatsApp **commands** and says why — a thread
+  keeps a copy forever on at least two phones — but says nothing about alerts, and an admin arguably
+  needs the name to act on "a donor stopped their monthly donation". Email carries the same content
+  and is on by default. **So this may be exactly what you intended**; it is only worth flagging
+  because the same reasoning was applied so carefully one paragraph away. If you want it changed, the
+  shape is a WhatsApp-specific rendering that keeps the amount, kiosk and fund and drops the person.
+- **The Gradle wrapper downloads its distribution unverified** (no `distributionSha256Sum`), in the
+  job that has just decoded the APK signing keystore to disk. Adding the checksum is the right fix
+  and I did not, because I cannot obtain the published hash from here in a way worth trusting — and a
+  wrong one breaks every Android build. It is two minutes with the checksum from
+  `services.gradle.org`.
 
 ## 1. Decide whether KIOSK-001 was ever live, and for how long
 

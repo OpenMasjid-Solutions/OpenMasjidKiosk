@@ -145,6 +145,41 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "publishing the $channel channel"
 
+      # CLAUDE.md rule 6b says "bump all six together" and promises "CI fails the build on drift".
+      # It did not — the only check was the compose tag against the manifest, two of seven fields.
+      #
+      # The gap is not cosmetic, because `server/package.json` is where `config.version` is READ
+      # FROM. Bump the manifest and the compose but forget it, and the build is green, the image
+      # publishes, and the server reports the PREVIOUS version — which the heartbeat then sends to
+      # every tablet as `latestAppVersion`. The tablet compares that against its own versionName by
+      # plain string inequality, so the whole fleet shows "Update available" for ever and installing
+      # never clears it. That exact failure has already shipped twice, by two different routes.
+      #
+      # Both lockfiles carry the version twice (top level and `packages[""]`); the check reads the
+      # first two `"version":` lines of each and requires them to agree with each other and with the
+      # manifest, so a half-applied `npm version` is caught too.
+      - name: Check every version field agrees
+        run: |
+          ver='${{ steps.meta.outputs.version }}'
+          fail=0
+          check() {
+            if [ "$2" != "$ver" ]; then
+              echo "::error file=$1::$1 says '$2', manifest.yaml says '$ver' — rule 6b: bump all of them together"
+              fail=1
+            else
+              echo "ok  $1 = $2"
+            fi
+          }
+          check VERSION "$(tr -d ' \r\n' < VERSION)"
+          for f in server/package.json web/package.json; do
+            check "$f" "$(sed -nE 's/^[[:space:]]*"version":[[:space:]]*"([^"]+)".*/\1/p' "$f" | head -1)"
+          done
+          for f in server/package-lock.json web/package-lock.json; do
+            n=$(sed -nE 's/^[[:space:]]*"version":[[:space:]]*"([^"]+)".*/\1/p' "$f" | head -2 | sort -u | tr -d ' \n')
+            check "$f" "$n"
+          done
+          exit $fail
+
       # docker-compose.yml is what the catalog serves to installers (it fetches the file from the
       # ref its registry entry pins), so this file IS a shipped artifact and the channel invariant
       # belongs here, before anything is published. Two symmetric mistakes are possible, and both

@@ -336,7 +336,8 @@ cached status on the screen you use to cancel someone's standing order would be 
 - **Getting out:** **10 rapid taps on the background** of the giving screen → your **exit PIN** →
   the maintenance screen. (Anywhere that isn't a button — not a particular corner, since on a
   multi-appeal kiosk the corner is a campaign tab.) The PIN is verified **on the tablet**, so it
-  works with the server down, and is rate-limited with a lockout.
+  works with the server down, and is rate-limited with a lockout. **Set one** — see Known gaps: with
+  no PIN set the gesture opens maintenance without asking.
 - **Maintenance screen** — a ten-reading diagnostics panel (battery, power, reader,
   connection, app version, certificate, device id, server, last check-in, uptime), the card
   reader panel, **update the app**, **re-pair**, **Android settings**, **Return to kiosk** and
@@ -472,6 +473,20 @@ receipts, iOS app, offline payments, or Play Store distribution.
 
 **Known gaps:**
 
+- **Set an exit PIN on every kiosk.** Until you do, the 10-tap gesture opens the maintenance screen
+  without asking for one. **Exit kiosk** stays hidden — but **Android settings** and **Re-pair** do
+  not, and Android settings drops the lockdown. It is deliberate that a PIN-less kiosk isn't locked
+  out of its own reader setup; it is not deliberate that those two are reachable. Setting a PIN
+  (Devices → the kiosk → exit PIN) closes it completely. See
+  [`docs/audit/ACTION_REQUIRED.md`](docs/audit/ACTION_REQUIRED.md) §9.
+- **A typed-card donation is captured on the tablet rather than by the server.** Reader payments are
+  authorised on the tablet and only *captured* by the server after it re-checks with Stripe, so the
+  money never moves on the tablet's word. Typed entry — the automatic fallback when no reader is
+  connected — settles immediately instead, so a connection lost at the wrong moment can leave Stripe
+  holding a payment this app has no record of, while the donor is told it will be refunded. Rare, and
+  the money is in your Stripe account either way, but it will not appear in your totals. §10.
+- **The local admin password can't be changed once set** — there is no route or screen for it. If you
+  sign in with OpenMasjidOS this doesn't affect you. §11.
 - The stored **"allow manual card entry"** setting is inert — typed entry is always offered as a
   fallback, and there is no admin control for it.
 - The **audit trail** of admin actions that reach outside the app is recorded and readable at
