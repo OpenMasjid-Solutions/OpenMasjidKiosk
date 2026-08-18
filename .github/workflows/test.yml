@@ -21,9 +21,16 @@ name: Tests
 #
 # This runs on pushes to the two real branches AND on every pull request, and `build-image.yml`
 # calls it via `workflow_call` and will not publish an image unless it is green.
+# NO `push:` trigger, deliberately. `build-image.yml` already calls this workflow on every push to
+# `dev` and `main`, and gates publishing on it — so a push trigger here runs the identical jobs a
+# second time. Worse than wasteful: both runs land in the same concurrency group below (a
+# `workflow_call` run carries the CALLER's `github.ref`), so they cancel each other, and which one
+# survives is a race. The first push after this file was added showed exactly that — a "Tests" run
+# cancelled at 3 seconds by the copy running inside "Build image".
+#
+# Pull requests are the case `build-image.yml` does NOT cover — it is push-only — so that is the
+# trigger this file owns.
 on:
-  push:
-    branches: [main, dev]
   pull_request:
   workflow_call:
   workflow_dispatch:
@@ -31,11 +38,11 @@ on:
 permissions:
   contents: read
 
-# A superseded push has nothing worth finishing; a pull request's latest commit is the only one
-# anybody is reviewing. Kept off `main` so a release's run always completes.
+# Only a pull request can supersede itself here now (a `workflow_call` run is governed by its
+# caller's concurrency, not this one), so cancelling an older commit's run is always right.
 concurrency:
   group: tests-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 jobs:
   server:
