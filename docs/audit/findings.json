@@ -6,7 +6,13 @@
   "branch": "audit/security-2026-08-04",
   "autonomousPushDisabled": true,
   "autonomousPushReason": "Pushing to main triggers .github/workflows/build-image.yml, which publishes a multi-arch container image to GHCR tagged 0.10.0 and latest.",
-  "counts": { "critical": 0, "high": 2, "medium": 4, "low": 7, "info": 3 },
+  "counts": {
+    "critical": 0,
+    "high": 2,
+    "medium": 4,
+    "low": 7,
+    "info": 3
+  },
   "findings": [
     {
       "id": "KIOSK-001",
@@ -184,9 +190,9 @@
       "category": "code-health",
       "file": "server/src/students.ts",
       "line": 536,
-      "summary": "Exported and never called. Its doc comment says a tuition session is single-use for the pay step; in fact a session survives its 15-minute TTL and can mint several PaymentIntents. Not a vulnerability (every mint recomputes the amount server-side and re-checks the device binding, and re-minting is useful after a declined card), but a comment asserting a security property that does not hold. Deferred: deleting versus wiring it up is a product decision.",
-      "status": "deferred",
-      "commit": null
+      "summary": "Exported and never called. Its doc comment says a tuition session is single-use for the pay step; in fact a session survives its 15-minute TTL and can mint several PaymentIntents. Not a vulnerability (every mint recomputes the amount server-side and re-checks the device binding, and re-minting is useful after a declined card), but a comment asserting a security property that does not hold. Deleted 2026-08-13 along with the comment claiming the single-use property, which changed no behaviour because nothing called it. Whether a DECLINED tuition card should force a fresh lookup remains an open product question, recorded in ACTION_REQUIRED.md §7 — but that is a feature request now, not a finding.",
+      "status": "fixed",
+      "commit": "0.11.0"
     },
     {
       "id": "KIOSK-016",

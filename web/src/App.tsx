@@ -28,7 +28,7 @@ import {
 import { getAppInfo, getDevices, getDonations, getSession, login, sendTestNotification, setupAdmin, type AppInfo, type Device, type NotifyTestResult, type Session } from './api';
 import { withBase, stripBase } from './base';
 import { formatMoney } from './money';
-import { useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
+import { resolveTheme, useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
 import { PaymentsSection } from './payments';
 import { DevicesSection } from './devices';
 import { CampaignEditorPage, CampaignsSection } from './campaigns';
@@ -83,8 +83,15 @@ export function App() {
   // the case that breaks otherwise is a dark photo under light theme: light theme would put dark
   // ink on it, and merely removing the attribute would leave that standing. tokens.css orders the
   // two data-scene rules after the theme rules so a stated tone always wins.
+  //
+  // The FALLBACK matters as much as the sampling. It used to be a hardcoded 'dark', which was
+  // harmless while light mode kept the dark backdrop and became a real fault the moment it didn't:
+  // an image that cannot be sampled (a decode failure, a cross-origin URL that taints the canvas)
+  // would state `data-scene="dark"` on a light page, putting light ink on light glass — the titles
+  // disappear entirely. Falling back to the CURRENT theme keeps the page self-consistent, which is
+  // exactly the state a preset wallpaper is already in.
   const hasImage = prefs.wallpaperImage.trim().length > 0;
-  const sceneTone = useReadableTheme(prefs.wallpaperImage.trim() || undefined, 'dark');
+  const sceneTone = useReadableTheme(prefs.wallpaperImage.trim() || undefined, resolveTheme(prefs.theme));
   useEffect(() => {
     const html = document.documentElement;
     if (hasImage) html.setAttribute('data-scene', sceneTone);
@@ -626,7 +633,8 @@ function NewPage({ app }: { app: AppInfo | null }) {
               <div className="setup-step__title">Pair it with this server</div>
               <p className="setup-step__sub">
                 In the admin panel, go to <b>Devices → Add kiosk</b> to get a 6-digit pairing code, then type it into the
-                tablet app (no camera needed). Pairing arrives in the next update.
+                tablet app along with this server’s address (no camera needed — the code expires after 10 minutes and
+                works once).
               </p>
               <div className="download-row">
                 <div className="pair-hint">Your 6-digit pairing code will appear in <b>Devices</b></div>

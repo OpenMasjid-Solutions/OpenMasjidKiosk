@@ -449,3 +449,47 @@ test('listAudit clamps its limit (no unbounded read)', () => {
   assert.equal(s.listAudit(-3).length, 1);
   assert.equal(s.listAudit(99_999).length, 20); // ceiling applied, still returns what exists
 });
+
+test('a refundable donation keeps its Stripe account for as long as the donation exists', () => {
+  // The pi_accounts prune was written when /complete was its only reader — "a PI is completed
+  // within seconds, so 7 days is generous". Then refunds shipped and started reading the same
+  // table to choose the key to refund WITH, days or weeks later. Every donation older than a week
+  // that had been taken on a CAMPAIGN'S OWN Stripe account then refunded against the primary
+  // account's key instead, and Stripe rightly answered "no such payment_intent" — a 502 the admin
+  // could never get past. A donor asking for their money back a month later is the ordinary case.
+  const s = new Store(':memory:');
+  const old = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const db = (s as unknown as { db: Database.Database }).db;
+
+  db.prepare('INSERT INTO donations (id, payment_intent_id, amount_minor, currency, status, created_at) VALUES (?,?,?,?,?,?)')
+    .run('pi_kept', 'pi_kept', 5000, 'GBP', 'succeeded', old);
+  db.prepare('INSERT INTO pi_accounts (pi, account, created_at) VALUES (?,?,?)').run('pi_kept', 'acct_campaign', old);
+  // An attempt that never became anything — nobody can ever need its account again.
+  db.prepare('INSERT INTO pi_accounts (pi, account, created_at) VALUES (?,?,?)').run('pi_abandoned', 'acct_campaign', old);
+
+  s.rememberPiAccount('pi_new', 'acct_primary'); // any write runs the prune
+
+  assert.equal(s.getPiAccount('pi_kept'), 'acct_campaign', 'a 30-day-old donation must still know which account to refund from');
+  assert.equal(s.getPiAccount('pi_abandoned'), '', 'abandoned attempts are still pruned, so the table cannot grow forever');
+  assert.equal(s.getPiAccount('pi_new'), 'acct_primary');
+});
+
+test('tuition payments and monthly first-payments keep their account too', () => {
+  // Same lookup, two other long-lived readers: a tuition payment can be refunded, and a plan's
+  // first payment is card-present and therefore not an invoice Stripe can find on its own.
+  const s = new Store(':memory:');
+  const old = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const db = (s as unknown as { db: Database.Database }).db;
+
+  db.prepare('INSERT INTO tuition_outbox (payment_intent_id, family_id, amount_minor, currency, created_at) VALUES (?,?,?,?,?)')
+    .run('pi_tuition', 'fam_1', 5000, 'GBP', old);
+  db.prepare('INSERT INTO plans (subscription_id, first_payment_intent_id, created_at) VALUES (?,?,?)').run('sub_1', 'pi_plan', old);
+  for (const pi of ['pi_tuition', 'pi_plan']) {
+    db.prepare('INSERT INTO pi_accounts (pi, account, created_at) VALUES (?,?,?)').run(pi, 'acct_campaign', old);
+  }
+
+  s.rememberPiAccount('pi_new', 'acct_primary');
+
+  assert.equal(s.getPiAccount('pi_tuition'), 'acct_campaign');
+  assert.equal(s.getPiAccount('pi_plan'), 'acct_campaign');
+});

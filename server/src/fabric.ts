@@ -208,6 +208,12 @@ export async function fabricEmail(msg: FabricEmailMessage): Promise<{ sent: bool
     // Reached-but-failed / unreachable — NOT proof it's unconfigured, so don't claim so.
     log.debug(`Fabric email failed: ${err instanceof Error ? err.message : String(err)}`);
     lastEmailStatus = 'error';
+    // COUNT IT. Every other failure path above increments; this one did not, and it is the most
+    // likely failure there is — the platform being down or the request timing out. A breaker that
+    // ignores "unreachable" never opens in the one situation it exists for: the server keeps
+    // minting branded PaymentIntents, each of which suppresses Stripe's own receipt, so donors get
+    // no receipt at all instead of falling back to Stripe's.
+    consecutiveEmailFailures++;
     return { sent: false, reason: 'unreachable' };
   }
 }

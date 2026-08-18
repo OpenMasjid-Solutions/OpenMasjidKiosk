@@ -364,6 +364,32 @@ h1, h2, h3, p, ul { margin: 0; }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* `.spin` animates an icon that is already there. `.spinner` is a standalone ring for the places
+   that render `<span className="spinner" />` with no icon inside it — three buttons on the Email
+   receipts screen. The class had never been defined, so those spans were zero-sized and pressing
+   "Send me a test" looked like it had done nothing at all until the result appeared. */
+.spinner {
+  display: inline-block; inline-size: 0.9em; block-size: 0.9em; vertical-align: -0.1em;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-block-start-color: currentColor;
+  animation: spin 0.9s linear infinite;
+}
+
+/* A number that reports something taken back rather than received — the refunded total in a
+   donation's detail window. Used before it existed, so the figure that most needs to stand out was
+   rendering in ordinary body colour. */
+.text-warn { color: var(--color-warning); }
+
+/* A quiet explanatory line under a panel heading: the WhatsApp availability note, the pacing note,
+   the "not connected to OpenMasjidOS" note. Pairs with `.muted`, which sets the colour. Also
+   previously undefined, so the notes ran flush against the controls above them. */
+.note {
+  display: block; margin-block: 0.45rem; padding-inline-start: 0.65rem;
+  border-inline-start: 2px solid var(--color-border);
+  font-size: 0.82rem; line-height: 1.55;
+}
+
 /* ── Devices (fleet management) ──────────────────────────────────────────────── */
 /* Big single-use pairing code the volunteer types into the tablet. */
 .pair-box {

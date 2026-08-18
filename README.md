@@ -53,6 +53,7 @@ collect school fees, and manage a fleet of tablets across more than one site.
 - [The giving flow](#the-giving-flow) · [Tuition & school fees](#tuition--school-fees)
 - [Campaigns & the designer](#campaigns--the-designer) · [Kiosk-wide settings](#kiosk-wide-settings)
 - [Payments & Stripe](#payments--stripe) · [Receipts, alerts & notifications](#receipts-alerts--notifications)
+- [Ask the kiosk from WhatsApp](#ask-the-kiosk-from-whatsapp)
 - [Donations & reporting](#donations--reporting) · [Recurring plans](#recurring-plans)
 - [Devices & fleet management](#devices--fleet-management) · [The tablet](#the-tablet) · [Card readers](#card-readers)
 - [Admin panel](#admin-panel) · [Security](#security) · [OpenMasjidOS integration](#openmasjidos-integration)
@@ -199,11 +200,65 @@ Shared by every appeal:
 - **A refund note** to the donor, in the same branding, when you give a donation back.
 - **A "your monthly donation is set up" email** carrying the donor's own cancel link.
 - **Donation notifications** to your OpenMasjidOS dashboard.
-- **Admin alerts**, delivered by email or webhook according to your OpenMasjidOS alert settings:
-  the **card reader goes offline** (debounced and latched, so a blip doesn't page you), a
-  **payment can't be started**, a **monthly plan couldn't be set up** (the gift was taken once and
-  nothing recurs — so somebody should tell the donor), a **donor stopped their monthly donation**,
-  and a **donation was refunded**. Plus a **test** you can fire from the app.
+- **Six admin alerts**: the **card reader goes offline** (debounced and latched, so a blip doesn't
+  page you), a **payment can't be started**, a **monthly plan couldn't be set up** (the gift was
+  taken once and nothing recurs — so somebody should tell the donor), a **donor stopped their
+  monthly donation**, a **donation was refunded**, and a **test** you can fire from the app.
+
+### Who gets told what — Settings → Notifications
+
+The platform's own alert settings send everything to one address. A masjid usually needs more than
+that: "the foyer reader is offline" should reach whoever walks past the foyer, while "a donation was
+refunded" should reach the treasurer. So **each alert has its own row**, and can go to any
+combination of three places — they are **additive**, and one failing never stops the others:
+
+| Channel | Default | What it does |
+|---|---|---|
+| **OpenMasjidOS** | **on** | Forwards by email or webhook per your OpenMasjidOS alert settings — exactly as before. |
+| **Also email** | off | A second address of your choosing, sent through your OpenMasjidOS email provider. |
+| **WhatsApp** | **off** | A message to a number you enter. Needs WhatsApp set up in OpenMasjidOS. |
+
+- **Nothing changes on upgrade** — every alert starts with OpenMasjidOS on and WhatsApp off.
+- An alert with nothing switched on is badged **"goes nowhere"**, and WhatsApp switched on with no
+  number is called out too, so a channel can't quietly stop reaching anyone.
+- **Send test message** follows these same settings and names the channels it actually went by, so
+  it proves your configuration rather than just that the server is up.
+- A phone number must carry its **country code** (`+44 7700 900123`). Leaving it off is refused
+  rather than guessed at — a guess would eventually message a stranger abroad — and a rejected
+  number never overwrites the one already saved.
+
+## Ask the kiosk from WhatsApp
+
+A kiosk is unattended hardware in a lobby, and when the reader stops taking cards the person who can
+fix it is usually not in the building. If your OpenMasjidOS has **WhatsApp admin commands** turned
+on, message the masjid's own number with `!kiosk` and pick from the menu:
+
+- **What's been given** — today, this week, this month and all time, after refunds, with the number
+  of gifts and the average. With more than one kiosk it then offers a breakdown: **just reply with a
+  kiosk's name** or "all" — no second command to remember. A name it doesn't know gets you the list
+  and one more try.
+- **Are the kiosks working** — every tablet: online or not, what its reader is doing, and its app
+  version, led by a count of how many need attention.
+- **The last few donations** — amount, time, kiosk and fund for the five most recent.
+
+**Everything about this is deliberately narrow:**
+
+- **Read-only.** Nothing can be changed from WhatsApp. That is what makes the follow-up question
+  safe — the conversation can end without warning, and a question that only reads has nothing
+  half-applied to leave behind.
+- **No donor details, ever** — amounts, times, kiosks and funds only. No name, no email, no card. A
+  WhatsApp thread keeps a copy forever on at least two phones.
+- **Refused from the internet**, even with Remote access on. This is where your takings live, so it
+  answers only on the masjid's own network.
+- **Refused unless OpenMasjidOS issued this app its credential** — a server that isn't linked
+  answers "not linked yet" rather than accepting an empty one.
+- A failure can never put technical detail — a payment reference, a file path — into a message, and
+  something slow answers "still working, ask again in a moment" rather than timing out silently.
+
+**Donors are never messaged.** WhatsApp reaches only the numbers you typed into Settings →
+Notifications. There is no phone field anywhere in the giving flow. And because messages go through
+the masjid's own number, OpenMasjidOS paces them deliberately to protect it — delivery is seconds to
+minutes, so it's for things worth interrupting someone about. Email stays the reliable channel.
 
 ## Donations & reporting
 
@@ -278,9 +333,10 @@ cached status on the screen you use to cancel someone's standing order would be 
   which hiding the navigation bar does properly, while silently forbidding the app from opening
   Android Settings, the permission prompts or the self-updater.)
 - **Screen stays awake**, bars stay hidden, and the app self-recovers after a crash.
-- **Getting out:** **10 rapid taps** in the corner → your **exit PIN** → the maintenance
-  screen. The PIN is verified **on the tablet**, so it works with the server down, and is
-  rate-limited with a lockout.
+- **Getting out:** **10 rapid taps on the background** of the giving screen → your **exit PIN** →
+  the maintenance screen. (Anywhere that isn't a button — not a particular corner, since on a
+  multi-appeal kiosk the corner is a campaign tab.) The PIN is verified **on the tablet**, so it
+  works with the server down, and is rate-limited with a lockout.
 - **Maintenance screen** — a ten-reading diagnostics panel (battery, power, reader,
   connection, app version, certificate, device id, server, last check-in, uptime), the card
   reader panel, **update the app**, **re-pair**, **Android settings**, **Return to kiosk** and
@@ -291,7 +347,12 @@ cached status on the screen you use to cancel someone's standing order would be 
 - **Built-in on-screen keyboard** that rotates with the screen, with a number strip, caps lock,
   and phone-style key feedback that lifts the character above your finger.
 - **Dark, fixed brand theme**, wall-sized type, every step scrolls rather than clipping,
-  reduced-motion respected, and **right-to-left ready** with all text in one resource file.
+  reduced-motion respected, and **right-to-left layouts** supported (`supportsRtl`), so an Arabic or
+  Urdu system locale mirrors the screens correctly. Your own wording — appeal titles, descriptions,
+  thank-you messages, the attract headline — is whatever you type in the admin panel, in any
+  language. **The app's own donor-facing wording is still hardcoded English**: the setup, pairing
+  and maintenance screens are in `strings.xml` and translatable, but the giving flow is not yet, so
+  translating the kiosk itself is a future change rather than a settings one.
 - **Backups are disabled**, so the pairing secret never leaves the tablet.
 
 ## Card readers
@@ -333,7 +394,12 @@ code only ever sees connection tokens, PaymentIntent client secrets and the publ
   on first pair (trust-on-first-use) on the LAN, and uses real system-CA validation with
   hostname checking for remote sites. It never falls back to plain HTTP.
 - Over the tunnel, **only the kiosk surface is reachable** — the admin panel, sign-in and
-  session routes are refused on internet requests.
+  session routes, the Fabric relay and the WhatsApp command handler are all refused on internet
+  requests.
+- The **WhatsApp command handler** is the one route OpenMasjidOS calls on *us*, so it is the one
+  place this app checks a credential rather than presenting one. It requires two independent facts:
+  the app secret the platform issued us, and a caller header that no app id can hold. Holding no
+  secret **fails closed** rather than letting an empty one match.
 - Brute-force protection on sign-in and on pairing (per device *and* fleet-wide).
 - An **append-only audit trail** of actions that reach outside the app — cancelling, pausing
   or rescheduling a plan, removing a kiosk, changing the exit PIN. Readable at
@@ -347,11 +413,12 @@ A full audit lives in [`docs/audit/`](docs/audit/).
 
 ## OpenMasjidOS integration
 
-Declares `sso`, `stripe`, `https`, `notifications`, `email`, `domain`/`tunnel` and six `alerts`
-(`reader-offline`, `payment-failed`, `monthly-failed`, `monthly-cancelled`, `donation-refunded`,
-`test`), and consumes the `students/billing` capability. There are **no install settings** —
-everything is configured in-app. Nothing platform-derived is ever written to disk, so a restore
-onto a new machine just works.
+Declares `sso`, `stripe`, `https`, `notifications`, `email`, `whatsapp` and `domain`/`tunnel`; six
+`alerts` (`reader-offline`, `payment-failed`, `monthly-failed`, `monthly-cancelled`,
+`donation-refunded`, `test`); three read-only `commands` (`takings`, `kiosks`, `recent`); and
+consumes the `students/billing` capability. There are **no install settings** — everything is
+configured in-app. Nothing platform-derived is ever written to disk, so a restore onto a new machine
+just works.
 
 ### Update channels
 

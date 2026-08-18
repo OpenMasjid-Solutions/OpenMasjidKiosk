@@ -74,6 +74,87 @@ detail of every change — it is distilled into a major-changes-only entry when 
   **A note on WhatsApp generally:** messages go through the masjid's own number and OpenMasjidOS
   paces them deliberately to protect it, so one can take anywhere from seconds to a few minutes.
   It's for things worth interrupting someone about; email remains the reliable channel.
+- **Refunding part of a donation gave back a hundredth of what you typed.** Choosing "Refund only
+  part of it" on a £100 donation and typing `50` refunded **50 pence**, not £50 — and the box
+  underneath suggested you type `10000` instead. The confirmation line did show the real figure, so
+  an admin reading carefully would have caught it, but nothing else would: Stripe accepted the small
+  refund, the donation showed as partly refunded, and the totals were right about the wrong number.
+  Full refunds were never affected. Neither were donations themselves — this was only ever the
+  refund box in the admin panel.
+  - It happened because the panel worked out "how many pence is £1" by looking at how a zero
+    formatted and checking for a decimal point — and amounts are written `£0`, never `£0.00`, so
+    the answer was always "one". Currencies with three decimal places (Kuwaiti dinar, Bahraini
+    dinar, Omani rial) were out by a thousand, in the same direction.
+  - The amount now comes from your currency itself, the way every other figure in the app already
+    did, and a test refunds every kind of currency to prove it.
+- **A refund could stop working once a donation was a week old** — but only for an appeal you had
+  pointed at its own Stripe account. The server forgot which account an older donation had settled
+  to, tried the main one, and Stripe correctly said it had never heard of that payment. There was
+  no way past it from the screen. It now remembers for as long as the donation exists, which is the
+  case that matters: someone asking for their money back a month later is completely ordinary.
+- **Refunds are recorded in the audit trail.** Every other admin action that reaches outside the app
+  was already logged — ending someone's monthly plan, removing a kiosk, changing the exit PIN — but
+  giving money back, the only one that moves money *out*, was not.
+
+- **The setup page no longer tells volunteers that pairing isn't built yet.** The public page a
+  volunteer reads while standing at the tablet ended its "Pair it with this server" step with
+  "Pairing arrives in the next update" — a sentence left over from before pairing shipped, sitting
+  in front of every new kiosk since.
+
+- **Every test now runs in CI, and nothing publishes if one fails.** They never had. The build
+  checked that the code compiled and stopped there, so the tests that exist precisely because
+  something has already gone wrong once — the address trick that exposed the admin panel, the
+  WhatsApp handler refusing to work without a credential, the version rule behind a permanent false
+  "update available" — could all have gone red without stopping a release. Pull requests now get
+  checked too; before this they got nothing.
+  - The tests themselves were also never type-checked, which had quietly let four errors accumulate
+    in them. They are checked now, and that check found one the same afternoon it was added.
+
+- **Light mode follow-ups**, both in the half that handles *your own* background image:
+  - A background image the panel cannot read (some hosts refuse it) fell back to assuming a dark
+    picture. In light mode that meant white text on a white page — the titles simply vanished. It
+    now assumes the theme you are actually using.
+  - The veil that sits over a background image to keep text readable followed the theme while the
+    text colour followed the image, so on a dark photo in light mode they worked against each other.
+    They now move together.
+- **Three things in the admin panel were styled with names that don't exist**, so they rendered as
+  nothing at all: the busy spinner on the Email receipts buttons (pressing "Send me a test" looked
+  like it had done nothing), the refunded amount in a donation's detail window, and the explanatory
+  notes on the Notifications screen.
+
+- **WhatsApp:** "the last few donations" listed a refunded gift at its full amount, as though the
+  money were still there — every other figure the app reports is already netted. It now says so.
+  And a command that failed left no trace anywhere: the reply is deliberately vague so nothing
+  technical reaches a phone, but nothing was writing the real reason to the log either.
+- **A donation that Stripe took but the server then failed to record left no trace either.** That is
+  the worst version of this class of bug, and it was silent on both ends — the donor's tablet said
+  "that didn't complete" and there was nothing in the log or the kiosk's own history to find later.
+- **Branded receipts now fall back to Stripe's when your OpenMasjidOS is unreachable.** There is a
+  safety catch that stops sending our own receipts after a run of failures, so donors get Stripe's
+  instead of none — and it counted every kind of failure except the most likely one.
+
+- **Removed things that were doing nothing.** A second, laxer copy of the amount check sitting
+  beside the real one; an unused animation library in the admin panel; the Stripe card SDK still
+  being compiled into the tablet app months after typed entry moved to a different mechanism, along
+  with a previews-only Compose library that shipped in the release build; a scaffold string that
+  could say "this kiosk is not ready to take donations yet"; and a few constants and styles nothing
+  read.
+- **The card-reader screen stopped sending volunteers on a wild goose chase.** With no reader
+  connected it told them to switch on "Allow manual card entry" in the admin panel. There is no such
+  switch, and typed entry is always offered anyway — so the advice sent someone hunting through
+  settings, at the exact moment their reader had stopped working.
+
+- **Security housekeeping.** A build no longer hands the tablet-app job credentials it has no use
+  for, including one with write access to another repository. Stray secrets in a working copy can no
+  longer reach the image — which matters because the folder the app is served from is one of the few
+  the internet can see. And a dependency advisory in the admin panel's build tooling is cleared.
+- **Documentation sweep.** The README now covers WhatsApp — both asking the kiosk questions and
+  choosing where each alert goes. A number of statements that had drifted from the code are
+  corrected, including a few that would have misled someone building against it: how often a tablet
+  checks in, how it decides whether to pin a certificate, which addresses are reachable from the
+  internet, what the setup screen actually shows, and where the maintenance gesture is. The claim
+  that the tablet's wording is fully translatable is corrected — the setup and maintenance screens
+  are, the giving flow is not yet.
 
 ## 0.11.0
 **Monthly giving works properly for the first time, and a donation can now be refunded from the

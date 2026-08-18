@@ -209,11 +209,19 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
 - ~~Public/internet exposure~~ — **now supported (v0.9.20+) as opt-in REMOTE ADOPTION** over the OS
   Cloudflare tunnel (manifest `domain: true` + `tunnel: true`). A tablet at another site pairs to
   `https://omos.<domain>/<basePath>` (default `/kiosk`) once the admin turns on Remote access in
-  OpenMasjidOS AND flips "Allow remote adoption" in our admin. **Kiosk-endpoints-only over the tunnel:**
-  the server is base-path aware and 404s `/api/admin` + `/api/fabric` on tunnel-origin requests, so only
-  `/new`, the APK, `/api/app`/appearance, and `/api/kiosk/*` are internet-reachable; the admin panel
-  stays LAN-only. Remote pairing uses the real Cloudflare cert (system trust) — the LAN path still uses
-  self-signed + trust-on-first-use pinning. See `docs/REMOTE_ADOPTION.md`.
+  OpenMasjidOS AND flips "Allow remote adoption" in our admin. **Kiosk-endpoints-only over the tunnel**,
+  and it is an **allowlist, not a denylist** — `blockedOverTunnel` in `tunnel.ts` refuses *every* `/api`
+  path except `/api/app`, `/api/public/*` and `/api/kiosk/*`, plus all of `/fabric/*`. (This used to
+  read "404s `/api/admin` + `/api/fabric`", which understates it in the direction that matters: add a
+  new `/api/…` route for the tablet and it is refused over the tunnel until you allow-list it. And
+  `/fabric` is **not** under `/api`, so it needed its own rule — every non-`/api` path falls through as
+  allowed, which is correct for the SPA, `/new`, `/download` and `/uploads`, and was quietly wrong the
+  day the first `/fabric/*` route shipped.) The admin panel stays LAN-only.
+
+  **The tablet chooses its TLS mode from the ADDRESS TYPED, not from the certificate chain**
+  (`KioskRepository.isPrivateHost`): a private-range IP, `localhost`, `*.local` or `*.lan` gets
+  self-signed + trust-on-first-use pinning; anything else gets ordinary system-CA validation with
+  hostname verification, which is what a Cloudflare hostname needs. See `docs/REMOTE_ADOPTION.md`.
 - ~~refunds in-app (point admins at the Stripe dashboard)~~ — **now supported.** Opening a donation in
   Admin → Donations offers **Refund** (full or partial, with a Stripe reason). The server refunds the
   PaymentIntent, records the running refunded total on the row, emails the donor a branded refund note
@@ -273,9 +281,9 @@ Follow BUILDING_AN_APP.md §7 exactly; Donations is the working example.
 ## 7. Devices: `/new`, pairing, and transport security
 
 - **`/new`** (public route on the app's port): a friendly one-page setup guide — big "Download the kiosk app" button serving the **APK bundled into the server image at build time** (so the app version always matches the server), sideload instructions ("allow installs from your browser"), and "then enter the **6-digit pairing code** from **Admin → Devices**."
-- **Pairing (6-digit code, no camera):** Admin → Devices → **Add kiosk** generates a **single-use 6-digit pairing code (TTL 10 min)** and shows it next to the server's **HTTPS address** and its certificate fingerprint (for optional out-of-band verification). On the tablet the volunteer **types the server address and the 6-digit code**; the app calls `POST /api/kiosk/pair` over HTTPS and receives a long-lived **device token** (random 256-bit, hashed at rest server-side, shown never again). Because the fingerprint can't ride in a QR, the app **pins the certificate it sees on that first successful pair (trust-on-first-use)**. The code is single-use, short-lived and attempt-limited so a 6-digit space can't be brute-forced.
+- **Pairing (6-digit code, no camera):** Admin → Devices → **Add kiosk** generates a **single-use 6-digit pairing code (TTL 10 min)** and shows it next to the server's **HTTPS address** (with a Copy button, and a warning if you are viewing the panel on localhost, which a tablet cannot reach). **No certificate fingerprint is shown** — this line used to promise one "for optional out-of-band verification", and nothing renders it because nothing *can*: `https: true` means the **platform** terminates TLS with its own certificate, so this container never sees the cert a tablet will be offered. Trust-on-first-use is therefore the whole of the pinning story, not a fallback beside a manual check, and §14 should be read that way. On the tablet the volunteer **types the server address and the 6-digit code**; the app calls `POST /api/kiosk/pair` over HTTPS and receives a long-lived **device token** (random 256-bit, hashed at rest server-side, shown never again). Because the fingerprint can't ride in a QR, the app **pins the certificate it sees on that first successful pair (trust-on-first-use)**. The code is single-use, short-lived and attempt-limited so a 6-digit space can't be brute-forced.
 - **Transport:** the tablet **only ever talks HTTPS** to the server, with the certificate **pinned on the first successful pair (trust-on-first-use)** (custom trust evaluation thereafter accepting exactly that cert/public key — correct for the platform's self-signed LAN certificate; never fall back to plain HTTP; re-pair if the fingerprint changes, with a clear admin-facing explanation). All kiosk API calls carry the device token; the server scopes every route to that device and rate-limits.
-- **Fleet management:** heartbeat every ~45 s (`battery`, `charging`, `readerStatus`, `readerSerial`, `readerBattery`, `appVersion`, `configVersion`) → Devices page shows live status, flags "not charging" (a wall kiosk should always be on power) and "offline". Actions: rename, **revoke** (kills the token; kiosk returns to pairing), show a fresh pairing code, *identify* (kiosk flashes), push config now. Structured device **logs** (payments, reader events, errors) viewable per device.
+- **Fleet management:** heartbeat every **10 s** (`KioskViewModel.HEARTBEAT_INTERVAL_MS`), with the server treating a kiosk as offline after **35 s** (`ONLINE_MS` in `index.ts`, which the WhatsApp `kiosks` command deliberately shares so the two never disagree). Carries `battery`, `charging`, `readerStatus`, `readerSerial`, `readerBattery`, `appVersion`, `configVersion` → Devices page shows live status, flags "not charging" (a wall kiosk should always be on power) and "offline". Actions: rename, **revoke** (kills the token; kiosk returns to pairing), show a fresh pairing code, *identify* (kiosk flashes), push config now. Structured device **logs** (payments, reader events, errors) viewable per device.
 - **Config:** one versioned JSON (amounts, currency symbol, monthly on/off, name/email prompt policy, thank-you message, wallpaper, accent, theme, **kiosk-PIN hash**). Kiosks fetch on heartbeat when the version bumps; applied live with a gentle transition.
 
 ---
@@ -287,8 +295,8 @@ Use the official **Stripe Terminal Android SDK** on the tablet and the **`stripe
 - **Connection tokens:** the app's `ConnectionTokenProvider` calls `POST /api/kiosk/connection-token` (device token auth); the server mints it via Stripe with the secret key. This is the only credential the tablet ever gets, and it's short-lived by design.
 - **Location:** Terminal readers must connect with a `locationId`. On first Payments setup the server ensures a Terminal **Location** exists (named after the masjid, address entered by the admin — remember: the platform injects no profile) and hands its id to kiosks. Admin can pick an existing Location instead.
 - **One-time donation flow:**
-  1. Kiosk → `POST /api/kiosk/payment-intents` `{amountMinor, oneTime, donorName?, donorEmail?}` (server validates against the configured presets/min/max — never trust client amounts, integer minor units only, currency from Payments settings, idempotency key per attempt, metadata: device id, preset vs custom).
-  2. Server creates the PaymentIntent with `payment_method_types: ['card_present']` and returns the client secret.
+  1. Kiosk → `POST /api/kiosk/payment-intents` `{amountMinor, campaignId?, monthly?, manual?, coverFees?, donorName?, donorEmail?, idempotencyKey?}` — the real `PaymentIntentBody` schema in `index.ts`. **There is no `oneTime` field** (this line used to claim one): one-time is simply `monthly` absent, and because zod strips unknown keys, a client written from the old sketch that sent `{oneTime: false}` got a one-time donation *silently* — the donor charged once, no Subscription, and no error to notice. The server validates the amount against **that campaign's** presets/custom bounds (`isAllowedAmountForCampaign` — never trust client amounts, integer minor units only), computes cover-fees itself, and refuses a `tuition` campaign outright so a crafted tablet can't mint a tuition charge as a plain donation.
+  2. Server creates the PaymentIntent on the **campaign's** Stripe account (its own, or the primary) with `payment_method_types: ['card_present']` and `capture_method: 'manual'`, and returns the client secret. **Keyed entry is a second path** — `manual: true` → `createCardPaymentIntent`, `payment_method_types: ['card']`, the card typed into Stripe.js inside `ManualCardWebView` (`assets/kioskpay.html`), never a browser, because a device-owner Lock Task kiosk allow-lists only our package. The tablet falls back to it automatically when no reader is connected.
   3. App: `retrievePaymentIntent` → `collectPaymentMethod` (reader prompts tap/insert/swipe) → `confirmPaymentIntent`.
   4. App → `POST /api/kiosk/payment-intents/:id/complete`; **server retrieves the PI from Stripe**, captures it if `requires_capture`, verifies `succeeded`, records the donation, fires the notification, and returns the outcome the kiosk displays. Failures/cancellations are recorded as such and shown kindly ("Card didn't read — let's try again").
 - **Monthly donations:** require **name + email** (enforced app **and** server). Flow: take the first payment on the reader as above; from the succeeded charge read `payment_method_details.card_present.generated_card` (the reusable card PaymentMethod Stripe derives from a card-present payment); create a **Customer** (name/email), attach it, and create a **Subscription** (monthly `price_data` for the chosen amount, e.g. product "Monthly donation — <Masjid>"). If `generated_card` is absent (some cards/networks can't be reused), the first donation still stands — tell the donor warmly that monthly couldn't be set up with this card and record the attempt. Ongoing renewals are charged by Stripe automatically; we do **not** track renewal events in v1 (no webhooks, LAN-only) — the admin sees subscriptions in Stripe.
@@ -317,20 +325,38 @@ GiveALittle-grade simplicity — a passer-by donates in under 10 seconds without
 - **Launcher:** the app declares `CATEGORY_HOME` + `CATEGORY_DEFAULT`, so the tablet boots straight into it and Home goes nowhere else.
 - **Lock Task Mode:** when the app is **device owner**, use `startLockTask()` for true kiosk (no status bar pulldown, no recents/home escape). Document the one-time provisioning in `docs/TABLET_SETUP.md`: factory-reset tablet, skip accounts, `adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver`. **Fallback** without device owner: **not** screen pinning — that was tried and removed in 0.11.0, because Android forbids a pinned app from launching any other app and says nothing when it refuses, which silently broke Android Settings, the permission prompts and the self-updater. The soft kiosk is: being the HOME launcher, immersive-sticky bars, a bounce-back watchdog, a dead Back button, and an optional accessibility helper that closes the notification shade. Be honest in docs about its limits.
 - **Stay awake:** keep-screen-on flag while in kiosk; recommend "always plugged in" mounts; report charging state so the admin sees a fallen cable.
-- **Unlock:** hidden gesture (10 taps in the top-left corner within 3 s) → PIN pad → verifies against the **PIN set in Admin → Devices** (synced as a **scrypt** hash in config so unlock works offline; rate-limited with backoff; server-side verify when online). Unlock opens the maintenance screen: reader setup (BT/USB discovery, connect, update, battery), server address/re-pair, diagnostics, app version, **Exit kiosk** and **Return to kiosk**.
+- **Unlock:** hidden gesture — **10 taps on the screen background** (`SECRET_TAPS`; unconsumed taps anywhere, *not* a corner: on a multi-appeal kiosk the corner is a campaign tab) → PIN pad → verifies against the **PIN set in Admin → Devices** (synced as a **scrypt** hash in config so unlock works offline; rate-limited with backoff; server-side verify when online). Unlock opens the maintenance screen: reader setup (BT/USB discovery, connect, update, battery), server address/re-pair, diagnostics, app version, **Exit kiosk** and **Return to kiosk**.
 - **Boot & recovery:** BOOT_COMPLETED brings the app up even if not device owner; the app self-heals into the attract screen after crashes (foreground watchdog) and reconnects the reader automatically.
-- **Permissions:** request-and-explain only what Terminal needs — Bluetooth scan/connect (API 31+) or location (older), USB host access — inside the PIN-protected settings, never in the donor flow.
+- **Permissions:** request-and-explain only what Terminal needs — Bluetooth scan/connect (API 31+) or location (older), USB host access — from the PIN-protected maintenance screen, which walks a volunteer through them with a reason for each.
+
+  **One exception, and it is deliberate:** on a tablet that is **not** device owner, `MainActivity.onCreate` asks for `ACCESS_FINE_LOCATION` once at first launch, because Stripe's SDK requires it before it will look for *any* reader — including a USB one, which has no discovery UI to hang a prompt off. So on the soft-kiosk tier a bare Android permission dialog can appear over the giving screen on a cold start until it is granted. On a device-owner tablet `grantReaderPermissions` has already granted it silently and no dialog ever appears. (§10 used to say "never in the donor flow" without qualification, which is the sort of absolute that stops someone believing the rest of the paragraph once they see the prompt.)
 
 ---
 
 ## 11. The admin panel (web/)
 
-Same SSO + design language as Donations. Sections:
-- **Devices** — the fleet (§7): status cards, pairing, rename/revoke/identify, logs, the kiosk **exit PIN** (set/rotate here).
-- **Giving screen** — the designer: 6 preset amounts (+ currency display), custom-amount on/off + min/max, monthly on/off, name/email prompt policy, **custom thank-you message**, **wallpapers/designs** (curated set + upload, like the OS), **accent colour**, dark/light, with a **live preview** of the kiosk screen.
-- **Payments** — Fabric **Stripe account picker** (§6), Terminal **Location**, currency, test-mode badge; standalone key-entry fallback.
-- **Donations** — log (amount, kiosk, time, one-time/monthly, donor if given, status), totals for today/this week/this month and by device, **CSV export**.
-- **About** — version, docs links, **AGPL "Source code"** link.
+Same SSO + design language as Donations. **Six top-level tabs** (`TABS` in `web/src/App.tsx` — this
+list used to name Payments and About as tabs of their own, which would send you to add a screen
+beside one that already exists inside Settings):
+
+| Tab | `id` | What it is |
+|---|---|---|
+| **Dashboard** | `dashboard` | Totals at a glance, plus what needs attention. |
+| **Devices** | `devices` | The fleet (§7): status cards, pairing, rename/revoke/identify/rotate, per-kiosk logs. |
+| **Campaigns** | `giving` | The designer, opening full-page per appeal: amounts, design, type & fees, Stripe account, target kiosks, messages, live preview. |
+| **Donations** | `analytics` | The log, netted totals, per-kiosk breakdown, CSV, and the **refund** action. |
+| **Recurring** | `recurring` | Monthly plans, read live from Stripe: pause/resume, cancel, schedule an end, invoice history. |
+| **Settings** | `settings` | Everything else, as panels **within** this tab (not tabs of their own). |
+
+Note the two `id`s that do not match their labels — `giving` for Campaigns and `analytics` for
+Donations. They are the original slice names and are load-bearing: the tab is reflected in the URL
+hash, so renaming one breaks every bookmark and the profile menu's deep links.
+
+Panels inside **Settings**: Payments (Fabric Stripe account picker §6, Terminal Location, currency,
+test-mode badge, standalone key-entry fallback) · Notifications (per-alert routing, §18) · Email
+receipts (the branded receipt designer) · the masjid address · the kiosk **exit PIN** · remote
+adoption · About (version, docs links, the AGPL **Source code** link) · **What's new**, read from the
+`CHANGELOG.md` shipped inside the image.
 
 ---
 
@@ -358,7 +384,7 @@ Same SSO + design language as Donations. Sections:
 ## 13. Tech stack
 
 - **server/** — Node 22 (`node:22-slim` in the image), TypeScript strict, **Fastify**, **better-sqlite3**, **stripe** SDK, **scrypt** via `node:crypto` for the fallback admin password + PIN hashes (chosen over argon2 by the maintainer, 2026-07-02: zero extra native deps and Pi-friendly — see `docs/ARCHITECTURE.md`), **zod** at every boundary. No WebSocket (heartbeat polling is enough); add SSE for the Devices page if live feel demands it.
-- **web/** — React + Vite + TypeScript + Tailwind, shadcn/ui, **Motion**, lucide-react; tokens + recipes from **DESIGN.md** (Sakīna Glass); inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
+- **web/** — React + Vite + TypeScript + Tailwind (preflight off) + **lucide-react**, and that is the whole runtime dependency list. Tokens and recipes come from **DESIGN.md** (Sakīna Glass) as hand-written CSS in `src/styles/`; animation is CSS transitions and keyframes. (This bullet used to name **shadcn/ui** and **Motion** as well — neither was ever imported by a single file, and `motion` sat in `package.json` as an unused runtime dependency until it was removed on 2026-08-17. Prefer plain CSS here: the panel is a handful of screens and the design language is already expressed as tokens.) Inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
 - **android/** — **Kotlin + Jetpack Compose**, minSdk 26 (Terminal SDK floor), **Stripe Terminal Android SDK** (Bluetooth + USB discovery/connect for the M2), DataStore for device config, WorkManager for heartbeats. **No camera/QR** — pairing is a typed 6-digit code (kiosk tablets often have no camera). Recreate the design language natively: same palette tokens, spring motion (`animate*AsState`/`AnimatedContent`), dark default, RTL, reduced-motion.
 - **One container** serves API + admin + `/new` + the bundled APK. Multi-stage Dockerfile; CI: `build-apk.yml` builds + signs the APK (keystore in GH secrets, versionName from `VERSION`), `build-image.yml` builds web+server, **copies the freshly built APK into the image**, pushes multi-arch to GHCR, prints the digest to pin.
 
@@ -379,8 +405,8 @@ Same SSO + design language as Donations. Sections:
 ## 15. Build & run
 
 ```bash
-# server
-cd server && npm install && npm run build && npm test
+# server — the third command is NOT optional, see below
+cd server && npm install && npm run build && npm run typecheck:tests && npm test
 # admin web
 cd web && npm install && npm run build
 # android (debug apk)
@@ -388,13 +414,28 @@ cd android && ./gradlew assembleDebug
 # everything the App Store runs
 docker compose up -d
 ```
+
+**`npm run build` does not type-check the tests.** `tsconfig.json` excludes `*.test.ts` (they run
+from source under tsx, which strips types without checking them), so the suite is the one part of
+the tree the ordinary build never sees. `tsconfig.test.json` + `npm run typecheck:tests` cover it;
+four real errors were sitting in the tests, green, when that was added.
+
+**CI runs both, plus the web build, on every push to `dev`/`main` and every pull request**
+(`.github/workflows/test.yml`), and `build-image.yml` publishes nothing unless they pass. Before
+0.12.0 it ran neither: the Dockerfile type-checked the shipping code and that was all, so a red
+suite could not stop a release and a contributor's PR got no CI beyond the CLA bot.
+
 Local dev: Vite proxies `/api` to the server; use Stripe **test keys** + the Terminal **simulated reader** (`isSimulated`) so the whole flow runs without hardware; test on a real M2 before release. `docs/TABLET_SETUP.md` covers tablet provisioning; `docs/READER_SETUP.md` covers M2 pairing/USB cabling.
+
+**Boot it and press the thing.** `tsc` and the suite do not prove a route works: a `415` reached a
+donor's cancel button because it was only reasoned about. `node dist/index.js` with `DATA_DIR` and
+`PORT` set, then `curl` the surface you changed.
 
 ---
 
 ## 16. Definition of done (per feature)
 
-Builds via the commands above and `docker compose up -d`; `tsc`/lint/ktlint clean; installs one-click on a real OpenMasjidOS and opens over the platform's HTTPS URL; SSO works with local fallback; Stripe account picked via the Fabric with **nothing persisted**; a simulated-reader donation completes end-to-end **with the donation recorded only after server verification**; monthly path creates a real Subscription in test mode; kiosk cannot be escaped without the admin PIN; light+dark, RTL, reduced-motion all pass on **both** web and Android; wording is plain and warm; no raw error ever reaches a donor.
+Builds via the commands above and `docker compose up -d`; **`tsc` clean on the server, its tests and the web, and the suite green** — there is no ESLint and no ktlint in this repo, so "lint clean" means nothing here and this line used to ask for it; installs one-click on a real OpenMasjidOS and opens over the platform's HTTPS URL; SSO works with local fallback; Stripe account picked via the Fabric with **nothing persisted**; a simulated-reader donation completes end-to-end **with the donation recorded only after server verification**; monthly path creates a real Subscription in test mode; kiosk cannot be escaped without the admin PIN; light+dark, RTL, reduced-motion all pass on **both** web and Android; wording is plain and warm; no raw error ever reaches a donor.
 
 ---
 
@@ -461,7 +502,11 @@ Code: `server/src/commands.ts` (registry + pure rules), the route in `index.ts`,
   allowlist — `tunnel.ts` had to learn `/fabric` separately, because every non-`/api` path fell
   through as allowed. A credential check is the wrong last line of defence for something that can
   act on hardware.
-- **10 second timeout, 16 KB response cap.** We give up at 8s and answer "still working" so *we*
+- **10 second timeout; the platform also caps the body at 16 KB.** We never approach that cap and
+  do not check it: every reply goes through `tidyReply`, whose `COMMAND_TEXT_MAX` of 1000 characters
+  is the real limit. (A constant restating the 16 KB figure used to sit in `commands.ts` unread —
+  it documented a check that did not exist, and has been removed.) We give up at 8s and answer
+  "still working" so *we*
   own the message rather than having the connection cut. If a job is long, start it and say so.
 - Reply shapes: `{ok:true,text}` · `{ok:false,error}` · `404 {ok:false,code:'unknown_command'}` ·
   `503 {ok:false,code:'not_ready'}`. Text is plain, ≤1000 chars, control characters stripped.

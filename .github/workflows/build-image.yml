@@ -73,13 +73,33 @@ concurrency:
   cancel-in-progress: ${{ github.ref == 'refs/heads/dev' }}
 
 jobs:
+  # Nothing publishes with a red suite. Until this gate existed, `npm test` was never run in CI at
+  # all: the Dockerfile's `npm run build` type-checked the shipping code, and that was the whole of
+  # it — so every test pinning a bug that has already shipped once (the percent-encoded /api bypass,
+  # the WhatsApp handler's fail-closed auth, the version-suffix pairing) could go red without
+  # stopping a single image from reaching a masjid. Runs in parallel with the APK, and the APK is
+  # much slower, so on a green run this costs no extra wall-clock.
+  test:
+    uses: ./.github/workflows/test.yml
+
   # Build (and sign, if secrets are set) the APK, exposed as the `kiosk-apk` artifact.
+  #
+  # Only the four signing secrets are passed. This used to be `secrets: inherit`, which handed the
+  # APK job every repo secret — including CATALOG_PUSH_TOKEN, a PAT with write access to a DIFFERENT
+  # repository — to a job whose whole purpose is to run Gradle against the public plugin and
+  # dependency ecosystem. Nothing here can go wrong quietly: if a signing secret fails to arrive the
+  # build falls back to a debug APK, and the collect step in build-apk.yml fails the run rather than
+  # publishing a key-mismatched app to the fleet.
   apk:
     uses: ./.github/workflows/build-apk.yml
-    secrets: inherit
+    secrets:
+      SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+      SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+      SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+      SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
 
   image:
-    needs: apk
+    needs: [test, apk]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

@@ -71,9 +71,9 @@
 
   --scene-base: #020912;
   --scene-gradient: linear-gradient(150deg, #0c3a4d 0%, #082230 48%, #020a12 100%);
-  /* The default scene gradient, fixed (unaffected by data-wallpaper) — used by the
-     campaign preview so an empty background always shows the default look. */
-  --scene-gradient-default: linear-gradient(150deg, #0c3a4d 0%, #082230 48%, #020a12 100%);
+  /* (`--scene-gradient-default` used to be declared here, duplicating the line above, with a
+     comment saying the campaign preview used it for an empty background. Nothing referenced it —
+     not the preview, not any stylesheet. Removed 2026-08-17.) */
   --aurora-cyan: rgba(34, 211, 238, 0.30);
   --aurora-navy: rgba(15, 32, 64, 0.60);
   --aurora-gold: rgba(245, 158, 11, 0.14);
@@ -206,17 +206,31 @@
   --text-shadow-scene: 0 1px 10px rgba(255, 255, 255, 0.65);
 }
 /* A custom image overrides both. Last wins at equal specificity, which is the point. */
+/* `--scrim` moves WITH the ink, not with the theme.
+ *
+ * The veil over a custom wallpaper (`.scene-img::after`) used to be defined only under
+ * `[data-theme]`, while the ink above it is decided by `[data-scene]`. Whenever the two disagreed
+ * they actively fought each other, and both directions are ordinary choices a masjid makes:
+ *
+ *   a DARK photo + light theme  ->  light ink, over a LIGHTENING veil   (washed out)
+ *   a LIGHT photo + dark theme  ->  dark ink,  over a DARKENING veil    (muddy)
+ *
+ * A veil exists to push the backdrop away from the text, so it has to be told which way the text
+ * went. The `[data-theme]` definitions above stay as the default for the preset wallpapers, where
+ * no scene is stated and the theme really does decide. */
 [data-scene="dark"] {
   --ink-scene: #F4F7FB;
   --ink-scene-muted: #AEBACD;
   --ink-scene-faint: #8593AD;
   --text-shadow-scene: 0 1px 12px rgba(0, 0, 0, 0.55);
+  --scrim: linear-gradient(180deg, rgba(2, 9, 18, 0.30), rgba(2, 9, 18, 0.58));
 }
 [data-scene="light"] {
   --ink-scene: #0C4A6E;
   --ink-scene-muted: #44515F;
   --ink-scene-faint: #647281;
   --text-shadow-scene: 0 1px 10px rgba(255, 255, 255, 0.65);
+  --scrim: linear-gradient(180deg, rgba(240, 249, 255, 0.30), rgba(240, 249, 255, 0.58));
 }
 
 /* Wallpapers (applied via data-wallpaper on <html>) — mirror OpenMasjidOS so the

@@ -41,12 +41,14 @@ export const COMMAND_TIMEOUT_MS = 10_000;
  *  message, and a real explanation beats a generic timeout every time. */
 export const COMMAND_BUDGET_MS = 8_000;
 
-/** Hard cap on the response body (the platform's is 16 KB). Ours is far smaller because a reply
- *  is one plain-text sentence; the cap only exists so a bug can never post a wall of text. */
-export const COMMAND_RESPONSE_CAP = 16 * 1024;
-
 /** The platform trims to the message cap itself, but sending 1000 characters of anything to a
- *  phone is already a failure of judgement — so we cut it here and own the result. */
+ *  phone is already a failure of judgement — so we cut it here and own the result.
+ *
+ *  This is the ONLY response cap we enforce, and it is what makes the platform's own 16 KB body
+ *  limit unreachable: every reply goes through [tidyReply], so the largest body we can produce is
+ *  this many characters plus a short JSON wrapper. (A `COMMAND_RESPONSE_CAP = 16 * 1024` used to
+ *  sit here restating the platform's number; nothing ever read it, so it documented a check that
+ *  did not exist. Removed 2026-08-17 — the real guarantee is this line.) */
 export const COMMAND_TEXT_MAX = 1000;
 
 /** The only caller this route ever accepts. Not an allow-list entry — a value no app id can hold. */
@@ -199,6 +201,9 @@ export interface CommandStore {
     deviceName: string;
     campaignTitle: string;
     amountMinor: number;
+    /** What has been given back. `recent` must say so — every other figure this app reports is
+     *  netted, so a refunded gift listed at its full amount is the one place the numbers lie. */
+    refundedMinor: number;
     currency: string;
     kind: string;
     status: string;
@@ -394,6 +399,10 @@ export function buildCommands(deps: CommandDeps): KioskCommand[] {
           if (d.deviceName) bits.push(d.deviceName);
           if (d.campaignTitle) bits.push(d.campaignTitle);
           if (d.kind === 'monthly') bits.push('monthly');
+          // A gift that has been given back must not read as money still in the account. `takings`
+          // is netted in SQL and the admin panel strikes these through; this line said neither.
+          const back = d.refundedMinor ?? 0;
+          if (back > 0) bits.push(back >= d.amountMinor ? 'REFUNDED' : `${money(back, d.currency)} refunded`);
           return bits.filter(Boolean).join(' · ');
         });
         return { ok: true, text: `The last ${rows.length}:\n${lines.join('\n')}` };
@@ -415,8 +424,18 @@ export function findCommand(list: readonly KioskCommand[], id: string): KioskCom
  * 10s cut-off, because a timed-out HTTP call tells the admin nothing while a sentence can tell
  * them to ask again in a moment. The handler is not cancelled — there is nothing safe to cancel a
  * half-finished hardware action with — it simply stops being what we answer with.
+ *
+ * `onError` is how the real exception reaches the container log. It is a parameter rather than a
+ * logger import so this module stays pure and unit-testable — and it is not optional-by-accident:
+ * the phone gets a deliberately contentless sentence, so if nobody records the cause here, a
+ * failing command is invisible everywhere. That was the case until it was noticed: the catch
+ * swallowed the error entirely while the comment above it claimed the log had it.
  */
-export async function runCommand(cmd: KioskCommand, ctx: CommandContext): Promise<CommandResult> {
+export async function runCommand(
+  cmd: KioskCommand,
+  ctx: CommandContext,
+  onError?: (err: unknown) => void,
+): Promise<CommandResult> {
   let timer: NodeJS.Timeout | undefined;
   const budget = new Promise<CommandResult>((resolve) => {
     timer = setTimeout(
@@ -426,9 +445,15 @@ export async function runCommand(cmd: KioskCommand, ctx: CommandContext): Promis
   });
   try {
     return await Promise.race([cmd.run(ctx), budget]);
-  } catch {
+  } catch (err) {
     // Never leak an exception message to a phone: it can carry a Stripe id, a file path or a
-    // device token. The real reason goes to the container log.
+    // device token. It goes to the container log instead — and a logging callback that itself
+    // throws must not turn a handled failure into an unhandled one.
+    try {
+      onError?.(err);
+    } catch {
+      /* the reply below still stands */
+    }
     return { ok: false, error: 'Something went wrong running that. Please check the admin panel.' };
   } finally {
     if (timer) clearTimeout(timer);

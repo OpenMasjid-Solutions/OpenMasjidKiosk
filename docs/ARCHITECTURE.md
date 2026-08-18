@@ -93,13 +93,34 @@ Built since the slice plan ran out, each worth knowing about architecturally:
 | **Multi-account reader** | `ReaderManager.registerFor`, `locationForAccount` | A Terminal reader is bound to one account by its connection token. The tablet re-registers against the campaign's account just before collecting, and each account gets its own Location, created from the masjid address already on file. |
 | **Light mode** | `web/src/styles/tokens.css`, `server/src/theme-contrast.test.ts` | Ported from OpenMasjidStudents (2026-08-17). Light mode used to lighten only the glass and keep the dark backdrop — a workaround for the real cause, which is that every `[data-wallpaper]` block is a dark gradient at the SAME specificity as `[data-theme="light"]` but later in the file, so it overwrote the light scene. Fixed by giving each wallpaper a **light counterpart at two-attribute specificity** (hue kept, lightness inverted) and making on-scene ink follow **the scene, not the theme** — a custom image states its own tone, in both directions, so a dark photo under light theme still gets light ink. All 18 theme×wallpaper combinations are contrast-tested. |
 | **WhatsApp admin commands** | `commands.ts`, `POST /fabric/commands/run`, `CLAUDE.md` §18 | The **first inbound Fabric route** — everything else in `fabric.ts` is us calling the platform. So it is the first place this app *checks* a credential rather than presenting one, and it authenticates on two independent facts: our own app secret, and a caller header (`omos:platform`) that no app id can hold because the colon is outside the app-id charset. LAN-only: `/fabric` is **not** covered by the `/api` tunnel allowlist and had to be added to it explicitly. |
+| **Per-alert routing** | `alerts.ts`, `web/src/alerts.tsx`, `raiseAlert()` in `index.ts` | Three channels that are **additive and independently fail-soft** — the platform relay, a direct email, a WhatsApp. The defaults are the load-bearing part (`os: true` so an upgrade mutes nothing; `whatsapp: false` because the channel spends the masjid's own number's reputation). Everything raises through `raiseAlert`, **never `fabricAlert` directly**, or an admin's choices are bypassed — including the in-app "Send test", deliberately, since a test taking a different path would prove nothing. |
+| **Partial refunds** | `web/src/donations.tsx`, `server/src/refund-amount.test.ts` | The refund box worked out minor units by **sniffing the formatted output** of the money helper for a decimal point. `formatMoney` drops the decimals on a whole number, so `money(0)` is `"£0"` in every currency and the sniff always answered zero: an admin refunding £50 gave back **50p**, and the placeholder told them to type `10000`. The scale must come from the currency **code** via `web/src/money.ts`. Fixed and pinned 2026-08-17. |
 
-## Verification gaps (what cannot be checked on the dev machine)
+## What CI checks (and what it still cannot)
 
-- **No Android SDK and no Docker here.** `./gradlew assembleDebug` and `docker compose up` are
-  verified by CI, not locally — so **CI's `build-apk` job is the only compile check the Kotlin
-  gets**, and a Kotlin change is not proven until that job is green.
-- The server (`tsc` + `node --test`) and web (`tsc` + `vite build`) are verified locally, and
-  anything user-facing on the server should also be checked by **booting it and pressing the
+`.github/workflows/test.yml` runs the server suite (`tsc`, `tsc -p tsconfig.test.json`,
+`node --test`) and the web build on every push to `dev`/`main` **and on every pull request**, and
+`build-image.yml` will not publish an image unless it is green.
+
+That gate is new as of 0.12.0, and its absence is worth recording rather than quietly fixing: for
+the whole of 0.1.0–0.11.0 **CI never ran `npm test` at all.** The Dockerfile's `npm run build`
+type-checked the shipping code and nothing else, so every test pinning an already-shipped bug — the
+percent-encoded `/api` bypass, the WhatsApp handler's fail-closed auth, the version-suffix pairing —
+could have gone red without stopping a release, and a contributor's pull request got no CI beyond
+the CLA bot. Two type errors and one dead assertion were sitting in the suite when the gate went in,
+because `tsconfig.json` excludes `*.test.ts` and tsx strips types without checking them
+(`tsconfig.test.json` now closes that).
+
+Still unverifiable here:
+
+- **No Android SDK and no Docker on the dev machine.** `./gradlew assembleDebug` and
+  `docker compose up` are proven by CI only — so **CI's `build-apk` job remains the only compile
+  check the Kotlin gets**, and a Kotlin change is not proven until that job is green. There are no
+  Android unit tests at all (`ACTION_REQUIRED.md` §7).
+- Anything user-facing on the server should also be checked by **booting it and pressing the
   thing** — a `415` shipped to a donor's cancel button precisely because it was only reasoned about.
+- **The admin panel has no test runner of its own.** Two server tests reach across into `web/` for
+  the parts where being wrong costs real money or readability — `theme-contrast.test.ts` (design
+  tokens) and `refund-amount.test.ts` (currency arithmetic). Everything else in `web/` is checked by
+  `tsc` and by eye.
 - Hardware paths — a real M2 reader, a real card, a real refund — can only be confirmed on a box.

@@ -947,14 +947,11 @@ export class Store {
     return merged;
   }
 
-  /** Server-side amount guard (never trust the tablet): an allowed amount is a configured
-   *  preset, or — when custom is enabled — within [min,max]. Integer minor units only. */
-  isAllowedAmount(amountMinor: number): boolean {
-    if (!Number.isInteger(amountMinor) || amountMinor <= 0) return false;
-    const g = this.getGiving();
-    if (g.presetsMinor.includes(amountMinor)) return true;
-    return g.allowCustom && amountMinor >= g.customMinMinor && amountMinor <= g.customMaxMinor;
-  }
+  // (There used to be an `isAllowedAmount(amountMinor)` here, checking the amount against the
+  // single global giving config. Campaigns replaced it: every appeal carries its own presets and
+  // bounds, so the guard that actually runs is `isAllowedAmountForCampaign` below, and the payment
+  // route has only ever called that one. Removed 2026-08-17 — a second, laxer amount guard sitting
+  // next to the real one is worth deleting rather than leaving for someone to reach for.)
 
   // ── Campaigns (giving appeals, shown as kiosk tabs) ─────────────────────────
   private rowToCampaign(r: Record<string, unknown>): Campaign {
@@ -1228,12 +1225,32 @@ export class Store {
   }
 
   /** Remember which Stripe account a PaymentIntent was created on, so /complete verifies it with
-   *  the SAME account's key (campaigns can settle to different accounts). Best-effort: prunes old
-   *  rows; if lost (e.g. a restart between create and complete), the caller falls back to primary. */
+   *  the SAME account's key (campaigns can settle to different accounts). If lost (e.g. a restart
+   *  between create and complete), the caller falls back to primary.
+   *
+   *  THE PRUNE USED TO DROP EVERYTHING AFTER 7 DAYS, and its reasoning — "a PI is completed within
+   *  seconds, so 7 days is generous" — was right about the only reader it had at the time. Then
+   *  refunds shipped, and `/api/admin/donations/:id/refund` reads the same table to pick the key to
+   *  refund WITH. A refund happens days or weeks later, which is precisely when the row was gone:
+   *  the lookup fell back to the primary account, Stripe correctly answered "no such
+   *  payment_intent" for a PI that lives on a campaign's own account, and the admin got a 502 they
+   *  could never get past. A donor asking for their money back a month later is the ordinary case,
+   *  not the edge one.
+   *
+   *  So a row is now kept for as long as its donation exists, and only ABANDONED attempts — PIs
+   *  that never became a donation, a tuition payment or a plan's first payment — are pruned. Those
+   *  are the ones that would otherwise accumulate, and nothing can ever need their account again. */
   rememberPiAccount(pi: string, account: string): void {
     this.db.prepare('INSERT OR REPLACE INTO pi_accounts (pi, account, created_at) VALUES (?, ?, ?)').run(pi, account, new Date().toISOString());
-    // Keep the table small — a PI is completed within seconds, so 7 days is generous.
-    this.db.prepare("DELETE FROM pi_accounts WHERE created_at < ?").run(new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString());
+    this.db
+      .prepare(
+        `DELETE FROM pi_accounts
+          WHERE created_at < ?
+            AND pi NOT IN (SELECT payment_intent_id FROM donations)
+            AND pi NOT IN (SELECT payment_intent_id FROM tuition_outbox)
+            AND pi NOT IN (SELECT first_payment_intent_id FROM plans)`,
+      )
+      .run(new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString());
   }
   getPiAccount(pi: string): string {
     const r = this.db.prepare('SELECT account FROM pi_accounts WHERE pi = ?').get(pi) as { account?: string } | undefined;

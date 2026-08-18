@@ -273,7 +273,9 @@ async function main(): Promise<void> {
       locale: parsed.data.locale ?? 'en',
       followUpToken: validFollowUpToken(token) ? token : '',
     };
-    const result = await runCommand(cmd, ctx);
+    // The phone only ever gets a contentless apology, so this callback is the ONLY record that a
+    // command threw. Without it a broken command is invisible on both ends at once.
+    const result = await runCommand(cmd, ctx, (err) => log.error(`command ${cmd.id} threw:`, err));
     log.info(`command ${cmd.id} (${ctx.requestId || 'no id'}) -> ${result.ok ? 'ok' : 'failed'}`);
     if (!result.ok) return reply.code(200).send({ ok: false, error: tidyReply(result.error) });
     // Only echo a follow-up token we know the platform will accept. An invalid one is OUR bug, and
@@ -1373,6 +1375,18 @@ async function main(): Promise<void> {
       'warning',
     );
 
+    // The audit trail exists for "actions that reach outside the app". Refunding is the only admin
+    // action that moves money OUT of the masjid's account, and it was the one financial write with
+    // no entry — cancelling a plan was recorded, giving £500 back was not. Recorded after the fact
+    // on purpose: this row means "a refund happened", and Stripe has already confirmed it by here.
+    await audit(
+      req,
+      'donation.refund',
+      after.id,
+      `${formatMoney(refund.amountMinor || want, after.currency)} of ${formatMoney(after.amountMinor, after.currency)} refunded` +
+        `${fullyRefunded ? ' (in full)' : ' (part)'} · reason ${parsed.data.reason} · ${refund.refundId}`,
+    );
+
     log.info(`refunded ${refund.amountMinor || want} ${after.currency} of donation ${after.id} (${refund.refundId})`);
     return {
       data: {
@@ -2378,7 +2392,21 @@ ${body}
         }
       }
       return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency, monthly } };
-    } catch {
+    } catch (e) {
+      // LOG IT. This catch wraps the whole handler, not just the Stripe call — `recordDonation`,
+      // the plan write, the receipt decision and the device log all run AFTER the money has been
+      // captured. So the case it silently hid is the worst one this app has: Stripe took the
+      // donation, something downstream threw, and the only trace anywhere was a 502 the donor's
+      // tablet renders as "that didn't complete". No log line, no donation row, no alert.
+      const why = e instanceof Error ? e.message : String(e);
+      log.error(`/complete failed for ${id}: ${why}`);
+      // The device log is what an admin actually reads when a donor says they were charged, so put
+      // it where they will look — best-effort, and never allowed to mask the original failure.
+      try {
+        store.addLogs(d.id, [{ level: 'error', event: 'complete_failed', detail: `${id}: ${why.slice(0, 300)}` }]);
+      } catch {
+        /* the container log above still has it */
+      }
       return reply.code(502).send({ error: 'Couldn’t confirm the payment with Stripe.' });
     }
   });

@@ -23,6 +23,20 @@
 
 on:
   workflow_call:
+    # Named explicitly rather than taking `secrets: inherit` from the caller. Inherit hands this job
+    # EVERY repo secret, including the cross-repo catalog PAT it has no use for — and this is the job
+    # that runs Gradle, which resolves plugins and dependencies from the internet. The four below are
+    # all it needs. Each is `required: false` so a fork, or a run before the signing secrets exist,
+    # still builds: the job then produces a debug APK, which the collect step refuses to publish.
+    secrets:
+      SIGNING_KEYSTORE_BASE64:
+        required: false
+      SIGNING_KEYSTORE_PASSWORD:
+        required: false
+      SIGNING_KEY_ALIAS:
+        required: false
+      SIGNING_KEY_PASSWORD:
+        required: false
     outputs:
       artifact:
         description: Name of the uploaded APK artifact

@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 OpenMasjid-Solutions
+//
+// TYPE-CHECK THE TESTS. `tsconfig.json` deliberately EXCLUDES `*.test.ts` — they are never
+// compiled to `dist`, they are run straight from source by tsx. The side effect was that nothing
+// type-checked them at all: tsx strips types without checking them, so a test could call a function
+// with the wrong arguments, or omit a property a type had since made required, and still pass.
+//
+// That is not hypothetical. When this file was added, four such errors were already sitting in the
+// suite — three calls to `runCommand` missing `CommandContext.followUpToken`, which had become
+// required when follow-up questions shipped. The tests ran green the whole time, because at runtime
+// `undefined` behaved like the empty string those tests wanted.
+//
+// `module: ESNext` (rather than the CommonJS the server compiles to) is what lets the tests use
+// `import.meta.url`, which several of them need to find fixture files relative to themselves.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    // The base config pins `rootDir` to `src` because that is what shapes `dist`. Nothing is
+    // emitted here, and two tests deliberately reach into `web/` — `theme-contrast.test.ts` reads
+    // the design tokens, `refund-amount.test.ts` imports the currency arithmetic — because the
+    // server's runner is the only one CI executes.
+    "rootDir": ".."
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

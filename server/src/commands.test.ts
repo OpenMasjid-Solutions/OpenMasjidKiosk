@@ -55,8 +55,8 @@ function fakeStore(over: Partial<CommandStore> = {}): CommandStore {
       { id: 'd2', name: 'Hall', lastSeen: new Date(Date.now() - 3 * 3600_000).toISOString(), readerStatus: 'disconnected', appVersion: '0.11.0', revoked: false },
     ],
     listDonations: () => [
-      { deviceName: 'Foyer', campaignTitle: 'General Fund', amountMinor: 10_00, currency: 'GBP', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
-      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 50_00, currency: 'GBP', kind: 'monthly', status: 'succeeded', createdAt: new Date(Date.now() - 90 * 60_000).toISOString() },
+      { deviceName: 'Foyer', campaignTitle: 'General Fund', amountMinor: 10_00, refundedMinor: 0, currency: 'GBP', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
+      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 50_00, refundedMinor: 0, currency: 'GBP', kind: 'monthly', status: 'succeeded', createdAt: new Date(Date.now() - 90 * 60_000).toISOString() },
     ],
     ...over,
   };
@@ -188,7 +188,7 @@ test('our own budget sits inside the platform’s timeout', () => {
 test('a slow command answers "still working" instead of timing out', async () => {
   const slow: KioskCommand = { id: 'slow', run: () => new Promise(() => {}) }; // never settles
   const started = Date.now();
-  const r = await runCommand(slow, { text: '', requestId: 'r1', locale: 'en' });
+  const r = await runCommand(slow, { text: '', requestId: 'r1', locale: 'en', followUpToken: '' });
   assert.equal(r.ok, false);
   assert.match(r.ok === false ? r.error : '', /longer than expected|ask again/i);
   assert.ok(Date.now() - started < COMMAND_TIMEOUT_MS, 'and it answers before the platform gives up');
@@ -202,7 +202,7 @@ test('a command that throws never leaks the exception to a phone', async () => {
       throw new Error('sk_live_51ABCdef pi_3XYZ /data/kiosk.db');
     },
   };
-  const r = await runCommand(boom, { text: '', requestId: 'r2', locale: 'en' });
+  const r = await runCommand(boom, { text: '', requestId: 'r2', locale: 'en', followUpToken: '' });
   assert.equal(r.ok, false);
   const msg = r.ok === false ? r.error : '';
   assert.ok(!msg.includes('sk_live'), 'no key material');
@@ -211,9 +211,48 @@ test('a command that throws never leaks the exception to a phone', async () => {
   assert.match(msg, /went wrong/i);
 });
 
+test('...but the real exception still reaches the container log', async () => {
+  // The phone deliberately gets a sentence with nothing in it, so this callback is the ONLY record
+  // that anything went wrong. It was missing until a sweep noticed the catch was empty while the
+  // comment above it claimed the log had the reason — a failing command was invisible on both ends.
+  const boom: KioskCommand = {
+    id: 'boom',
+    run: async () => {
+      throw new Error('the actual cause');
+    },
+  };
+  const logged: unknown[] = [];
+  const r = await runCommand(boom, { text: '', requestId: 'r4', locale: 'en', followUpToken: '' }, (e) => logged.push(e));
+  assert.equal(r.ok, false);
+  assert.equal(logged.length, 1, 'exactly one report, not none and not one per retry');
+  assert.match(String((logged[0] as Error).message), /the actual cause/);
+});
+
+test('a logger that itself throws cannot turn a handled failure into a crash', async () => {
+  const boom: KioskCommand = {
+    id: 'boom',
+    run: async () => {
+      throw new Error('cause');
+    },
+  };
+  const r = await runCommand(boom, { text: '', requestId: 'r5', locale: 'en', followUpToken: '' }, () => {
+    throw new Error('the logger is broken too');
+  });
+  assert.equal(r.ok, false, 'the admin still gets an answer');
+  assert.match(r.ok === false ? r.error : '', /went wrong/i);
+});
+
+test('a command that succeeds never calls the error reporter', async () => {
+  const fine: KioskCommand = { id: 'fine', run: async () => ({ ok: true, text: 'all good' }) };
+  let calls = 0;
+  const r = await runCommand(fine, { text: '', requestId: 'r6', locale: 'en', followUpToken: '' }, () => calls++);
+  assert.equal(r.ok, true);
+  assert.equal(calls, 0);
+});
+
 test('a normal command result passes straight through', async () => {
   const ok: KioskCommand = { id: 'ok', run: async (ctx) => ({ ok: true, text: `you said "${ctx.text}"` }) };
-  assert.deepEqual(await runCommand(ok, { text: 'lobby', requestId: 'r3', locale: 'en' }), {
+  assert.deepEqual(await runCommand(ok, { text: 'lobby', requestId: 'r3', locale: 'en', followUpToken: '' }), {
     ok: true,
     text: 'you said "lobby"',
   });
@@ -496,4 +535,27 @@ test('a failed turn can never carry a follow-up', () => {
   // that widens the type has to think about it.
   const failure: Awaited<ReturnType<KioskCommand['run']>> = { ok: false, error: 'nope' };
   assert.equal('followUp' in failure, false);
+});
+
+test('`recent` never reports a refunded gift as money the masjid still has', () => {
+  // Every other figure this app quotes is netted — `takings` nets in SQL, the Donations page strikes
+  // the row through. This line did neither, so a £500 gift refunded the same afternoon was still
+  // read out over WhatsApp as £500 taken.
+  const store = fakeStore({
+    listDonations: () => [
+      { deviceName: 'Foyer', campaignTitle: 'General', amountMinor: 500_00, refundedMinor: 500_00, currency: 'GBP', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
+      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 100_00, refundedMinor: 40_00, currency: 'GBP', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
+      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 20_00, refundedMinor: 0, currency: 'GBP', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
+    ],
+  });
+  const list = buildCommands({ store, money, onlineWithinMs: 35_000 });
+  return runCommand(findCommand(list, 'recent')!, turn()).then((r) => {
+    assert.equal(r.ok, true);
+    const text = r.ok ? r.text : '';
+    assert.match(text, /REFUNDED/, 'a fully refunded gift must say so');
+    assert.match(text, /£40\.00 refunded/, 'a partial must say how much went back');
+    // The untouched gift stays plain — the marker must not leak onto every line.
+    const plain = text.split('\n').find((l) => l.includes('£20.00'));
+    assert.ok(plain && !/refunded/i.test(plain), 'an untouched donation is not annotated');
+  });
 });

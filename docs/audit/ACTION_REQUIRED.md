@@ -24,16 +24,20 @@ What I need you to do, in order:
 
 ---
 
-## 2. Merge the PR
+## 2. ~~Merge the PR~~ — DONE, shipped in v0.10.0. Nothing to do.
 
-Autonomous push was disabled — see the top of `REMEDIATION.md`. Everything is on **`audit/security-2026-08-04`** with a PR open. Nothing has been merged and nothing has been published.
+Kept as a record rather than deleted, because the paragraph that used to be here told a reader to go
+and merge a branch that no longer exists, and that instruction outlived its truth by two releases.
 
-Merging to `main` will trigger `build-image.yml`, which pushes a new multi-arch image to GHCR tagged **`0.10.0` and `latest`** — and that moves the `0.10.0` tag off the `@sha256:4c0c09e8…` digest currently pinned in `docker-compose.yml` and in the OpenMasjidAPPS registry. Masjids pull by digest, so nobody gets these fixes until you re-pin. The normal release flow applies:
+The audit branch `audit/security-2026-08-04` was merged and released as **v0.10.0**; the fixes have
+since been carried through v0.10.2, v0.11.0 and the current cycle. The release runbook it described
+now lives in `CLAUDE.md` rules 7 and 7c, which is the version to follow — it has been corrected
+twice since (tag the digest-pin commit, not the release commit; and open a PR against the catalog's
+`dev`, never push its `main`).
 
-1. Merge the PR.
-2. Let `Build image` finish; take the printed `@sha256` digest.
-3. Bump `VERSION`, `manifest.yaml`, both `package.json`s and `CHANGELOG.md` (I have deliberately **not** touched the version — picking a release number is yours).
-4. Commit the digest pin, tag, and bump the OpenMasjidAPPS registry entry.
+**Autonomous push is no longer disabled.** `REMEDIATION.md`'s header still describes the audit-run
+policy of 2026-08-04; the standing policy is `CLAUDE.md` §0 — all work lands on `dev` freely, and
+`main` moves only when the maintainer says "merge to main".
 
 ---
 

@@ -84,8 +84,11 @@ object KioskController {
 
     /**
      * Enter kiosk lockdown. Idempotent: safe to call from onResume. As device owner this is true Lock
-     * Task Mode with the status bar disabled and HOME-only features; otherwise it degrades to screen
-     * pinning (escapable — see the class note).
+     * Task Mode with the status bar disabled and HOME-only features; otherwise it degrades to the
+     * SOFT tier — being the HOME launcher, immersive-sticky bars, a dead Back button, a bounce-back
+     * watchdog and the optional shade guard. (It used to say "degrades to screen pinning", which the
+     * class note above already explains was removed in 0.11.0. Escapable either way — the class note
+     * is honest about the limits.)
      *
      * [locked] = a PAIRED kiosk that is not in a re-pair lockout, i.e. a screen a donor may actually
      * use. When it is false we RELEASE the lock on BOTH tiers, so the setup / re-pair screens (which

@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 OpenMasjid-Solutions
+
+name: Tests
+
+# RUN THE TEST SUITE. Until this file existed, CI never did.
+#
+# `build-image.yml` runs `npm run build` for the server and the web INSIDE the Dockerfile, so a type
+# error in shipping code failed the image build — but `npm test` was never invoked anywhere. Every
+# one of the suite's tests only ran when somebody remembered to run it on their own machine, and
+# several of them exist precisely because the thing they pin has already shipped broken once:
+#
+#   tunnel.test.ts          the percent-encoded /api bypass that exposed the admin API (KIOSK-001)
+#   commands.test.ts        the WhatsApp handler failing CLOSED when this app holds no app secret
+#   alerts.test.ts          alert routing defaults — "an upgrade must not silently mute anything"
+#   theme-contrast.test.ts  all 18 theme x wallpaper combinations against WCAG AA
+#   config.test.ts          the version-suffix pairing that caused a permanent false "update available"
+#
+# A red suite could not stop a release, and a pull request got no CI at all beyond the CLA bot —
+# `build-image.yml` is push-only, so a contributor's branch was never built or tested before review.
+#
+# This runs on pushes to the two real branches AND on every pull request, and `build-image.yml`
+# calls it via `workflow_call` and will not publish an image unless it is green.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A superseded push has nothing worth finishing; a pull request's latest commit is the only one
+# anybody is reviewing. Kept off `main` so a release's run always completes.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Node 22 to match `node:22-slim` in the Dockerfile — better-sqlite3 resolves a different
+      # prebuilt binary per major, so testing on another one proves less than it appears to.
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+
+      # The same compile the image build does, so a type error is caught here first and with a
+      # readable message rather than 200 lines into a Docker log.
+      - name: Compile the server
+        run: npm run build
+
+      # tsconfig.json EXCLUDES *.test.ts and tsx strips types without checking them, so without this
+      # the tests are the one part of the codebase nothing type-checks. Four real errors were sitting
+      # in the suite when this was added. See server/tsconfig.test.json.
+      - name: Type-check the tests
+        run: npm run typecheck:tests
+
+      - name: Run the tests
+        run: npm test
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+
+      # `vite build` runs tsc first (see web/package.json), so this is the admin panel's type check
+      # as well as its build.
+      - name: Build the admin panel
+        run: npm run build

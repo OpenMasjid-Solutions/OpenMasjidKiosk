@@ -7,10 +7,12 @@
 <resources>
     <string name="app_name">OpenMasjid Kiosk</string>
 
-    <!-- Attract screen (placeholder until the giving flow lands in a later slice) -->
-    <string name="attract_tagline">A simple, beautiful way to give at the masjid</string>
-    <string name="attract_cta">Tap to donate</string>
-    <string name="attract_scaffold_note">Setup in progress — this kiosk is not ready to take donations yet.</string>
+    <!-- (Three slice-1 scaffold strings lived here — attract_tagline, attract_cta and
+         attract_scaffold_note, "placeholder until the giving flow lands in a later slice".
+         The giving flow landed, nothing ever referenced them, and one of them read "this kiosk is
+         not ready to take donations yet" — a sentence worth being certain can never render on a
+         working kiosk. Removed 2026-08-17. The real headline and tagline come from the admin panel
+         via the kiosk config, not from here.) -->
 
     <!-- Loading -->
     <string name="loading">Getting things ready…</string>
@@ -55,7 +57,12 @@
     <string name="reader_transport_bluetooth">Bluetooth</string>
     <string name="reader_transport_usb">USB</string>
     <string name="reader_transport_simulated">Test reader</string>
-    <string name="reader_usb_auto">A USB card reader connects on its own — just plug it in. Use the button below only for a Bluetooth reader. No reader at all? Turn on “Allow manual card entry” in Admin → Giving screen and donors can type their card.</string>
+    <!-- This used to end: "No reader at all? Turn on 'Allow manual card entry' in Admin → Giving
+         screen and donors can type their card." There is no such control — `manualEntryEnabled` is
+         stored but never read, and typed entry is ALWAYS offered when no reader is connected. So it
+         sent a volunteer standing at a tablet with a dead reader hunting through the admin panel for
+         a toggle that does not exist, to switch on something already working. -->
+    <string name="reader_usb_auto">A USB card reader connects on its own — just plug it in. Use the button below only for a Bluetooth reader. No reader at all? Donors can still give: the kiosk offers typed card entry automatically whenever no reader is connected.</string>
     <string name="reader_scan">Find a reader</string>
     <string name="reader_stop_scan">Stop looking</string>
     <string name="reader_scanning">Looking for readers nearby…</string>
