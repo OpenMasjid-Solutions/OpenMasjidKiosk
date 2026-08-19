@@ -97,6 +97,49 @@ runs the card is already captured, so refusing the whole payment would strand a 
 outbox retrying the same error forever. `lines` is strict by contrast, because you build it from ids this
 app just gave you.
 
+### 11.0c Additive since v2 — 0.51.0: WHO PAYS STRIPE'S CUT (no version bump, nothing breaks)
+
+A madrasah can decide that the **payer** covers the processing fee rather than the school. **Off by
+default**, so `fee.enabled: false` is what almost every install returns — and it means *change
+nothing*: charge the tuition, report the tuition, exactly as before.
+
+| Field | Where | What it's for |
+| --- | --- | --- |
+| `fee` | `info` response | `{ enabled, card, bank }`. Each rate is `{ percentBps, fixedCents, capCents? }`. `card` is `null` when the feature is off; `bank` is `null` whenever the office is absorbing the (smaller, capped) bank fee — **and a null means add nothing.** |
+| `students_fee_cents` | PaymentIntent metadata | The fee added, whenever one was. See §11.3. |
+| `feeCents` | `record-payment` request | Informational. `amountCents` stays the **tuition**. |
+
+**The gross-up, and why the obvious version is wrong.** The fee is a percentage of the **gross**,
+because that is how Stripe computes its own cut:
+
+```
+gross = ceil((tuitionCents + fixedCents) / (1 - percentBps / 10000))
+fee   = gross - tuitionCents
+```
+
+Taking a percentage of the *tuition* adds $3.20 to a $100 bill instead of $3.30. The charge then
+settles at $99.91 net, the invoice stays nine cents open, and the family reads as unpaid for ever over
+nine cents. **Round up**, always — rounding to nearest is the same bug, half the time. Where a
+`capCents` is present and the implied fee exceeds it, the answer is simply `tuitionCents + capCents`,
+or a $2,000 payment has $16 added to cover a $5 charge.
+
+Worked examples (Stripe's US defaults, `290` / `30`; bank `80` / `0` cap `500`):
+
+| Tuition | Gross | Fee |
+| --- | --- | --- |
+| $100.00 | $103.30 | $3.30 |
+| $250.00 | $257.78 | $7.78 |
+| $2,000.00 by bank | $2,005.00 | $5.00 |
+
+**A KIOSK USES THE `card` RATE AND ONLY THAT.** A Terminal reader is a card by definition — there is
+nowhere in the flow to choose "or pay by bank" and no reason to offer one, so `bank` is parsed and then
+never consulted. Quoting the cheaper bank rate at a reader would under-collect on every payment.
+
+**Never compute this from a hard-coded 2.9%.** It comes from `info`. An office can change the rate,
+and two apps disagreeing about what a parent owes is worse than either being wrong on its own.
+**Never apply it to cash** or any manual channel: there is no processor cut to pass on, so inventing
+one is a charge for nothing.
+
 ### 11.1 Transport (all four repos must agree)
 
 - Consumers (Donations, Kiosk) call the **OS broker**, never this app directly:
@@ -114,7 +157,11 @@ app just gave you.
 { "v": 2 }
 → { "v": 2, "enabled": true, "schoolName": "An-Noor Weekend School", "currency": "usd",
     "tagline": "Pay tuition with your child's Student ID",
-    "allowAdvance": true, "minAmountCents": 100 }
+    "allowAdvance": true, "minAmountCents": 100,
+    // 0.51.0, additive. Off for almost every install; off means change nothing (§11.0c).
+    "fee": { "enabled": true,
+             "card": { "percentBps": 290, "fixedCents": 30 },
+             "bank": { "percentBps": 80, "fixedCents": 0, "capCents": 500 } } }
 // "enabled": false (setup incomplete or external payments turned off by admin) → consumers hide the campaign
 ```
 
@@ -273,7 +320,13 @@ purpose            = students-billing        ← the discriminator; REQUIRED
 omos_app           = donations | kiosk | students-portal    ← students-portal is set ONLY by this app (§13)
 students_family_id = fam_x1                  ← REQUIRED (from lookup / known internally)
 students_student_id = stu_1                  ← optional, the matched student
+students_fee_cents  = 330                    ← 0.51.0: REQUIRED whenever you grossed up (§11.0c)
 ```
+**`students_fee_cents` is not bookkeeping.** Reconciliation (§11.4) reads succeeded PaymentIntents a
+day later, on a job that never saw the request and may by then find the setting switched off or the
+rate changed. Without this key it cannot tell a $103.30 charge covering $100 of tuition from a family
+who genuinely paid $103.30, and credits the difference. An amount identifies nobody, so this breaks
+none of the privacy rules below — the ban on Student IDs and names still holds absolutely.
 **Never put a Student ID or a child's name in Stripe metadata, descriptions, or URLs** — metadata is visible in Stripe dashboards and exports. Description: `School balance — <family label>`. **Receipts must say "payment", never "donation"** — tuition is generally not tax-deductible; consumers exclude `purpose=students-billing` from donation totals and year-end letters, and this app's own receipts follow the same wording rule.
 
 ### 11.4 Reconciliation (this app's safety net — covers three channels)

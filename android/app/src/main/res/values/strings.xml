@@ -166,4 +166,21 @@
     <!-- The two system bars Android will not let an ordinary app remove. -->
     <string name="kiosk_bars_note">To finish locking the tablet down, hide the system bars in the tablet\'s own Settings. The wording differs by manufacturer:\n\n• BOTTOM NAVIGATION BAR — Settings → Display → Navigation bar (or System → Gestures), and choose \"Gesture navigation\" / \"Swipe gestures\". That removes the Back, Home and Recents buttons. Some tablets also offer a small pin icon that keeps the bar hidden until you swipe.\n\n• TOP NOTIFICATION BAR — Android gives an ordinary app no way to remove this, and no tablet setting hides it. The optional shade lock above closes it the moment it is pulled down. Removing the bar completely needs the one-time device-owner setup in docs/TABLET_SETUP.md, which the kiosk then does for you automatically.</string>
     <string name="kiosk_bars_note_owner">This tablet is device owner, so the kiosk already removes the status bar and blocks Home and Recents itself whenever the giving screen is showing — there is nothing to turn off in Settings. If you would also like the navigation bar gone outside the kiosk, set Settings → Display → Navigation bar to \"Gesture navigation\".</string>
+
+    <!-- ── Tuition: who pays the card processing fee (students/billing 0.51.0, §11.4) ──
+         Shown ONLY when the madrasah has chosen to pass Stripe's cut to the payer. Almost every
+         school absorbs it and never sees this screen.
+
+         THE EXPLAINER IS A REQUIREMENT, NOT A NICETY. A parent who believes the madrasah added 3%
+         to their child's tuition will say so, to other parents, and they will be wrong. Say plainly
+         that the money is not the school's, name who it does go to, and give the way to avoid it.
+         Keep it short enough to read standing at a wall. -->
+    <string name="tuition_fee_title">Before you pay</string>
+    <string name="tuition_fee_line_tuition">Tuition</string>
+    <string name="tuition_fee_line_fee">Card processing fee</string>
+    <string name="tuition_fee_line_total">Total charged</string>
+    <string name="tuition_fee_explainer">This fee does not go to the madrasah — it is what Visa, Mastercard and American Express charge to accept a card, and it goes straight to the payment processor. Paying by cash or cheque at the office avoids it.</string>
+    <!-- %1$s is the total, so the button says exactly what pressing it will take. -->
+    <string name="tuition_fee_pay">Pay %1$s</string>
+    <string name="tuition_fee_cancel">Cancel</string>
 </resources>

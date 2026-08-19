@@ -8,6 +8,7 @@ import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -47,13 +48,29 @@ enum class Overlay { None, Pin, Maintenance }
 /** The donor-facing giving flow (Paired phase). The kiosk now boots straight into [Amount] (no
  *  attract screen); [Idle] is retained only as a defensive default. Processing = the card was read
  *  and we're verifying with the server (so the tap is acknowledged immediately). */
-enum class GivingStep { Idle, Amount, LargeAmount, Details, Card, Processing, Thanks, Error, TuitionConfirm, TuitionInvoices }
+enum class GivingStep { Idle, Amount, LargeAmount, Details, Card, Processing, Thanks, Error, TuitionConfirm, TuitionInvoices, TuitionFeeConfirm }
 
 /** How long a non-main campaign tab may sit idle before the kiosk returns to the main tab. */
 const val KIOSK_AUTO_RETURN_MS = 45_000L
 
 /** Whether a requested monthly subscription was set up (drives the thank-you wording). */
 enum class MonthlyOutcome { None, Created, NotSupported }
+
+/**
+ * The itemised total a parent must see BEFORE the reader is armed, when their madrasah has chosen to
+ * pass Stripe's processing fee to the payer (students/billing 0.51.0, §11.4).
+ *
+ * Every number here comes from the SERVER's reply to the PaymentIntent it just created. The tablet
+ * holds no rate and does no arithmetic of its own, deliberately: it is the only way to guarantee the
+ * total on the screen is the total the card is asked for. A fee that first appears on the reader is
+ * what generates phone calls to the office.
+ */
+data class TuitionFeeQuote(
+    val tuitionMinor: Long,
+    val feeMinor: Long,
+    val totalMinor: Long,
+    val currency: String,
+)
 
 /** A one-shot request for the UI to present Stripe's on-device card form (keyed/manual entry).
  *  When [GivingState.manual] is non-null, KioskRoot presents PaymentSheet and reports the result. */
@@ -206,6 +223,9 @@ data class GivingState(
     val preparingManual: Boolean = false,
     /** Tuition (students/billing) shell state — non-null only for a `tuition` campaign. */
     val tuition: TuitionState? = null,
+    /** Non-null → show the itemised tuition/fee/total and wait for the parent, before the reader is
+     *  armed. Only ever set when the school passes the processing fee on (§11.4). */
+    val feeQuote: TuitionFeeQuote? = null,
 )
 
 /**
@@ -470,7 +490,25 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     private var givingJob: Job? = null
 
+    /** Set while the tuition flow is paused on the fee-confirm screen, waiting for the parent to
+     *  accept the itemised total. Completed by [confirmTuitionFee] / [cancelTuitionFee]; cleared by
+     *  the coroutine that created it. Null the rest of the time, and null for every school that
+     *  absorbs the processing fee — which is almost all of them. */
+    private var feeGate: CompletableDeferred<Boolean>? = null
+
     private fun updateGiving(f: (GivingState) -> GivingState) = local.update { it.copy(giving = f(it.giving)) }
+
+    /** The parent accepted the tuition + processing-fee total, so the reader may be armed. */
+    fun confirmTuitionFee() {
+        feeGate?.complete(true)
+    }
+
+    /** The parent backed out at the fee screen. Nothing has been collected — the PaymentIntent is
+     *  abandoned and Stripe expires it. Also used by the idle timeout, so a parent who simply walks
+     *  away is never left having agreed to something by inaction. */
+    fun cancelTuitionFee() {
+        feeGate?.complete(false)
+    }
 
     private var autoReturnJob: Job? = null
     private var idleResetJob: Job? = null
@@ -569,6 +607,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Cancel the flow and go back to the amount screen. */
     fun cancelGiving() {
+        // Release the fee gate FIRST. Cancelling the job would strand a coroutine suspended on it,
+        // and the parent pressing Cancel on the fee screen must mean the same thing as walking away.
+        feeGate?.complete(false)
         givingJob?.cancel()
         PaymentController.cancelCollect()
         ReaderManager.clearPrompt()
@@ -1077,7 +1118,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         tuitionHardResetJob = viewModelScope.launch {
             delay(TUITION_MAX_ON_SCREEN_MS)
             val s = local.value.giving.step
-            if (s == GivingStep.TuitionConfirm || s == GivingStep.TuitionInvoices) cancelGiving()
+            // TuitionFeeConfirm is in this list too: it sits BEFORE the card is collected, so a parent
+            // who walks away at the fee screen would otherwise strand the kiosk on it until someone
+            // noticed. cancelGiving releases the fee gate, so the waiting coroutine unwinds cleanly.
+            if (s == GivingStep.TuitionConfirm || s == GivingStep.TuitionInvoices || s == GivingStep.TuitionFeeConfirm) cancelGiving()
         }
     }
 
@@ -1172,6 +1216,40 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             updateGiving { it.copy(serverChargeMinor = pi.chargeMinor) }
+
+            // ── The payer covered Stripe's cut: show them the split and WAIT (§11.4) ──
+            // Only when there is a fee — a school that absorbs it (almost all of them) sees exactly
+            // the flow it always had, with no extra tap. This gate sits before the reader is armed on
+            // purpose: a total that first appears on the card reader is the thing that generates
+            // phone calls to the office, and the parent has to be told plainly whose money it is.
+            if (pi.feeMinor > 0L) {
+                val gate = CompletableDeferred<Boolean>()
+                feeGate = gate
+                updateGiving {
+                    it.copy(
+                        step = GivingStep.TuitionFeeConfirm,
+                        busy = false,
+                        feeQuote = TuitionFeeQuote(pi.tuitionMinor, pi.feeMinor, pi.chargeMinor, t.currency),
+                    )
+                }
+                repo.log("info", "tuition_fee_quoted", "${pi.tuitionMinor}+${pi.feeMinor}=${pi.chargeMinor}")
+                val agreed = try {
+                    gate.await()
+                } finally {
+                    feeGate = null
+                }
+                if (!agreed) {
+                    // They backed out before anything was collected. The PaymentIntent is simply
+                    // abandoned — nothing was charged, and Stripe expires it on its own.
+                    repo.log("info", "tuition_fee_declined", pi.id)
+                    updateGiving { it.copy(feeQuote = null, busy = false) }
+                    resetGiving()
+                    repo.flushLogs()
+                    return@launch
+                }
+                updateGiving { it.copy(step = GivingStep.Card, busy = true, feeQuote = null) }
+            }
+
             val piId = try {
                 PaymentController.collectAndConfirm(pi.clientSecret)
             } catch (c: CancellationException) {

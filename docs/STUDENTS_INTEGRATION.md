@@ -69,6 +69,27 @@ A `tuition` tile runs **exactly this**, nothing more:
      when nothing is due (a term up front). Offered only when `info.allowAdvance` says so.
    With nothing due the screen still **says so first** — the balance, the credit, or "Nothing due" —
    and the amount pad is something the parent chooses, never what they land on.
+6b. **If — and only if — the school passes Stripe's cut to the payer** (`info.fee.enabled`, 0.51.0),
+   an extra screen appears before the reader is armed, showing the itemised total and saying whose
+   money the extra is:
+
+   > **Tuition** $100.00
+   > **Card processing fee** $3.30
+   > **Total charged** $103.30
+   >
+   > This fee does not go to the madrasah — it is what Visa, Mastercard and American Express charge to
+   > accept a card, and it goes straight to the payment processor. Paying by cash or cheque at the
+   > office avoids it.
+
+   This is a **requirement** (§11.4), not a nicety, and it is deliberately before the reader is armed:
+   a total that first appears on the card reader is what generates phone calls to the office. Almost
+   every school absorbs the fee and never sees this screen at all.
+
+   **The tablet holds no rate and does no arithmetic.** Every figure comes from the server's reply to
+   the PaymentIntent it just created, so the total shown is by construction the total the card is
+   asked for. That is also why the fee rate is absent from `tuition/info` and `tuition/lookup` — there
+   is nothing for a device to get wrong.
+
 7. **Present card on the Reader M2** (card-present PaymentIntent). On approval → we record it into
    Students and print/show a receipt that says **“payment”**, never “donation”. Done.
 
@@ -206,9 +227,21 @@ breakdown we don't need — omit it and Students derives the split itself, oldes
   "occurredAt": "2026-07-15T18:03:22Z",
   "externalRef": { "stripePaymentIntentId": "pi_3PabcDEF", "stripeChargeId": "ch_...", "stripeAccountId": "acct_..." },
   "allocations": [{ "invoiceId": "inv_9", "amountCents": 15000 }],   // OMIT for “pay full balance” → auto oldest-due-first
+  "feeCents": 330,                        // 0.51.0, optional: Stripe's cut IF the payer covered it
   "payerNote": "paid at the front desk" }  // optional, ≤200 chars
 → { "v": 1, "recorded": true, "paymentId": "pay_71", "duplicate": false }
 ```
+**`amountCents` is the TUITION — the gross never goes there.** This is the one mistake in the whole
+fee feature that corrupts data rather than merely annoying somebody, and the contract calls the two
+failure directions deliberately lopsided:
+
+| Mistake | Cost |
+| --- | --- |
+| Forget `students_fee_cents` on the PaymentIntent | Reconciliation credits the full charge — a small credit on one family's account. |
+| Put the **gross** in `amountCents` | The ledger is wrong until a human notices: Stripe's cut is credited to the family as an overpayment, silently eating into their next bill, compounding for as long as the setting is on. |
+
+**So when in doubt, send the tuition.** Our outbox stores the two separately (`amount_minor` is the
+tuition, `fee_minor` the cut) precisely so the wrong one cannot be reached for by accident.
 **Exactly one breakdown, never two.** The provider prefers `lines` > `allocations` > `students`, so
 sending more than one is the wire saying two different things about the same money. What we send:
 

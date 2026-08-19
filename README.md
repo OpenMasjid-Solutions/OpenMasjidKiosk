@@ -118,6 +118,11 @@ any appeal can be a **Tuition** tile:
 - A **minimum payment floor** on every route, never below the school's own minimum.
 - **Privacy timeouts**: an abandoned Student ID is wiped, and a family's balance can't stay
   on a wall indefinitely — there's a hard ceiling plus an always-available **Leave** button.
+- **If the school passes on the card fee**, the kiosk says so before the card is taken: tuition, fee
+  and total on separate lines, with a sentence explaining the fee is not the madrasah's and that
+  paying at the office avoids it. It is **off unless the school turns it on**, the amount comes from
+  the school (never a rate this app guesses), and the school's ledger is still credited the tuition —
+  not the total. Cash and manual payments never attract one.
 - It is recorded as a **payment, never a donation** — kept out of donation totals, receipts
   and year-end letters — and pushed to the school's ledger with a retry queue if the school
   app is briefly unreachable.

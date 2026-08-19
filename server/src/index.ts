@@ -25,7 +25,7 @@ import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePair
 import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppStatus, clearWhatsAppCache, emailStatus, emailCanSend } from './fabric';
 import { ALERT_META, DEFAULT_ROUTE, alertEmailLooksValid, isAlertId, normalisePhone, phoneLooksValid, routeSummary, type AlertId } from './alerts';
 import { escapeHtml, renderMonthlyStarted, renderReceipt, renderRefund, type ReceiptContext } from './email';
-import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
+import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, grossUpForStudentsFee, kioskFeeRate, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
 import { authorizeCommandCall, buildCommands, findCommand, runCommand, tidyReply, validFollowUpToken } from './commands';
 import { blockedOverTunnel } from './tunnel';
@@ -2431,7 +2431,11 @@ ${body}
       idempotencyKey: piId,
       familyId: row.familyId,
       studentId: row.studentId || undefined,
+      // The TUITION. `row.amountMinor` is stored net for exactly this reason (§11.3) — Students'
+      // ledger holds tuition only, and a gross here reads as an overpayment.
       amountCents: row.amountMinor,
+      // Informational, and omitted when the school absorbed the fee (the usual case).
+      feeCents: row.feeMinor > 0 ? row.feeMinor : undefined,
       currency: row.currency,
       occurredAt: row.occurredAt || new Date().toISOString(),
       externalRef: {
@@ -2529,12 +2533,17 @@ ${body}
       // Uniform "not found" (no enumeration oracle); the rolling window already counted this attempt.
       return { data: { found: false } };
     }
-    // The school's advance/floor policy, captured into the session so the pay step validates against
-    // the server's copy. Cached ~5 min alongside the tile label; unavailable → no paying ahead.
+    // The school's advance/floor policy AND its processing-fee rate, captured into the session so the
+    // pay step validates and prices against the server's copy. Cached ~5 min alongside the tile label;
+    // unavailable → no paying ahead, and no fee (the school absorbs it, exactly as before 0.51.0).
+    //
+    // Pinning the RATE to the session is what makes the quote binding: `info` is cached and an office
+    // can change the rate, so reading it again at charge time could hand a parent a total they were
+    // never shown. The rate they were quoted on is the rate they pay.
     const info = await studentsInfo();
     const policy = info.available
-      ? { allowAdvance: info.info.allowAdvance, minAmountCents: info.info.minAmountCents }
-      : { allowAdvance: false, minAmountCents: MIN_TUITION_CENTS };
+      ? { allowAdvance: info.info.allowAdvance, minAmountCents: info.info.minAmountCents, feeRate: kioskFeeRate(info.info) }
+      : { allowAdvance: false, minAmountCents: MIN_TUITION_CENTS, feeRate: null };
     // Stash the family + invoices server-side; the tablet only gets display fields + an opaque session id.
     const session = createTuitionSession({
       campaignId: campaign.id,
@@ -2547,6 +2556,7 @@ ${body}
       creditCents: r.family.creditCents,
       allowAdvance: policy.allowAdvance,
       minAmountCents: policy.minAmountCents,
+      feeRate: policy.feeRate,
       // The children, in the SAME order the response lists them — the tablet addresses one by its
       // position (`s0`, `s1`) so "add £50 for Maryam" can name her ledger without the device ever
       // holding the school's internal ids.
@@ -2689,6 +2699,13 @@ ${body}
     const acct = await resolveAccount();
     if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     const currency = session.currency || store.getCurrency();
+    // WHO PAYS STRIPE'S CUT (Students 0.51.0, §11.2). Off for almost every install, and off means
+    // change nothing: charge the tuition, report the tuition. When it IS on, the payer covers it, so
+    // the charge is grossed up and the two numbers part company from here on — `amt.amountCents` is
+    // the TUITION for the rest of this handler, `chargeMinor` is what the card is asked for.
+    //
+    // The rate comes from the SESSION, captured at lookup, so the total quoted is the total charged.
+    const { grossCents: chargeMinor, feeCents: feeMinor } = grossUpForStudentsFee(amt.amountCents, session.feeRate);
     const metadata: Record<string, string> = {
       purpose: 'students-billing', // §11.3 reconciliation discriminator (REQUIRED)
       omos_app: 'kiosk',
@@ -2699,12 +2716,19 @@ ${body}
       campaignId: campaign.id,
       stripeAccountId: acct.id,
     };
+    // §11.3: whenever we grossed up, say by how much. This is NOT bookkeeping. Students' daily
+    // reconciliation reads succeeded PaymentIntents a day later, on a job that never saw this request
+    // and may by then find the setting switched off or the rate changed — without this key it cannot
+    // tell a $103.30 charge covering $100 of tuition from a family who genuinely paid $103.30, and
+    // credits the difference. An amount identifies nobody, so this breaks no metadata privacy rule;
+    // the standing ban still holds and is enforced above — never a Student ID, never a child's name.
+    if (feeMinor > 0) metadata.students_fee_cents = String(feeMinor);
     // The child this charge is for: the one the parent picked on the "add money for…" pad when there
     // was one, else the student whose ID was typed.
     const chargeStudentId = amt.studentId || session.studentId;
     if (chargeStudentId) metadata.students_student_id = chargeStudentId;
     const piInput = {
-      amountMinor: amt.amountCents,
+      amountMinor: chargeMinor, // the GROSS — what the card is asked for
       currency,
       description: `School balance — ${session.familyLabel}`.slice(0, 200), // never the PIN/typed name
       metadata,
@@ -2721,13 +2745,29 @@ ${body}
         familyId: session.familyId,
         studentId: chargeStudentId,
         familyLabel: session.familyLabel,
+        // The TUITION, deliberately — this row is what `record-payment` is built from, and
+        // `amountCents` there has always meant what the family owed. A gross here would be booked
+        // as an overpayment and sit as a credit eating into their next bill.
         amountMinor: amt.amountCents,
+        feeMinor,
         currency,
         allocations: amt.allocations,
         students: amt.students, // per-child split (v2); null for a pay-full charge
         lines: amt.lines, // the ticked bill lines (0.43.0); supersedes both of the above
       });
-      return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, chargeMinor: amt.amountCents, currency } };
+      // The tablet renders its confirm screen from THESE numbers, not from a rate of its own — which
+      // is the whole reason no rate is sent to the device. The total a parent is shown is by
+      // construction the total the card is asked for.
+      return {
+        data: {
+          paymentIntentId: pi.id,
+          clientSecret: pi.clientSecret,
+          chargeMinor, // gross = tuition + fee; what the reader will take
+          tuitionMinor: amt.amountCents,
+          feeMinor,
+          currency,
+        },
+      };
     } catch (err) {
       const e = err as { code?: string; message?: string };
       const why = `${e.code ?? ''} ${e.message ?? ''}`.trim().slice(0, 300);
@@ -2756,14 +2796,35 @@ ${body}
         result.chargeId,
         new Date(result.createdSec * 1000).toISOString(),
       );
+      // The outbox row is the only place that knows how the charge splits: `result.amountMinor` is
+      // the PaymentIntent's amount, which is the GROSS whenever the payer covered the processing fee.
+      const row = store.getTuitionOutbox(id);
+      const feeMinor = row?.feeMinor ?? 0;
+      const tuitionMinor = row?.amountMinor ?? result.amountMinor;
       if (result.succeeded) {
         await tryRecordTuition(id); // best-effort now; the outbox retries if Students is unreachable
         void notify({
-          text: `${formatMoney(result.amountMinor, result.currency)} tuition payment at ${d.name || 'the kiosk'}.`,
+          // Say what the SCHOOL is owed and what the processor took, separately. A single grossed-up
+          // figure in a dashboard notification reads as tuition and quietly overstates every payment.
+          text:
+            feeMinor > 0
+              ? `${formatMoney(tuitionMinor, result.currency)} tuition at ${d.name || 'the kiosk'} (${formatMoney(result.amountMinor, result.currency)} charged — the payer covered the ${formatMoney(feeMinor, result.currency)} processing fee).`
+              : `${formatMoney(result.amountMinor, result.currency)} tuition payment at ${d.name || 'the kiosk'}.`,
           level: 'success',
         });
       }
-      return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency } };
+      // `amountMinor` stays the CHARGE — it is what the card was debited and what the thank-you
+      // screen shows — with the split beside it so the tablet can itemise the receipt line.
+      return {
+        data: {
+          status: result.status,
+          succeeded: result.succeeded,
+          amountMinor: result.amountMinor,
+          tuitionMinor,
+          feeMinor,
+          currency: result.currency,
+        },
+      };
     } catch {
       return reply.code(502).send({ error: 'Couldn’t confirm the payment with Stripe.' });
     }

@@ -284,7 +284,11 @@ export interface TuitionOutboxRow {
   familyId: string;
   studentId: string;
   familyLabel: string;
+  /** The TUITION — what the family owed, and what goes to Students as `amountCents`. */
   amountMinor: number;
+  /** Stripe's cut when the PAYER covered it (0.51.0); 0 = the school absorbed it. Kept SEPARATE
+   *  from `amountMinor` on purpose — the charge is their sum, the ledger only ever sees the tuition. */
+  feeMinor: number;
   currency: string;
   allocations: { invoiceId: string; amountCents: number }[] | null;
   /** The per-CHILD split (contract v2) — null = let Students derive it (a pay-full charge). */
@@ -522,7 +526,8 @@ export class Store {
         family_id TEXT NOT NULL,
         student_id TEXT NOT NULL DEFAULT '',
         family_label TEXT NOT NULL DEFAULT '',
-        amount_minor INTEGER NOT NULL,
+        amount_minor INTEGER NOT NULL,                 -- the TUITION (net). NEVER the grossed-up charge.
+        fee_minor INTEGER NOT NULL DEFAULT 0,          -- Stripe's cut, when the PAYER covered it (0.51.0)
         currency TEXT NOT NULL,
         allocations TEXT NOT NULL DEFAULT '',          -- JSON [{invoiceId,amountCents}] or '' for pay-full
         student_shares TEXT NOT NULL DEFAULT '',       -- JSON [{studentId,amountCents}] (v2 per-child split) or ''
@@ -650,6 +655,9 @@ export class Store {
       const tcols = (this.db.prepare('PRAGMA table_info(tuition_outbox)').all() as { name: string }[]).map((c) => c.name);
       if (!tcols.includes('student_shares')) this.db.exec("ALTER TABLE tuition_outbox ADD COLUMN student_shares TEXT NOT NULL DEFAULT ''");
       if (!tcols.includes('bill_lines')) this.db.exec("ALTER TABLE tuition_outbox ADD COLUMN bill_lines TEXT NOT NULL DEFAULT ''");
+      // Payer-covered processing fee (0.51.0, §11.2). 0 is correct for every legacy row: before this
+      // existed the school absorbed the fee, so the tuition and the charge were the same number.
+      if (!tcols.includes('fee_minor')) this.db.exec('ALTER TABLE tuition_outbox ADD COLUMN fee_minor INTEGER NOT NULL DEFAULT 0');
     }
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
@@ -1485,7 +1493,11 @@ export class Store {
     familyId: string;
     studentId?: string;
     familyLabel?: string;
+    /** The TUITION — what the family owed. Never the grossed-up charge: this is the number sent to
+     *  Students as `amountCents`, and a gross there is booked as an overpayment. */
     amountMinor: number;
+    /** Stripe's cut, when the payer covered it (0.51.0). 0 = the school absorbed it, as before. */
+    feeMinor?: number;
     currency: string;
     allocations?: { invoiceId: string; amountCents: number }[] | null;
     students?: { studentId: string; amountCents: number }[] | null;
@@ -1494,9 +1506,9 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO tuition_outbox (payment_intent_id, device_id, campaign_id, stripe_account_id, family_id,
-           student_id, family_label, amount_minor, currency, allocations, student_shares, bill_lines, created_at)
+           student_id, family_label, amount_minor, fee_minor, currency, allocations, student_shares, bill_lines, created_at)
          VALUES (@pi, @deviceId, @campaignId, @stripeAccountId, @familyId, @studentId, @familyLabel,
-           @amountMinor, @currency, @allocations, @studentShares, @billLines, @createdAt)
+           @amountMinor, @feeMinor, @currency, @allocations, @studentShares, @billLines, @createdAt)
          ON CONFLICT(payment_intent_id) DO NOTHING`,
       )
       .run({
@@ -1508,6 +1520,7 @@ export class Store {
         studentId: d.studentId || '',
         familyLabel: d.familyLabel || '',
         amountMinor: d.amountMinor,
+        feeMinor: Math.max(0, Math.trunc(d.feeMinor ?? 0)),
         currency: d.currency,
         allocations: d.allocations && d.allocations.length ? JSON.stringify(d.allocations) : '',
         studentShares: d.students && d.students.length ? JSON.stringify(d.students) : '',
@@ -1568,6 +1581,7 @@ export class Store {
       studentId: String(r.student_id ?? ''),
       familyLabel: String(r.family_label ?? ''),
       amountMinor: Number(r.amount_minor),
+      feeMinor: Number(r.fee_minor ?? 0),
       currency: String(r.currency),
       allocations,
       students,

@@ -155,6 +155,24 @@ detail of every change — it is distilled into a major-changes-only entry when 
   internet, what the setup screen actually shows, and where the maintenance gesture is. The claim
   that the tablet's wording is fully translatable is corrected — the setup and maintenance screens
   are, the giving flow is not yet.
+- **A school can now ask the payer to cover the card fee** (needs OpenMasjid Students 0.51.0). It is
+  **off unless the school turns it on**, and off means nothing whatsoever changes — which is what
+  almost every school will see.
+  - When it is on, the kiosk shows the parent an itemised total **before the card reader is armed**:
+    tuition, the processing fee, and what will actually be charged — plus a plain sentence saying the
+    fee is **not the madrasah's**. It is what Visa, Mastercard and American Express charge to accept a
+    card and it goes straight to the payment processor, and paying at the office avoids it. A total
+    that first appears on the reader is what generates phone calls to the office.
+  - **The school's ledger is still credited the tuition, never the total.** Crediting the fee to the
+    family would read as an overpayment and quietly eat into their next bill, month after month.
+  - The amount comes from the school, not from any rate this app assumes — and it is worked out the
+    way Stripe actually charges, so the school ends up with the full tuition rather than a few cents
+    short. A few cents short is not a rounding curiosity: it leaves the invoice open and the family
+    showing as unpaid indefinitely.
+  - The figures on the screen come from the server, so the total a parent agrees to is by construction
+    the total their card is asked for.
+  - Cash and any manual payment never attract a fee — there is no processor taking a cut to pass on.
+  - Walking away at that screen cancels cleanly, like every other step; nothing is charged.
 
 ## 0.11.0
 **Monthly giving works properly for the first time, and a donation can now be refunded from the

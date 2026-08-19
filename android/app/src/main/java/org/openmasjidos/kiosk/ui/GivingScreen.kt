@@ -22,12 +22,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
@@ -51,6 +53,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,6 +63,8 @@ import org.openmasjidos.kiosk.GivingState
 import org.openmasjidos.kiosk.GivingStep
 import org.openmasjidos.kiosk.MonthlyOutcome
 import org.openmasjidos.kiosk.TuitionInvoiceUi
+import org.openmasjidos.kiosk.R
+import org.openmasjidos.kiosk.TuitionFeeQuote
 import org.openmasjidos.kiosk.TuitionState
 import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.local.KioskConfig
@@ -116,6 +121,8 @@ fun GivingScreen(
     onTuitionToggleUnit: (String) -> Unit = {},
     onTuitionToggleInvoice: (String) -> Unit = {},
     onTuitionPay: () -> Unit = {},
+    /** The parent accepted the tuition + processing-fee total, so the reader may be armed. */
+    onTuitionConfirmFee: () -> Unit = {},
     onTuitionPayAmount: (Long, String) -> Unit = { _, _ -> },
     loadImage: suspend (String) -> ImageBitmap? = { null },
     modifier: Modifier = Modifier,
@@ -135,6 +142,11 @@ fun GivingScreen(
             TuitionConfirmStep(giving.tuition, style, onTuitionConfirmStudent, onTuitionRejectStudent, modifier)
         isTuition && giving.step == GivingStep.TuitionInvoices ->
             TuitionInvoicesStep(giving.tuition, style, onTuitionPayFull, onTuitionToggleUnit, onTuitionToggleInvoice, onTuitionPay, onTuitionPayAmount, onCancel, modifier)
+        // Only reached when the school passes Stripe's cut to the payer. It sits between "pay" and the
+        // reader being armed, because the parent has to see the total — and whose money the extra is —
+        // before they commit to it (§11.4).
+        isTuition && giving.step == GivingStep.TuitionFeeConfirm ->
+            TuitionFeeStep(giving.feeQuote, style, onTuitionConfirmFee, onCancel, modifier)
         giving.step == GivingStep.Amount || giving.step == GivingStep.Idle ->
             AmountStep(giving, campaign, currency, style, readerConnected, config?.footerText ?: "OpenMasjid Solutions", onSetMonthly, onChooseAmount, loadImage, modifier)
         // Details has its own full-screen scrollable layout (it hosts the in-app keyboard), so it is
@@ -788,6 +800,116 @@ private fun TuitionConfirmStep(
                 modifier = Modifier.fillMaxWidth().height(68.dp),
             ) { Text("No — try another ID", color = style.onScene, style = MaterialTheme.typography.titleMedium) }
         }
+    }
+}
+
+/**
+ * WHOSE MONEY IS THIS? The itemised total, shown before the reader is armed, when the madrasah has
+ * chosen to pass Stripe's processing fee to the payer (students/billing 0.51.0, §11.4).
+ *
+ * Two things are requirements rather than niceties, and both are here:
+ *
+ *  1. The fee is its OWN LINE with the total, seen before the parent commits. A total that first
+ *     appears on the reader — or on a card statement — is what generates phone calls to the office.
+ *  2. The sentence saying the extra is NOT the masjid's. It is what the card networks charge to
+ *     accept a card and it goes to the payment processor. A parent who thinks the madrasah added
+ *     3% to their child's tuition will say so, to other parents, and they will be wrong.
+ *
+ * Every figure comes from the server's own reply. This screen does no arithmetic: the total shown is
+ * by construction the total the card is asked for.
+ *
+ * A school that absorbs the fee — almost all of them — never reaches this screen at all.
+ */
+@Composable
+private fun TuitionFeeStep(
+    quote: TuitionFeeQuote?,
+    style: SceneStyle,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val q = quote ?: return
+    Column(
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 620.dp).fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                stringResource(R.string.tuition_fee_title),
+                style = MaterialTheme.typography.headlineSmall,
+                color = style.onSceneMuted,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(22.dp))
+
+            // The three lines, in the order the contract sets them out. Tuition, then the fee, then
+            // what the card is actually asked for — emphasised, because it is the number that matters.
+            FeeRow(stringResource(R.string.tuition_fee_line_tuition), formatMoney(q.tuitionMinor, q.currency), style, emphasised = false)
+            Spacer(Modifier.height(10.dp))
+            FeeRow(stringResource(R.string.tuition_fee_line_fee), formatMoney(q.feeMinor, q.currency), style, emphasised = false)
+            Spacer(Modifier.height(14.dp))
+            HorizontalDivider(color = style.onSceneMuted.copy(alpha = 0.25f))
+            Spacer(Modifier.height(14.dp))
+            FeeRow(stringResource(R.string.tuition_fee_line_total), formatMoney(q.totalMinor, q.currency), style, emphasised = true)
+
+            Spacer(Modifier.height(22.dp))
+            Text(
+                stringResource(R.string.tuition_fee_explainer),
+                style = MaterialTheme.typography.bodyMedium,
+                color = style.onSceneMuted,
+                textAlign = TextAlign.Center,
+            )
+
+            Spacer(Modifier.height(26.dp))
+            Button(
+                onClick = onConfirm,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
+                modifier = Modifier.fillMaxWidth().height(78.dp),
+            ) {
+                Text(
+                    stringResource(R.string.tuition_fee_pay, formatMoney(q.totalMinor, q.currency)),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onCancel,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth().height(68.dp),
+            ) { Text(stringResource(R.string.tuition_fee_cancel), color = style.onScene, style = MaterialTheme.typography.titleMedium) }
+        }
+    }
+}
+
+/** One label/amount row of the fee breakdown. The total is emphasised; the parts are not. */
+@Composable
+private fun FeeRow(label: String, amount: String, style: SceneStyle, emphasised: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = if (emphasised) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
+            color = if (emphasised) style.onScene else style.onSceneMuted,
+            fontWeight = if (emphasised) FontWeight.Bold else FontWeight.Normal,
+            modifier = Modifier.weight(1f, fill = true),
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(
+            amount,
+            style = if (emphasised) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
+            color = if (emphasised) style.accent else style.onScene,
+            fontWeight = if (emphasised) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 1,
+        )
     }
 }
 
