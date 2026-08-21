@@ -191,6 +191,12 @@ detail of every change — it is distilled into a major-changes-only entry when 
   - **Your email and OpenMasjidOS alerts are never paced** and never have been. They carry no such
     risk, and nothing about them changes.
   - **Send test message is never held back** either — you pressed it and you are waiting for it.
+  - **A message that fails late is now caught too.** The kiosk checks a minute and ten minutes after
+    sending, and then keeps checking every quarter of an hour for a day. Before, anything that failed
+    after the first ten minutes sat in the panel reading "queued" for ever — which is the same
+    "sent it and heard nothing" problem in a smaller form. (This became worth doing once OpenMasjidOS
+    started keeping each app's own history for a full day, and stopped counting these checks against
+    the same budget as actually sending.)
   - None of this makes WhatsApp reliable enough to depend on: it is still "handed over", never
     "delivered", and nothing that matters for signing in will ever be sent that way. Email remains
     the channel to trust.

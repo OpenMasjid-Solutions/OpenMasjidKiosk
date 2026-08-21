@@ -582,10 +582,18 @@ async function main(): Promise<void> {
    * end of it. An admin whose alerts had silently stopped arriving had nothing to look at, and no
    * reason to suspect the platform rather than us — which is most of why this felt mysterious.
    *
-   * The platform keeps only the most recent 200 records, so ask soon rather than never. Two goes:
-   * one after a minute (with the pacing gone, most messages are sent within seconds), one after ten
-   * for anything still queued. Anything still `queued` after that is left alone — `queued` is an
-   * honest answer, and polling for hours to catch a rare late failure is not worth the traffic.
+   * Two quick goes for responsiveness: one after a minute (with the pacing gone, most messages are
+   * sent within seconds) and one after ten. Anything still `queued` is then picked up by
+   * [reconcileWhatsApp] below, which keeps asking for as long as the platform still has the record.
+   *
+   * THAT SECOND HALF IS NEW, and it exists because the reasoning here used to be wrong in a way
+   * that only showed up once the platform changed. This gave up after ten minutes on the grounds
+   * that "the platform keeps only the most recent 200 records" and that polling was not worth the
+   * traffic. Both premises are gone as of 0.51.1-dev.8: the history is 500 PER APP kept for 24
+   * hours (no other app can evict ours), and status reads have their own 600/min budget separate
+   * from sending, so a poll can no longer cost a masjid an alert. Giving up at ten minutes left a
+   * message that failed at twenty reading as `queued` in the admin panel for ever — which is
+   * precisely the "accepted and silently lost" state this whole feature exists to end.
    *
    * Best-effort throughout. This is diagnostics; it must never disturb anything.
    */
@@ -615,6 +623,38 @@ async function main(): Promise<void> {
         })
         .catch(() => {});
     }, 60_000).unref();
+  };
+
+  /**
+   * Re-ask about anything still sitting at `queued`.
+   *
+   * At most one record per alert id — six reads a sweep, against a 600/min read budget — so this is
+   * far too small to matter, and it is what stops a late failure being reported as `queued` for
+   * ever. Records older than the platform's 24-hour window are left alone: it no longer has them,
+   * the lookup would 404, and `unknown` correctly changes nothing.
+   */
+  const WA_HISTORY_MS = 24 * 60 * 60_000;
+  const reconcileWhatsApp = async (): Promise<void> => {
+    const now = Date.now();
+    for (const [alertId, rec] of Object.entries(store.getWhatsAppOutcomes())) {
+      if (rec.state !== 'queued' || !rec.messageId) continue;
+      if (now - rec.at > WA_HISTORY_MS) continue; // aged out of the platform's history
+      const o = await fabricWhatsAppOutcome(rec.messageId).catch(() => ({ state: 'unknown' as const, reason: undefined }));
+      if (o.state === 'unknown' || o.state === 'queued') continue;
+      // Re-read: a newer alert of this kind may have replaced the record while we were asking.
+      const cur = store.getWhatsAppOutcomes()[alertId];
+      if (!cur || cur.messageId !== rec.messageId) continue;
+      store.setWhatsAppOutcome(alertId as AlertId, {
+        state: o.state,
+        at: Date.now(),
+        messageId: rec.messageId,
+        reason: o.reason ?? '',
+        suppressed: cur.suppressed,
+      });
+      if (o.state === 'failed' || o.state === 'expired') {
+        log.warn(`WhatsApp for alert ${alertId} ended as ${o.state}${o.reason ? `: ${o.reason}` : ''} (late)`);
+      }
+    }
   };
 
   const raiseAlert = async (
@@ -2987,6 +3027,9 @@ ${body}
   // Fabric is absent or remote access is off, this stays "" and we behave exactly as a LAN app.
   await fetchFabricSite().catch(() => {});
   setInterval(() => { void fetchFabricSite(); }, 60_000).unref();
+  // Resolve any WhatsApp still reading `queued`. Cheap (at most one read per alert id) and only
+  // useful when the Fabric is there at all.
+  if (ssoConfigured()) setInterval(() => { void reconcileWhatsApp().catch(() => {}); }, 15 * 60_000).unref();
 
   // Tuition (students/billing): keep availability warm so the tile shows/hides correctly, and drain the
   // record-payment outbox so a dropped push after a successful charge is retried (Students' daily

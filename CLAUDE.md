@@ -596,7 +596,8 @@ sending nothing rather than looking covered.
 ### The platform stopped pacing WhatsApp (OpenMasjidOS 0.51.1) — so we do
 
 **Minimum platform versions:** WhatsApp send **0.51.0+**; message status and the durable queue
-**0.51.1+**. Treat an absent `outcomes` field as `false` — never assume the status endpoint exists.
+**0.51.1+**; a per-app outcome history and a separate read budget **0.51.1-dev.8+**. Treat an absent
+`outcomes` field as `false` — never assume the status endpoint exists.
 
 **What was broken on the platform, and looked like ours.** Its queue always examined the *first*
 message; if that one could not go yet it slept and looked at the same one again, so a single held-up
@@ -637,10 +638,25 @@ mysterious: a refused message and a lost one were indistinguishable. They are no
 stored per alert, and shown on the Notifications screen beside the switch that caused them.
 
 **We store the message id and resolve it.** The `202` carries an `id`; `GET /api/fabric/whatsapp/status/<id>`
-says `queued | sent | failed | expired`. `scheduleWhatsAppFollowUp` asks once after a minute and once
-after ten, then stops — the platform keeps only the most recent 200 records, and `queued` is an
-honest final answer. The record holds no message text and no recipient. A 404 means "not ours or
-gone", never failure.
+says `queued | sent | failed | expired`. `scheduleWhatsAppFollowUp` asks after a minute and again
+after ten for responsiveness; `reconcileWhatsApp` then re-asks every 15 minutes about anything still
+`queued`, until the platform's 24-hour window closes. The record holds no message text and no
+recipient. A 404 means "not ours, or aged out", **never failure** — it also covers a platform too
+old to have the endpoint.
+
+**Why the reconcile exists, since the first version deliberately did without it.** It gave up after
+ten minutes, reasoning that the history was only the most recent 200 records and that polling was not
+worth the traffic. Both premises died in 0.51.1-dev.8: the history is **500 per app for 24 hours**
+(that 200 was one ring *shared by every app*, so a big Students run could evict our reader-offline
+record and every poll came back 404), and **status reads have their own 600/min budget**, separate
+from sending, so a poll can no longer refuse a masjid's alert. Giving up at ten minutes meant a
+message that failed at twenty read as `queued` in the panel for ever, which is the exact
+"accepted and silently lost" state this feature exists to end. At most one read per alert id per
+sweep — six, against six hundred.
+
+**Do not add an `immediate` flag.** It was considered and dropped platform-side, correctly: it could
+only skip the typing indicator (the last thing making the traffic look human) or jump a queue every
+app shares — and every app would set it, so within a week it would mean nothing.
 
 **Unchanged:** `202` means *accepted*, never delivered. There is no delivery receipt from WhatsApp.
 Nothing auth-critical may ever ride on it — no codes, no resets. Email has a real provider; use that.
