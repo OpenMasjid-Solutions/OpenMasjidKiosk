@@ -336,9 +336,28 @@ jobs:
       #
       # It does not close the window entirely: OpenMasjidAPPS also rebuilds hourly, so a tick that
       # lands during this workflow (~7 min) can still catch the new manifest version before the
-      # image is pushed. That resolves itself on the next dispatch or tick, and a missing tag fails
-      # loudly rather than silently — but it is the reason not to bump the version until the build
-      # that will publish it is the one being pushed.
+      # image is pushed.
+      #
+      # WHAT ACTUALLY HAPPENS IN THAT WINDOW, observed 2026-08-21 and NOT what this comment used to
+      # claim. It said "a missing tag fails loudly rather than silently". It does not fail at all:
+      # the catalog quietly falls back to our STABLE entry, so for the length of the window a
+      # dev-channel box is told the current version is the last release. Timeline from that day:
+      #
+      #   15:55:52Z  dev push; manifest on the branch already says 0.12.0-dev.9
+      #   16:00:12Z  catalog rebuild -> kiosk 0.11.0     (image not in GHCR yet)
+      #   16:01:48Z  catalog rebuild -> kiosk 0.11.0
+      #   16:02:59Z  this workflow finishes; :0.12.0-dev.9 pushed
+      #   16:03:15Z  catalog rebuild -> kiosk 0.12.0-dev.9   (recovered on its own)
+      #
+      # Every other app kept its own dev prerelease throughout, so this is the catalog resolving
+      # OUR entry specifically and choosing `ref:` over `dev_ref:` when the dev image is missing.
+      # Self-healing, roughly three minutes, and it has never been seen to strand anything — but a
+      # silent cross-channel DOWNGRADE is a worse shape than a loud pull failure, because nothing
+      # anywhere reports it. Keeping the previous dev entry would be the better fallback; that is a
+      # catalog-side decision, not ours.
+      #
+      # None of this is avoidable from here: the bump and the build are already the same push, and
+      # the gap between the manifest landing on the branch and the image existing is inherent.
       - name: Notify catalog to rebuild
         if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/dev'
         continue-on-error: true
