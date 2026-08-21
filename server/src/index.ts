@@ -22,8 +22,8 @@ import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
 import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppStatus, clearWhatsAppCache, emailStatus, emailCanSend } from './fabric';
-import { ALERT_META, DEFAULT_ROUTE, alertEmailLooksValid, isAlertId, normalisePhone, phoneLooksValid, routeSummary, type AlertId } from './alerts';
+import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppStatus, fabricWhatsAppOutcome, clearWhatsAppCache, emailStatus, emailCanSend } from './fabric';
+import { ALERT_META, DEFAULT_ROUTE, alertEmailLooksValid, isAlertId, normalisePhone, phoneLooksValid, routeSummary, whatsappGate, withSuppressedNote, type AlertId, type WhatsAppGateState } from './alerts';
 import { escapeHtml, renderMonthlyStarted, renderReceipt, renderRefund, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, grossUpForStudentsFee, kioskFeeRate, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
@@ -570,6 +570,53 @@ async function main(): Promise<void> {
   // whole point: an alert exists to tell someone something is wrong, so one channel being broken
   // must never suppress the others, and none of them may ever disturb the donation, refund or
   // reader event that raised it. Hence every path is caught and nothing is awaited by the caller.
+  /** Our WhatsApp pacing state, per alert. In memory on purpose: a restart lets one extra message
+   *  through, which is the safe direction to fail — a duplicate alert costs nothing, a swallowed
+   *  one costs the thing the alert was about. */
+  const waGate = new Map<AlertId, WhatsAppGateState>();
+
+  /**
+   * Ask the platform what became of a queued message, a little later (0.51.1+).
+   *
+   * Before this existed there was no way to find out: we were told `queued: true` and that was the
+   * end of it. An admin whose alerts had silently stopped arriving had nothing to look at, and no
+   * reason to suspect the platform rather than us — which is most of why this felt mysterious.
+   *
+   * The platform keeps only the most recent 200 records, so ask soon rather than never. Two goes:
+   * one after a minute (with the pacing gone, most messages are sent within seconds), one after ten
+   * for anything still queued. Anything still `queued` after that is left alone — `queued` is an
+   * honest answer, and polling for hours to catch a rare late failure is not worth the traffic.
+   *
+   * Best-effort throughout. This is diagnostics; it must never disturb anything.
+   */
+  const scheduleWhatsAppFollowUp = (alertId: AlertId, messageId: string): void => {
+    const check = async (): Promise<boolean> => {
+      const o = await fabricWhatsAppOutcome(messageId).catch(() => ({ state: 'unknown' as const, reason: undefined }));
+      if (o.state === 'unknown' || o.state === 'queued') return false;
+      const prev = store.getWhatsAppOutcomes()[alertId];
+      // Only overwrite the record we created — a newer alert of the same kind may have replaced it.
+      if (prev && prev.messageId !== messageId) return true;
+      store.setWhatsAppOutcome(alertId, {
+        state: o.state,
+        at: Date.now(),
+        messageId,
+        reason: o.reason ?? '',
+        suppressed: prev?.suppressed ?? 0,
+      });
+      if (o.state === 'failed' || o.state === 'expired') {
+        log.warn(`WhatsApp for alert ${alertId} ended as ${o.state}${o.reason ? `: ${o.reason}` : ''}`);
+      }
+      return true;
+    };
+    setTimeout(() => {
+      void check()
+        .then((done) => {
+          if (!done) setTimeout(() => void check().catch(() => {}), 9 * 60_000).unref();
+        })
+        .catch(() => {});
+    }, 60_000).unref();
+  };
+
   const raiseAlert = async (
     id: AlertId,
     title: string,
@@ -596,10 +643,34 @@ async function main(): Promise<void> {
     }
     const digits = route.whatsapp ? normalisePhone(route.phone) : '';
     if (digits) {
-      // The platform paces and queues; `queued` means accepted for later, never delivered.
-      const r = await fabricWhatsApp(digits, `${title}\n\n${text}`).catch(() => ({ queued: false, reason: 'threw' }));
-      whatsapp = r.queued;
-      if (!r.queued && r.reason) reasons.push(`WhatsApp: ${r.reason}`);
+      // OUR OWN PACING. OpenMasjidOS 0.51.1 removed every limit it used to impose, so a Stripe
+      // outage would otherwise put one message per failed donation on a caretaker's phone. See
+      // `whatsappGate`: one per alert per half hour, with the count of what was held back riding
+      // along on the next one, so suppression is never silent.
+      const gate = whatsappGate(id, waGate.get(id), Date.now());
+      waGate.set(id, gate.next);
+      if (!gate.send) {
+        reasons.push('WhatsApp: held back to protect the masjid’s number (one of this kind per half hour)');
+        log.info(`alert ${id}: WhatsApp suppressed by our own pacing (${gate.next.suppressed} held back so far)`);
+      } else {
+        const body = withSuppressedNote(`${title}\n\n${text}`, gate.suppressedBefore);
+        const r = await fabricWhatsApp(digits, body).catch(() => ({ queued: false, id: undefined, reason: 'threw' }));
+        whatsapp = r.queued;
+        // RECORD THE OUTCOME EITHER WAY. A refusal used to reach nothing but a debug line, so a
+        // message the platform rejected in a plain sentence — an unapproved group, a number
+        // missing its country code, the masjid's own gateway number — looked exactly like one
+        // that vanished into the queue. The settings screen reads this record and shows the sentence.
+        store.setWhatsAppOutcome(id, {
+          state: r.queued ? 'queued' : 'refused',
+          at: Date.now(),
+          messageId: r.queued ? (r.id ?? '') : '',
+          reason: r.queued ? '' : (r.reason ?? 'refused'),
+          suppressed: gate.suppressedBefore,
+        });
+        if (!r.queued && r.reason) reasons.push(`WhatsApp: ${r.reason}`);
+        // Resolve queued -> sent/failed shortly afterwards, when the platform can say (0.51.1+).
+        if (r.queued && r.id) scheduleWhatsAppFollowUp(id, r.id);
+      }
     }
     if (reasons.length) log.warn(`alert ${id} partially undelivered — ${reasons.join('; ')}`);
     return { os, email, whatsapp, reasons };
@@ -611,12 +682,25 @@ async function main(): Promise<void> {
   };
 
   // ── Notification settings: where each alert goes ────────────────────────────
-  const alertsView = async () => ({
-    alerts: ALERT_META.map((m) => ({ ...m, route: store.getAlertRoutes()[m.id], summary: routeSummary(store.getAlertRoutes()[m.id]) })),
-    whatsapp: await fabricWhatsAppStatus(),
-    embedded: ssoConfigured(),
-    emailStatus: emailStatus(),
-  });
+  const alertsView = async () => {
+    const routes = store.getAlertRoutes();
+    // What actually became of the last WhatsApp for each alert. Shown on the screen where the admin
+    // switched the channel on, because that is the only place the answer is any use — a refusal
+    // (unapproved group, missing country code, the masjid's own gateway number) used to reach
+    // nothing but a debug log and was indistinguishable from a message that simply vanished.
+    const outcomes = store.getWhatsAppOutcomes();
+    return {
+      alerts: ALERT_META.map((m) => ({
+        ...m,
+        route: routes[m.id],
+        summary: routeSummary(routes[m.id]),
+        lastWhatsApp: outcomes[m.id] ?? null,
+      })),
+      whatsapp: await fabricWhatsAppStatus(),
+      embedded: ssoConfigured(),
+      emailStatus: emailStatus(),
+    };
+  };
   app.get('/api/admin/alerts', { preHandler: requireAdmin }, async () => ({ data: await alertsView() }));
   app.put('/api/admin/alerts/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = String((req.params as { id: string }).id || '');
@@ -733,7 +817,7 @@ async function main(): Promise<void> {
   // NOT refill the brute-force budget (a shared-IP attacker with one good ID could otherwise reset the
   // backoff), and splitting the budget per endpoint would just let a sweep alternate between them.
   // Students locks a Student ID after 6 failed probes an hour (contract §11.0/§14); this is
-  // defence-in-depth so the kiosk is never the open relay. Well above any real kiosk's lookup rate.
+  // defense-in-depth so the kiosk is never the open relay. Well above any real kiosk's lookup rate.
   const tuitionLookupHits = new Map<string, { count: number; resetAt: number }>();
   const tuitionLookupOk = (ip: string): boolean => {
     const now = Date.now();
@@ -785,9 +869,9 @@ async function main(): Promise<void> {
     const parsed = z
       .object({
         name: z.string().max(80).optional(),
-        // A UI rotation in degrees ('0'/'90'/'180'/'270'); legacy named values are normalised in the store.
+        // A UI rotation in degrees ('0'/'90'/'180'/'270'); legacy named values are normalized in the store.
         orientation: z.string().max(20).optional(),
-        // Which side the reader sits on ('off'/'left'/'right'); normalised in the store.
+        // Which side the reader sits on ('off'/'left'/'right'); normalized in the store.
         nfcSide: z.string().max(20).optional(),
       })
       .safeParse(req.body);
@@ -880,7 +964,7 @@ async function main(): Promise<void> {
     const parsed = GivingBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'Please check the giving-screen settings.' });
     const { attractTitle, masjidName, ...giving } = parsed.data;
-    store.setGiving(giving); // sanitises (≤6 presets, sane bounds, known policies) + bumps configVersion
+    store.setGiving(giving); // sanitizes (≤6 presets, sane bounds, known policies) + bumps configVersion
     if (attractTitle !== undefined) store.setAttractTitle(attractTitle.trim());
     if (masjidName !== undefined) {
       store.setMasjid({ name: masjidName.trim() });
@@ -890,7 +974,7 @@ async function main(): Promise<void> {
   });
 
   // ── Campaigns (giving appeals shown as kiosk tabs) ───────────────────────────
-  // Each campaign has its own amounts, colour, background, thank-you, monthly/cover-fees, and
+  // Each campaign has its own amounts, color, background, thank-you, monthly/cover-fees, and
   // (optionally) its own Stripe account. Changes bump the config version → kiosks pick them up
   // on the next heartbeat. Amounts are integer MINOR units (same as the giving API).
   const CampaignBody = z
@@ -1053,7 +1137,7 @@ async function main(): Promise<void> {
     const rec = store.getPlanRecord(sp.id);
     // Month one never appears in `invoices.list` — it was a card-present PaymentIntent on the reader.
     // Without the local record we cannot know it, so the total is flagged short rather than quietly
-    // under-reported: "this plan has raised £X" being wrong by a month is the kind of number an
+    // under-reported: "this plan has raised $X" being wrong by a month is the kind of number an
     // admin repeats to a committee.
     const first = rec?.firstAmountMinor ?? 0;
     return {
@@ -1158,7 +1242,7 @@ async function main(): Promise<void> {
       .map((p) => (totalsCapped ? { ...p, totalPartial: true } : p))
       .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
     // Say so when a whole account couldn't be read, or when the scan filled up — an admin looking at
-    // a short list needs to know it's short, not assume those donors cancelled.
+    // a short list needs to know it's short, not assume those donors canceled.
     const unavailable =
       failures && !plans.length
         ? 'Couldn’t reach Stripe just now — please try again.'
@@ -1169,7 +1253,7 @@ async function main(): Promise<void> {
             // should know the record is stale) or it lives on an account this app can no longer resolve,
             // in which case a donor is still being charged somewhere this screen cannot show or cancel.
             unconfirmed
-            ? `${unconfirmed} plan${unconfirmed === 1 ? '' : 's'} we set up couldn’t be found in Stripe — ${unconfirmed === 1 ? 'it was' : 'they were'} either cancelled in the Stripe dashboard, or ${unconfirmed === 1 ? 'it lives' : 'they live'} on a Stripe account this app can no longer reach.`
+            ? `${unconfirmed} plan${unconfirmed === 1 ? '' : 's'} we set up couldn’t be found in Stripe — ${unconfirmed === 1 ? 'it was' : 'they were'} either canceled in the Stripe dashboard, or ${unconfirmed === 1 ? 'it lives' : 'they live'} on a Stripe account this app can no longer reach.`
             : truncated
               ? 'This Stripe account has more subscriptions than we can scan at once, so this list may be incomplete.'
               : '';
@@ -1335,7 +1419,7 @@ async function main(): Promise<void> {
     const fullyRefunded = after.refundedMinor >= after.amountMinor;
 
     // A refunded FIRST payment does not stop a monthly plan — Stripe keeps collecting next month.
-    // The admin has to be told, or a donor gets their £10 back and is charged again in four weeks.
+    // The admin has to be told, or a donor gets their $10 back and is charged again in four weeks.
     const monthlyStillLive = don.kind === 'monthly';
 
     // ── The donor (only if they gave us an address) ──
@@ -1377,7 +1461,7 @@ async function main(): Promise<void> {
 
     // The audit trail exists for "actions that reach outside the app". Refunding is the only admin
     // action that moves money OUT of the masjid's account, and it was the one financial write with
-    // no entry — cancelling a plan was recorded, giving £500 back was not. Recorded after the fact
+    // no entry — canceling a plan was recorded, giving $500 back was not. Recorded after the fact
     // on purpose: this row means "a refund happened", and Stripe has already confirmed it by here.
     await audit(
       req,
@@ -1444,7 +1528,7 @@ async function main(): Promise<void> {
   //     does not let anyone cancel a donation;
   //   • it can do exactly one thing — end THIS plan. There is nothing here to read a donor list
   //     from, nothing to change an amount with, and no way to reach the admin API;
-  //   • cancelling is the safe direction. The worst a stolen link achieves is stopping a donation,
+  //   • canceling is the safe direction. The worst a stolen link achieves is stopping a donation,
   //     which the donor can restart at the kiosk. Money can never move TO anyone through this;
   //   • the outbound Stripe traffic it can cause is bounded (donorLookups, below), and an unknown
   //     token gets the same answer as a used one.
@@ -1466,7 +1550,7 @@ async function main(): Promise<void> {
      *
      * Scoped to this plugin ON PURPOSE. Registering it globally would let every other POST route accept
      * a cross-origin form submission, and a form POST needs no CORS preflight — the admin API's only
-     * other line of defence there is the SameSite=Lax cookie. Nothing outside these two routes gains
+     * other line of defense there is the SameSite=Lax cookie. Nothing outside these two routes gains
      * anything from urlencoded, so nothing outside them gets it.
      */
     donor.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, _body, done) => {
@@ -1644,7 +1728,7 @@ ${body}
         ),
       );
     }
-    log.info(`donor cancelled plan ${plan.subscriptionId} via their own link`);
+    log.info(`donor canceled plan ${plan.subscriptionId} via their own link`);
     // Tell the masjid: a standing order ending is something an admin should know about, and the donor
     // did it outside the admin panel so nothing else would ever surface it.
     alert(
@@ -2021,7 +2105,7 @@ ${body}
     monthly: z.boolean().optional(),
     // Keyed/manual card entry (Stripe's on-device card form) instead of the reader.
     manual: z.boolean().optional(),
-    // Donor opted to cover the estimated card fee (only honoured if the campaign allows it).
+    // Donor opted to cover the estimated card fee (only honored if the campaign allows it).
     coverFees: z.boolean().optional(),
     // Per-attempt key so a network retry can't create a second PI (Stripe idempotency).
     idempotencyKey: z.string().trim().min(8).max(255).optional(),
@@ -2470,7 +2554,7 @@ ${body}
     }
   };
 
-  // Should the tuition tile show, and how is it labelled? (Cached ~5 min in students.ts.)
+  // Should the tuition tile show, and how is it labeled? (Cached ~5 min in students.ts.)
   app.get('/api/kiosk/tuition/info', async (req, reply) => {
     const d = authDevice(req, reply);
     if (!d) return;
@@ -2496,7 +2580,7 @@ ${body}
   // uniform `found:false`. Rate-limited per peer on the same bucket as the lookup below.
   const TuitionCodeBody = z.object({
     campaignId: z.string().max(120),
-    // Max 32 to match the provider's own cap; normalised (case/spaces/hyphens) in students.ts.
+    // Max 32 to match the provider's own cap; normalized (case/spaces/hyphens) in students.ts.
     studentCode: z.string().trim().min(1).max(32),
   });
   app.post('/api/kiosk/tuition/identify', async (req, reply) => {
@@ -2558,7 +2642,7 @@ ${body}
       minAmountCents: policy.minAmountCents,
       feeRate: policy.feeRate,
       // The children, in the SAME order the response lists them — the tablet addresses one by its
-      // position (`s0`, `s1`) so "add £50 for Maryam" can name her ledger without the device ever
+      // position (`s0`, `s1`) so "add $50 for Maryam" can name her ledger without the device ever
       // holding the school's internal ids.
       students: r.family.students.map((s) => ({
         studentId: s.studentId,
@@ -2624,7 +2708,7 @@ ${body}
           balanceCents: r.family.balanceCents,
           // What is actually PAYABLE — the open bills added up. It differs from `balanceCents` the
           // moment a sibling is in credit, because the household figure Students reports is a NET:
-          // a family with one child £340 ahead and another £160 behind reports a £0 balance. This is
+          // a family with one child $340 ahead and another $160 behind reports a $0 balance. This is
           // the number the pay button spends, and the server re-derives it at pay time.
           dueCents: dueCents(session),
           // 0.41.0: money already paid ahead. A zero balance means "square" or "paid ahead", and the
@@ -2814,7 +2898,7 @@ ${body}
         });
       }
       // `amountMinor` stays the CHARGE — it is what the card was debited and what the thank-you
-      // screen shows — with the split beside it so the tablet can itemise the receipt line.
+      // screen shows — with the split beside it so the tablet can itemize the receipt line.
       return {
         data: {
           status: result.status,
@@ -2866,7 +2950,7 @@ ${body}
   // uses root paths — critical, so the LAN admin panel keeps working when remote access is on.
   // When injected: a `<base href>` (relative-built Vite assets resolve under the prefix) plus
   // `window.__OMOS_BASE__` (web/src/base.ts prefixes API/nav/asset URLs). basePath is already a
-  // safe URL-path charset (normBasePath), re-sanitised here defensively.
+  // safe URL-path charset (normBasePath), re-sanitized here defensively.
   const sendIndexHtml = (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
     const viaTunnel = (req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel === true;
     const base = viaTunnel ? cachedFabricSite().basePath.replace(/[^\w/-]/g, '') : '';

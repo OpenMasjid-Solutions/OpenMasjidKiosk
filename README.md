@@ -111,7 +111,7 @@ any appeal can be a **Tuition** tile:
   **add money for one named child**.
 - **Pay ahead** when nothing is due, if the school allows it. The school holds it as that
   child's credit and takes it off the next invoice.
-- The screen says what the account actually *is* — "Balance due", "£X paid ahead", or
+- The screen says what the account actually *is* — "Balance due", "$X paid ahead", or
   "Nothing due" — instead of showing an ambiguous zero.
 - **A sibling's credit never blocks paying another child's bills**, and payments land on the
   **right child's ledger**.
@@ -138,8 +138,8 @@ Each appeal is its own tab across the top of the kiosk, with its own everything.
 - **A two-pane designer**, opening as a **full page in its own browser tab**, with a
   **true-to-device live preview** of both the portrait and landscape giving screens as you type.
   The address is shareable and survives a refresh, so several appeals can be compared side by side.
-- **Design tab** — eight one-tap colour-theme presets, a primary and an accent colour (picker,
-  or a typed **hex code** so a masjid can enter its exact brand colour; each resettable), and
+- **Design tab** — eight one-tap color-theme presets, a primary and an accent color (picker,
+  or a typed **hex code** so a masjid can enter its exact brand color; each resettable), and
   three image slots with upload: **background**, **cover** and **logo**.
 - **Amounts tab** — up to six suggested amounts, custom-amount on/off with a minimum and
   maximum, and a monthly toggle.
@@ -152,8 +152,8 @@ Each appeal is its own tab across the top of the kiosk, with its own everything.
   the reader can't be moved, the kiosk falls back to typed entry rather than failing the gift.
 - **Kiosks tab** — target which tablets show this appeal (all of them by default).
 - **Message tab** — a description and a per-appeal thank-you message.
-- Text colour is **calculated from the background you actually chose**, so headings and small
-  print stay readable on light, dark or strongly-coloured appeals.
+- Text color is **calculated from the background you actually chose**, so headings and small
+  print stay readable on light, dark or strongly-colored appeals.
 
 ## Kiosk-wide settings
 
@@ -199,7 +199,7 @@ Shared by every appeal:
 
 - **Stripe's own email receipts** for any donor who gives an email.
 - **A branded receipt designer** — your logo, your subject, heading and wording, an accent
-  colour, and the amount/date/card/fund filled in automatically, with a live preview and a
+  color, and the amount/date/card/fund filled in automatically, with a live preview and a
   send-me-a-test button. It is escaped against injection and can never double-send.
 - **A retry queue** for receipts, so a transient email failure still lands.
 - **A refund note** to the donor, in the same branding, when you give a donation back.
@@ -228,6 +228,15 @@ combination of three places — they are **additive**, and one failing never sto
   number is called out too, so a channel can't quietly stop reaching anyone.
 - **Send test message** follows these same settings and names the channels it actually went by, so
   it proves your configuration rather than just that the server is up.
+- **You can see what happened to the last WhatsApp** for each alert, right under it: sent, queued,
+  or refused with the reason in plain words — an unapproved group, a number missing its country
+  code, or the masjid's own WhatsApp number. Before, a refused message and a lost one looked
+  identical.
+- **The kiosk paces itself.** At most one WhatsApp per kind of alert every half hour, and the next
+  one tells you how many were held back. This matters because a card processor outage can otherwise
+  raise one alert per attempted donation — and WhatsApp bans attach to your masjid's phone
+  number, which cannot be recovered if it is lost. Email and your OpenMasjidOS alerts are never
+  paced; they have no such risk.
 - A phone number must carry its **country code** (`+44 7700 900123`). Leaving it off is refused
   rather than guessed at — a guess would eventually message a stranger abroad — and a rejected
   number never overwrites the one already saved.
@@ -381,7 +390,7 @@ Six sections — **Dashboard · Devices · Campaigns · Donations · Recurring �
 
 - **Single sign-on** with your OpenMasjidOS account, and a **local admin password** that can
   never brick the panel if the platform is unreachable.
-- The panel **inherits the dashboard's** light/dark, accent colour and wallpaper, with a
+- The panel **inherits the dashboard's** light/dark, accent color and wallpaper, with a
   per-session light/dark override of your own.
 - **"What's new"** in the account menu — the release notes that shipped inside the running
   build, with a gold dot until you've read them, and no call to the internet.
@@ -407,7 +416,7 @@ code only ever sees connection tokens, PaymentIntent client secrets and the publ
   the app secret the platform issued us, and a caller header that no app id can hold. Holding no
   secret **fails closed** rather than letting an empty one match.
 - Brute-force protection on sign-in and on pairing (per device *and* fleet-wide).
-- An **append-only audit trail** of actions that reach outside the app — cancelling, pausing
+- An **append-only audit trail** of actions that reach outside the app — canceling, pausing
   or rescheduling a plan, removing a kiosk, changing the exit PIN. Readable at
   `GET /api/admin/audit`; it has no screen in the panel yet.
 - Security headers on every response — including a **framing denial** (`frame-ancestors 'none'`

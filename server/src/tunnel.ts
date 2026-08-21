@@ -42,7 +42,7 @@ function isApiPath(p: string): boolean {
  *
  * The platform's own contract says `/fabric/*` is never served over the tunnel. The secret check on
  * the handler would still refuse a stranger, but that is a credential comparison on an
- * internet-reachable endpoint that can restart hardware — the wrong last line of defence when the
+ * internet-reachable endpoint that can restart hardware — the wrong last line of defense when the
  * platform calling us is always on the same LAN, so there is no legitimate tunnel request to lose.
  */
 function isFabricPath(p: string): boolean {

@@ -59,7 +59,7 @@ Both exist because a *derived* balance of `0` is ambiguous — square, paid ahea
 here" — and a consumer had no way to tell those apart. **Donations and Kiosk should pick both up
 together:** they are the two halves of one screen (what you owe / what you've paid ahead / pay anyway).
 
-### 11.0b Additive since v2 — 0.43.0: ITEMISED BILLS (no version bump, nothing breaks)
+### 11.0b Additive since v2 — 0.43.0: ITEMIZED BILLS (no version bump, nothing breaks)
 
 A bill was one label and one number on the wire, so a consumer had no choice but to make a parent accept
 the whole thing. In practice a February bill is often **$200 of tuition plus a $50 book fee**, and
@@ -81,13 +81,13 @@ parents ask to pay one of the two — which was not expressible at all.
 
 **Notes.** Every line of an open bill is listed, **including ones already settled** (`balanceCents: 0`) —
 show those as done on a part-paid bill, and offer only the lines with a balance as payable. A bill with a
-single line needs no itemised UI; render it exactly as before. Omit `lines` entirely and behaviour is
+single line needs no itemized UI; render it exactly as before. Omit `lines` entirely and behavior is
 unchanged (oldest-due-first), so this is safe to adopt screen by screen.
 
 **Also fixed in 0.43.0:** `allocations[]` (invoice-level, in the contract since v1) was parsed and then
 **silently ignored** — a consumer asking for a specific invoice got oldest-due-first with nothing to say
-so. It now works, normalised into the same line mechanism. `lines` is the better field for new work;
-`allocations` is honoured for what already sends it.
+so. It now works, normalized into the same line mechanism. `lines` is the better field for new work;
+`allocations` is honored for what already sends it.
 
 `allocations` is treated as a **hint**, deliberately: it must still sum to `amountCents`, but if a named
 invoice cannot absorb what you asked for — the office recorded a cash payment against it between your
@@ -182,7 +182,7 @@ ask "is this the right child?" before showing a balance or taking money. **Call 
 confirmation step that replaced the PIN, not an optional nicety.
 ```jsonc
 // request — the ID printed on the statement: first 3 letters of the first name + 4 digits.
-// Input is normalised here (case, spaces, hyphens), so "yus-1234" is fine.
+// Input is normalized here (case, spaces, hyphens), so "yus-1234" is fine.
 { "v": 2, "studentCode": "YUS1234" }
 // 200 (found) — a first name + last initial and NOTHING else
 { "v": 2, "found": true, "student": { "studentCode": "YUS1234", "firstName": "Yusuf", "lastInitial": "I" } }
@@ -206,7 +206,7 @@ confirmation step that replaced the PIN, not an optional nicety.
 **`POST /fabric/billing/lookup`** — resolve a Student ID to a family + balance + the siblings it can be
 paid alongside. **Breaking at v2:** `name` and `pin` are gone (§11.0).
 ```jsonc
-// request — the Student ID alone, normalised as in `identify`.
+// request — the Student ID alone, normalized as in `identify`.
 { "v": 2, "studentCode": "YUS1234" }
 // 200 (found)
 { "v": 2, "found": true,
@@ -280,7 +280,7 @@ balance, and the child's next invoice absorbs it.
   "students": [{ "studentId": "stu_1", "amountCents": 10000 }, { "studentId": "stu_2", "amountCents": 5000 }],
   // NEW at 0.43.0, optional and preferred: the exact LINES the parent ticked (ids from lookup's
   // openInvoices[].items). Must sum EXACTLY to amountCents. SUPERSEDES students[] — a line already says
-  // whose bill it is — and it is HONOURED, not just accepted: the ticked line is the one that ends up
+  // whose bill it is — and it is HONORED, not just accepted: the ticked line is the one that ends up
   // settled, and stays settled when this app later recomputes its allocations. See §11.0b.
   "lines": [{ "itemId": "iti_2", "amountCents": 5000 }],
   "allocations": [{ "invoiceId": "inv_9", "amountCents": 15000 }],   // invoice-level, v1; works from 0.43.0 (ignored before)

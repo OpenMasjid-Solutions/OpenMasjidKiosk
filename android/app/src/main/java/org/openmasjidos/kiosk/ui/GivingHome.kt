@@ -79,13 +79,13 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
     val campaign = ui.activeCampaign
     val accent = accentOf(campaign)
     val primary = primaryOf(campaign)
-    // Bright by default: 'auto'/'light' with no background image → a soft PRIMARY-colour background
+    // Bright by default: 'auto'/'light' with no background image → a soft PRIMARY-color background
     // (light at top → primary at the bottom) with dark text + white tiles (the "Donate" band is the
     // accent); 'dark' (or a background image) → the calm dark scene + light text.
     val hasImage = !campaign?.backgroundImage.isNullOrBlank()
     val bright = !hasImage && (campaign?.theme ?: "auto") != "dark"
-    // The bright background base: the campaign's primary colour, or a light tint of the accent when
-    // no primary is set (keeps older single-colour campaigns looking right).
+    // The bright background base: the campaign's primary color, or a light tint of the accent when
+    // no primary is set (keeps older single-color campaigns looking right).
     val sceneBase = primary ?: lerp(accent, Color.White, 0.35f)
     // A clearly-light primary → a light wash with dark text (the reference look). A darker primary →
     // DEEPEN the whole gradient and use light text, so headings stay readable everywhere (not just the
@@ -288,14 +288,14 @@ private fun CampaignTabs(campaigns: List<Campaign>, selectedId: String, style: S
     ) {
         campaigns.forEach { c ->
             val selected = c.id == selectedId
-            // Each tab is colour-coded by its OWN campaign colour (its primary, or accent when unset).
+            // Each tab is color-coded by its OWN campaign color (its primary, or accent when unset).
             val tabColor = primaryOf(c) ?: accentOf(c)
             val onTab = bestTextOn(tabColor)
             Surface(
                 onClick = { onSelect(c.id) },
                 shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 6.dp, bottomEnd = 6.dp),
-                // Selected: a solid fill of the campaign colour. Unselected: a soft tint of it with a
-                // bold coloured outline, so every tab still shows its own colour and reads clearly.
+                // Selected: a solid fill of the campaign color. Unselected: a soft tint of it with a
+                // bold colored outline, so every tab still shows its own color and reads clearly.
                 color = if (selected) tabColor else tabColor.copy(alpha = 0.20f),
                 border = BorderStroke(2.dp, tabColor),
                 shadowElevation = if (selected) 6.dp else 0.dp,
@@ -373,8 +373,8 @@ private fun accentOf(c: Campaign?): Color {
     return Color(0xFF000000L or v)
 }
 
-/** Parse a campaign's '#rrggbb' PRIMARY (background) colour, or null when unset (caller then derives
- *  a light background from the accent — keeping older single-colour campaigns looking right). */
+/** Parse a campaign's '#rrggbb' PRIMARY (background) color, or null when unset (caller then derives
+ *  a light background from the accent — keeping older single-color campaigns looking right). */
 private fun primaryOf(c: Campaign?): Color? {
     val hex = c?.primaryColor?.removePrefix("#")?.takeIf { it.length == 6 } ?: return null
     val v = hex.toLongOrNull(16) ?: return null
@@ -386,7 +386,7 @@ private fun primaryOf(c: Campaign?): Color? {
 private val InkBlack = Color(0xFF0A0F14)
 
 /** Pick whichever of dark ink / white gives the higher contrast on [bg] (a solid fill), so text on a
- *  filled colour is always legible regardless of the colour's brightness. */
+ *  filled color is always legible regardless of the color's brightness. */
 private fun bestTextOn(bg: Color): Color {
     val l = bg.luminance()
     val onBlack = (l + 0.05f) / 0.05f       // contrast ratio vs a near-black ink
@@ -394,12 +394,12 @@ private fun bestTextOn(bg: Color): Color {
     return if (onBlack >= onWhite) InkBlack else Color.White
 }
 
-/** Resolve the giving-screen colour set from the accent + the scene it will actually be painted on.
+/** Resolve the giving-screen color set from the accent + the scene it will actually be painted on.
  *
  *  CONTRAST IS COMPUTED, NOT ASSUMED. Every ink is picked against the real background — [sceneBase]
- *  for a bright scene, the fixed dark gradient otherwise — so a masjid can choose any campaign colour,
+ *  for a bright scene, the fixed dark gradient otherwise — so a masjid can choose any campaign color,
  *  light or dark, and the words on top stay readable. Secondary text is a *blend* toward the
- *  background rather than a translucent grey: it still reads as secondary, but at a fraction of the
+ *  background rather than a translucent gray: it still reads as secondary, but at a fraction of the
  *  contrast loss (and it composites predictably over a background image's scrim).
  *
  *  Bright + light primary: dark ink on a light wash. Bright + dark primary: light ink on a deepened
@@ -418,7 +418,7 @@ private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean, s
         onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
         onScene = if (lightScene) InkBlack else ink,
         // Secondary text (subtitles, hints, Cancel): only a step down from the heading, never a
-        // washed-out grey — 12% toward the background keeps the hierarchy and the legibility.
+        // washed-out gray — 12% toward the background keeps the hierarchy and the legibility.
         onSceneMuted = lerp(if (lightScene) InkBlack else ink, sceneBase, 0.12f),
         tile = Color.White.copy(alpha = 0.92f), // slight liquid-glass — the background tints through a touch
         tileInk = InkBlack,                      // big BOLD BLACK numbers, like the reference
@@ -433,7 +433,7 @@ private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean, s
         // and would vanish on a pale accent band), white on a dark accent.
         onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
         onScene = InkDark,
-        // Brighter than the dashboard's muted ink: that grey is tuned for a monitor an arm's length
+        // Brighter than the dashboard's muted ink: that gray is tuned for a monitor an arm's length
         // away, and it greys out on a foyer tablet. Halfway back toward the primary ink.
         onSceneMuted = lerp(InkMutedDark, InkDark, 0.5f),
         tile = SurfaceOverlayDark,

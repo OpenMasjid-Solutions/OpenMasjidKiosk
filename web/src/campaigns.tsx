@@ -2,7 +2,7 @@
 // Copyright (C) 2026 OpenMasjid-Solutions
 
 /** The Campaigns designer: each appeal is its own giving screen (a tab on the kiosk) with its own
- *  amounts, colour, images, monthly/cover-fees, Stripe account and thank-you. The MAIN campaign
+ *  amounts, color, images, monthly/cover-fees, Stripe account and thank-you. The MAIN campaign
  *  always shows on the kiosk (even when hidden) and can't be deleted; others appear only when
  *  live and in the order you set. A live preview mirrors the kiosk as you type. Above the list
  *  sit the kiosk-wide settings (masjid name, name/email prompts). Saving pushes
@@ -63,13 +63,13 @@ const TAB_SIZES: { id: TabSize; label: string; font: number; padX: number; padY:
  *  or get cut off on the giving screen. */
 const TITLE_MAX = 48;
 const DESC_MAX = 150;
-/** Shown in the colour picker while a campaign inherits the default accent (it needs a value). */
+/** Shown in the color picker while a campaign inherits the default accent (it needs a value). */
 const DEFAULT_ACCENT = '#22d3ee';
-/** Shown in the primary-colour picker while a campaign inherits the default background. */
+/** Shown in the primary-color picker while a campaign inherits the default background. */
 const DEFAULT_PRIMARY = '#a8f2b7';
 
 /** Curated theme presets — a primary (background) + accent (buttons) that go well together. Picking
- *  one just POPULATES the two colour fields; the admin can still tweak either afterwards. */
+ *  one just POPULATES the two color fields; the admin can still tweak either afterwards. */
 const THEME_PRESETS: { name: string; primary: string; accent: string }[] = [
   { name: 'Emerald', primary: '#a8f2b7', accent: '#1fa37a' },
   { name: 'Ocean', primary: '#bfe3ff', accent: '#2563eb' },
@@ -81,7 +81,7 @@ const THEME_PRESETS: { name: string; primary: string; accent: string }[] = [
   { name: 'Midnight', primary: '#1e293b', accent: '#38bdf8' },
 ];
 
-// ── Colour helpers (mirror the kiosk's scene logic so the preview matches the device) ─────────────
+// ── Color helpers (mirror the kiosk's scene logic so the preview matches the device) ─────────────
 function hexToRgb(hex: string): [number, number, number] | null {
   const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
   if (!m) return null;
@@ -96,7 +96,7 @@ function mixHex(hex: string, toward: string, t: number): string {
   const c = a.map((v, i) => Math.round(v + (b[i] - v) * t));
   return `#${c.map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('')}`;
 }
-/** WCAG relative luminance of a #rrggbb colour (0 = black, 1 = white). */
+/** WCAG relative luminance of a #rrggbb color (0 = black, 1 = white). */
 function relLuminance(hex: string): number {
   const rgb = hexToRgb(hex);
   if (!rgb) return 0.5;
@@ -463,7 +463,7 @@ function GlobalSettingsCard() {
 
 // ── Campaign-tab size picker (kiosk-wide) ──────────────────────────────────────────
 /** A segmented picker for the campaign-tab size, with a faithful mini preview of the tab strip
- *  (mirrors android GivingHome.kt CampaignTabs: rounded-top browser tabs, colour-coded, one filled
+ *  (mirrors android GivingHome.kt CampaignTabs: rounded-top browser tabs, color-coded, one filled
  *  "selected"). Tabs only appear on the kiosk when there are 2+ campaigns. */
 function TabSizeField({ value, onChange }: { value: TabSize; onChange: (v: TabSize) => void }) {
   const m = TAB_SIZES.find((t) => t.id === value) ?? TAB_SIZES[1];
@@ -556,7 +556,7 @@ function CampaignRow({
   onDelete: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
-  // An empty accent inherits the default — show the default swatch colour so the chip isn't blank.
+  // An empty accent inherits the default — show the default swatch color so the chip isn't blank.
   const swatch = c.accentColor || 'var(--color-primary)';
 
   return (
@@ -854,14 +854,14 @@ function CampaignEditor({
                 {tab === 'design' && (
                   <>
                     <div className="field">
-                      <span className="label">Colour theme <span className="faint">(presets)</span></span>
+                      <span className="label">Color theme <span className="faint">(presets)</span></span>
                       <div className="theme-presets">
                         {THEME_PRESETS.map((p) => (
                           <button
                             key={p.name}
                             type="button"
                             className={`theme-preset${primaryColor === p.primary && accentColor === p.accent ? ' theme-preset--on' : ''}`}
-                            title={`${p.name} — sets the colours below (still editable)`}
+                            title={`${p.name} — sets the colors below (still editable)`}
                             onClick={() => {
                               setPrimaryColor(p.primary);
                               setAccentColor(p.accent);
@@ -873,28 +873,28 @@ function CampaignEditor({
                           </button>
                         ))}
                       </div>
-                      <p className="hint">Pick a preset to fill the two colours below — you can still fine-tune either one.</p>
+                      <p className="hint">Pick a preset to fill the two colors below — you can still fine-tune either one.</p>
                     </div>
 
                     <ColorField
                       id="ce-primary"
-                      label="Primary colour"
+                      label="Primary color"
                       sub="(background)"
                       value={primaryColor}
                       fallback={DEFAULT_PRIMARY}
                       unsetLabel="Using the default background"
                       onChange={setPrimaryColor}
-                      hint="Tints the giving screen's background — a soft wash of this colour behind the amount tiles."
+                      hint="Tints the giving screen's background — a soft wash of this color behind the amount tiles."
                     />
                     <ColorField
                       id="ce-accent"
-                      label="Accent colour"
+                      label="Accent color"
                       sub="(buttons)"
                       value={accentColor}
                       fallback={DEFAULT_ACCENT}
                       unsetLabel="Using your default accent"
                       onChange={setAccentColor}
-                      hint="The colour of the “Donate” band on each amount tile, and the buttons."
+                      hint="The color of the “Donate” band on each amount tile, and the buttons."
                     />
 
                     <div className="field">
@@ -1232,14 +1232,14 @@ export function CampaignEditorPage({ campaignId }: { campaignId: string }) {
 }
 
 /**
- * A colour with a swatch AND a typed hex, so a masjid can use its OWN brand colour.
+ * A color with a swatch AND a typed hex, so a masjid can use its OWN brand color.
  *
- * The swatch alone was the whole control before, which meant any colour was technically reachable but
+ * The swatch alone was the whole control before, which meant any color was technically reachable but
  * only by hunting for it in the OS picker — there was no way to enter the hex a masjid already has
  * written down, and next to a grid of presets the whole thing read as "presets only".
  *
  * The text box is free while you type (you cannot enter "#1f7a5c" without passing through "#1", "#1f"
- * …), so it keeps its own draft and only commits when the value is a real colour. Leaving it empty
+ * …), so it keeps its own draft and only commits when the value is a real color. Leaving it empty
  * clears back to the default rather than committing a broken value.
  */
 function ColorField({
@@ -1265,7 +1265,7 @@ function ColorField({
   // Follow the value when it changes from OUTSIDE this field (a preset was clicked, or Reset).
   useEffect(() => setDraft(value), [value]);
 
-  const normalise = (raw: string): string | null => {
+  const normalize = (raw: string): string | null => {
     const v = raw.trim().replace(/^#?/, '#');
     if (/^#[0-9a-fA-F]{6}$/.test(v)) return v.toLowerCase();
     // Accept the 3-digit shorthand people copy from CSS, expanded to the 6 the picker needs.
@@ -1274,11 +1274,11 @@ function ColorField({
   };
   const commit = (raw: string) => {
     if (!raw.trim()) return onChange(''); // cleared → back to the default
-    const hex = normalise(raw);
+    const hex = normalize(raw);
     if (hex) onChange(hex);
-    else setDraft(value); // not a colour — snap back rather than keep something unusable
+    else setDraft(value); // not a color — snap back rather than keep something unusable
   };
-  const bad = draft.trim() !== '' && normalise(draft) === null;
+  const bad = draft.trim() !== '' && normalize(draft) === null;
 
   return (
     <div className="field">
@@ -1288,7 +1288,7 @@ function ColorField({
           type="color"
           className="accent-swatch-input"
           aria-label={`${label} — pick`}
-          value={normalise(draft) ?? value ?? fallback ?? '#000000'}
+          value={normalize(draft) ?? value ?? fallback ?? '#000000'}
           onChange={(e) => { setDraft(e.target.value); onChange(e.target.value); }}
         />
         <input
@@ -1309,7 +1309,7 @@ function ColorField({
           <span className="hint" style={{ margin: 0 }}>{unsetLabel}</span>
         )}
       </div>
-      {bad && <p className="form-error">Use a hex colour like #1f7a5c.</p>}
+      {bad && <p className="form-error">Use a hex color like #1f7a5c.</p>}
       <p className="hint">{hint}</p>
     </div>
   );
@@ -1353,7 +1353,7 @@ function PolicyField({ id, label, value, onChange, hint }: { id: string; label: 
 }
 
 /** An image input that accepts a URL OR an uploaded file (stored on the data volume). URLs and
- *  uploads are sanitised before they're shown as an <img>/CSS background. */
+ *  uploads are sanitized before they're shown as an <img>/CSS background. */
 function ImageField({ id, label, hint, value, onChange }: { id: string; label: string; hint?: string; value: string; onChange: (v: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -1398,7 +1398,7 @@ function ImageField({ id, label, hint, value, onChange }: { id: string; label: s
 }
 
 // ── Faithful giving-screen preview (mirrors the Android kiosk exactly) ─────────────
-// These are the kiosk's own colours (android/.../GivingHome.kt `sceneStyleFor` + AmountTile), kept in
+// These are the kiosk's own colors (android/.../GivingHome.kt `sceneStyleFor` + AmountTile), kept in
 // sync so the admin sees the real thing: white glassy tiles with big BLACK numbers on a bright primary
 // wash, or a calm dark scene with elevated tiles when the campaign is Dark / has a background image.
 const INK_BLACK = '#0a0f14';
@@ -1422,7 +1422,7 @@ type Scene = {
   bgCover: boolean;
 };
 
-/** Resolve the giving-screen colour set from the campaign, exactly as the tablet does (bright primary
+/** Resolve the giving-screen color set from the campaign, exactly as the tablet does (bright primary
  *  wash with white tiles + black numbers, or the calm dark scene with elevated tiles). */
 function computeScene(primaryColor: string, accentColor: string, theme: CampaignTheme, bgUrl: string): Scene {
   const accent = accentColor || DEFAULT_ACCENT;
@@ -1443,7 +1443,7 @@ function computeScene(primaryColor: string, accentColor: string, theme: Campaign
       bgCover: !!bgUrl,
     };
   }
-  // Bright: a soft PRIMARY-colour wash. A light base → dark text; a dark base → a deepened wash + white
+  // Bright: a soft PRIMARY-color wash. A light base → dark text; a dark base → a deepened wash + white
   // text (so headings stay readable). Tiles are white with big black numbers either way.
   const sceneBase = primaryColor || mixHex(accent, '#ffffff', 0.35);
   const lightScene = relLuminance(sceneBase) > 0.35;
@@ -1463,7 +1463,7 @@ function computeScene(primaryColor: string, accentColor: string, theme: Campaign
   };
 }
 
-/** One orientation of the kiosk giving screen, laid out and coloured like the tablet. Container queries
+/** One orientation of the kiosk giving screen, laid out and colored like the tablet. Container queries
  *  size everything to the frame, so the same markup reads right at any preview size — a true scale
  *  model of the mounted tablet, including the portrait 1–2 / landscape 2–3 column split. */
 function GivingPreview({
@@ -1546,7 +1546,7 @@ function GivingPreview({
   );
 }
 
-/** Both orientations side-by-side, coloured from the campaign — a true-to-device look at what each
+/** Both orientations side-by-side, colored from the campaign — a true-to-device look at what each
  *  mounted tablet will show (a kiosk shows one, chosen by its Rotate-screen setting in Devices). */
 function DualPreview(props: {
   title: string;

@@ -179,7 +179,7 @@
     <string name="tuition_fee_line_tuition">Tuition</string>
     <string name="tuition_fee_line_fee">Card processing fee</string>
     <string name="tuition_fee_line_total">Total charged</string>
-    <string name="tuition_fee_explainer">This fee does not go to the madrasah — it is what Visa, Mastercard and American Express charge to accept a card, and it goes straight to the payment processor. Paying by cash or cheque at the office avoids it.</string>
+    <string name="tuition_fee_explainer">This fee does not go to the madrasah — it is what Visa, Mastercard and American Express charge to accept a card, and it goes straight to the payment processor. Paying by cash or check at the office avoids it.</string>
     <!-- %1$s is the total, so the button says exactly what pressing it will take. -->
     <string name="tuition_fee_pay">Pay %1$s</string>
     <string name="tuition_fee_cancel">Cancel</string>

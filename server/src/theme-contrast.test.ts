@@ -8,7 +8,7 @@
 //
 // It exists because this exact class of bug shipped once. Every wallpaper is a dark gradient and
 // they sat at the same CSS specificity as the light theme but later in the file, so they overwrote
-// light mode's own scene: light glass composited over a near-black wallpaper to mid-grey, with
+// light mode's own scene: light glass composited over a near-black wallpaper to mid-gray, with
 // dark-blue ink on top, under AA on every tab at once. It was then "fixed" by giving up — light
 // mode kept the dark backdrop — and stayed that way until the port from OpenMasjidStudents.
 //
@@ -48,7 +48,7 @@ function contrast(a: string, b: string): number {
   const [hi, lo] = [luminance(rgb(a)), luminance(rgb(b))].sort((p, q) => q - p);
   return (hi + 0.05) / (lo + 0.05);
 }
-/** The colour stops a gradient paints — text can end up over any of them. */
+/** The color stops a gradient paints — text can end up over any of them. */
 function stops(gradient: string): string[] {
   return [...gradient.matchAll(/#[0-9a-fA-F]{6}/g)].map((m) => m[0]);
 }
@@ -59,7 +59,7 @@ const WALLPAPERS = ['aurora', 'ocean', 'twilight', 'berry', 'sunset', 'ember', '
 const AA = 4.5;
 
 test('every wallpaper has a light-theme counterpart', () => {
-  // Without one, the dark gradient overwrites light mode's scene and the whole theme goes grey.
+  // Without one, the dark gradient overwrites light mode's scene and the whole theme goes gray.
   for (const w of WALLPAPERS) {
     assert.notEqual(block(`[data-wallpaper="${w}"]`), '', `no dark wallpaper "${w}"`);
     assert.notEqual(
@@ -110,15 +110,15 @@ test('on-scene text clears WCAG AA on every wallpaper, in both themes', () => {
 });
 
 test('panel text clears AA on the glass in both themes', () => {
-  // The glass is translucent, so the worst realistic case is the card's own surface colour. This is
+  // The glass is translucent, so the worst realistic case is the card's own surface color. This is
   // the text people read most; it must not be traded away to make the scene work.
   const pairs: [string, string, string][] = [
     ['dark', tokenIn(block(':root,\n[data-theme="dark"]'), 'color-ink'), tokenIn(block(':root,\n[data-theme="dark"]'), 'color-surface-raised')],
     ['light', tokenIn(block('[data-theme="light"]'), 'color-ink'), tokenIn(block('[data-theme="light"]'), 'color-surface-raised')],
   ];
   for (const [theme, ink, surface] of pairs) {
-    assert.ok(/^#[0-9a-fA-F]{6}$/.test(ink), `${theme}: --color-ink not a hex colour (${ink})`);
-    assert.ok(/^#[0-9a-fA-F]{6}$/.test(surface), `${theme}: --color-surface-raised not a hex colour (${surface})`);
+    assert.ok(/^#[0-9a-fA-F]{6}$/.test(ink), `${theme}: --color-ink not a hex color (${ink})`);
+    assert.ok(/^#[0-9a-fA-F]{6}$/.test(surface), `${theme}: --color-surface-raised not a hex color (${surface})`);
     const ratio = contrast(ink, surface);
     assert.ok(ratio >= AA, `${theme}: panel text ${ink} on ${surface} is ${ratio.toFixed(2)}:1, below ${AA}:1`);
   }

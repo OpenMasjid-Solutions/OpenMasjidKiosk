@@ -365,7 +365,7 @@ object ReaderManager {
      *  IMPORTANT: we FULLY STOP discovery and wait for it to finish BEFORE calling connectReader.
      *  Connecting to the M2 while a BLE scan is still tearing down is the textbook trigger for
      *  "Bluetooth unexpectedly disconnected during operation" (Stripe issue #83/#348), and it's
-     *  deterministic because the old code cancelled fire-and-forget and connected on the next line.
+     *  deterministic because the old code canceled fire-and-forget and connected on the next line.
      *  We also re-bind to the FRESHEST discovered object for this serial (Stripe: never connect a
      *  stale reader object). */
     private fun connectReaderInternal(reader: Reader, locationId: String, transport: ReaderTransport, manual: Boolean = false) {
@@ -545,7 +545,7 @@ object ReaderManager {
             })
         }
         // Wait for the SDK to actually let go before clearing credentials — they belong to the old
-        // account, and clearing them while still connected is not honoured.
+        // account, and clearing them while still connected is not honored.
         withTimeoutOrNull(10_000) { _state.first { it.conn != ReaderConn.Connected } }
         runCatching { Terminal.getInstance().clearCachedCredentials() }
 

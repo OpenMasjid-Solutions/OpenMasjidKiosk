@@ -26,7 +26,7 @@ name: Tests
 # second time. Worse than wasteful: both runs land in the same concurrency group below (a
 # `workflow_call` run carries the CALLER's `github.ref`), so they cancel each other, and which one
 # survives is a race. The first push after this file was added showed exactly that — a "Tests" run
-# cancelled at 3 seconds by the copy running inside "Build image".
+# canceled at 3 seconds by the copy running inside "Build image".
 #
 # Pull requests are the case `build-image.yml` does NOT cover — it is push-only — so that is the
 # trigger this file owns.
@@ -39,7 +39,7 @@ permissions:
   contents: read
 
 # Only a pull request can supersede itself here now (a `workflow_call` run is governed by its
-# caller's concurrency, not this one), so cancelling an older commit's run is always right.
+# caller's concurrency, not this one), so canceling an older commit's run is always right.
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true

@@ -37,9 +37,9 @@ contract wins. Responses carry `"v": 2`.
 - **0.41.0 (§11.0a) — paying ahead and credit.** `info.allowAdvance` + `info.minAmountCents`, and a
   `creditCents` beside every `balanceCents` in `lookup`. A derived balance of `0` is ambiguous — square,
   paid ahead, or "you can't pay here" — and these are what tell them apart.
-- **0.43.0 (§11.0b) — itemised bills.** Each `openInvoices[]` entry now carries `items[]`: the lines the
+- **0.43.0 (§11.0b) — itemized bills.** Each `openInvoices[]` entry now carries `items[]`: the lines the
   bill is made of (`{ id, label, kind, amountCents, balanceCents }`, `kind` = `tuition` | `charge` |
-  `credit`). A February bill is routinely £200 of tuition plus a £50 book fee, and a parent asking to
+  `credit`). A February bill is routinely $200 of tuition plus a $50 book fee, and a parent asking to
   pay one of the two could not be served while a bill was one label and one number. `record-payment`
   takes the matching `lines[]`. **Absent on an older Students, and then everything behaves exactly as
   it did** — one label, one number, one tick.
@@ -50,7 +50,7 @@ contract wins. Responses carry `"v": 2`.
 
 A `tuition` tile runs **exactly this**, nothing more:
 
-1. Tap the **tuition tile** (labelled from `info.schoolName` / `info.tagline`).
+1. Tap the **tuition tile** (labeled from `info.schoolName` / `info.tagline`).
 2. **One field on the tablet:** the child's *Student ID*. Nothing else — no PIN, no amount pad up front.
 3. Tap **Continue** → kiosk server calls `identify` (the ID alone).
    - Not found → one friendly line (“We couldn’t find that — please check the Student ID, or ask the
@@ -61,7 +61,7 @@ A `tuition` tile runs **exactly this**, nothing more:
 5. **Confirmed** → kiosk server calls `lookup` with the same ID → show the account **child by child**:
    the family label and household total up top, then a section per sibling with **that child's** own
    balance or credit and **that child's** bills. Each bill shows its own amount and due date, and where
-   the school itemises (0.43.0) the lines it is made of, under the month as a heading.
+   the school itemizes (0.43.0) the lines it is made of, under the month as a heading.
 6. **Pay:** the choices —
    - **Pay the full balance** (the whole household `balanceCents`) — the default, one tap; or
    - **Choose what to pay** — tick whole bills, or individual **lines** ("just the book fee"); or
@@ -70,7 +70,7 @@ A `tuition` tile runs **exactly this**, nothing more:
    With nothing due the screen still **says so first** — the balance, the credit, or "Nothing due" —
    and the amount pad is something the parent chooses, never what they land on.
 6b. **If — and only if — the school passes Stripe's cut to the payer** (`info.fee.enabled`, 0.51.0),
-   an extra screen appears before the reader is armed, showing the itemised total and saying whose
+   an extra screen appears before the reader is armed, showing the itemized total and saying whose
    money the extra is:
 
    > **Tuition** $100.00
@@ -78,7 +78,7 @@ A `tuition` tile runs **exactly this**, nothing more:
    > **Total charged** $103.30
    >
    > This fee does not go to the madrasah — it is what Visa, Mastercard and American Express charge to
-   > accept a card, and it goes straight to the payment processor. Paying by cash or cheque at the
+   > accept a card, and it goes straight to the payment processor. Paying by cash or check at the
    > office avoids it.
 
    This is a **requirement** (§11.4), not a nicety, and it is deliberately before the reader is armed:
@@ -151,7 +151,7 @@ same cadence you refresh campaigns.
 
 ### `identify` — Student ID → the child's name (step 3→4)
 ```jsonc
-{ "v": 2, "studentCode": "YUS1234" }        // normalised there too, so "yus-1234" is fine
+{ "v": 2, "studentCode": "YUS1234" }        // normalized there too, so "yus-1234" is fine
 // found — a first name + last initial and NOTHING else:
 → { "v": 2, "found": true, "student": { "studentCode": "YUS1234", "firstName": "Yusuf", "lastInitial": "I" } }
 // not found (unknown / withdrawn / locked ID, or tuition switched off):
@@ -182,7 +182,7 @@ child?”, and only call `lookup` on a yes.
 → { "v": 2, "found": false }
 ```
 **Group by child, don't flatten.** Bills are per student at v2, so a household list is two identically
-labelled "Tuition — Jul 2026" rows with no way to tell them apart, and a household total cannot say
+labeled "Tuition — Jul 2026" rows with no way to tell them apart, and a household total cannot say
 which child is in credit. The kiosk server therefore returns the invoices already grouped into a
 `family.students[]` section per child — name, that child's `balanceCents`/`creditCents`, and their own
 bills — and the tablet renders one section each.
@@ -247,22 +247,22 @@ sending more than one is the wire saying two different things about the same mon
 
 - **Full balance** → no breakdown at all (Students auto-allocates oldest-due-first across the family;
   surplus → that child's credit). That is exactly what "pay everything" means.
-- **Ticked lines, or whole bills that are itemised** → `lines: [{ itemId, amountCents }]`, summing
+- **Ticked lines, or whole bills that are itemized** → `lines: [{ itemId, amountCents }]`, summing
   exactly to `amountCents`, and **nothing else** (`"v": 2`).
 
-  > **`lines` is honoured, not merely accepted** (0.43.0): the choice is stored with the payment and
+  > **`lines` is honored, not merely accepted** (0.43.0): the choice is stored with the payment and
   > re-applied whenever Students recomputes its allocations, so the book fee a parent deliberately paid
   > still reads settled on next month's statement. It is also strict — every `itemId` must come from a
   > lookup in the same session and belong to that family, or the call is a `422 invalid_allocation`.
   > That is why a partial `lines[]` is never sent: our server only builds one when it covers the whole
   > charge to the penny, and falls back to the shape below when it can't.
 
-- **Whole bills from a school that doesn't itemise** → `allocations[]` per ticked invoice **and** a
+- **Whole bills from a school that doesn't itemize** → `allocations[]` per ticked invoice **and** a
   `students[]` breakdown grouping them by child, summing exactly to `amountCents` (`"v": 2`).
 
   > **Why both.** `allocations[]` was in the contract from v1 but was parsed and **ignored** until
   > 0.43.0 — a consumer asking for a particular bill got oldest-due-first with nothing to say so. It
-  > works from 0.43.0, normalised into the same line mechanism, but is a **hint**: what a named invoice
+  > works from 0.43.0, normalized into the same line mechanism, but is a **hint**: what a named invoice
   > can't absorb (the office took cash between our lookup and our record) is recorded as ordinary money
   > on that child rather than rejected, because by then the card is captured. `students[]` is what an
   > older Students actually splits by, so sending both keeps the per-child ledger right on every
@@ -351,11 +351,11 @@ charging the wrong account.
 - The tuition tile renders the **Student ID** shell (one field, no PIN, no amount pad), confirms the
   child's name via `identify`, then fetches the account via `lookup` and shows it **child by child** —
   each sibling's own balance or credit and their own bills — offering **pay-all**, **pick what to pay**
-  (whole bills, or individual lines where the school itemises), and **add money for a child**.
+  (whole bills, or individual lines where the school itemizes), and **add money for a child**.
 - With nothing due, the screen says so — the credit, or "Nothing due" — **before** offering an amount
   pad. The pad is never the landing screen.
 - A card-present approval calls `record-payment` with **exactly one** breakdown — `lines[]` for a
-  ticked/itemised charge, `allocations[]` + `students[]` for a non-itemised one, a one-entry
+  ticked/itemized charge, `allocations[]` + `students[]` for a non-itemized one, a one-entry
   `students[]` for a per-child typed amount, none for a full balance — idempotent on the PI id; a
   dropped confirmation is retried from a persistent outbox + `check`, with the breakdown stored so a
   retry after a restart still attributes the same way.

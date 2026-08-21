@@ -6,7 +6,7 @@
  *  never hear about them — so this screen reads the live subscription list back from Stripe through
  *  the server, and offers the three things an admin would otherwise open the Stripe dashboard for:
  *  pause one, end one, or give one a finish line. Polls slowly and fails soft; each action re-reads
- *  its plan from its own response, so a cancelled plan looks cancelled without a full reload. */
+ *  its plan from its own response, so a canceled plan looks canceled without a full reload. */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -103,7 +103,7 @@ function fromDateInput(v: string): string {
 /** "monthly" / "yearly" / "every 3 months" — how an admin says it, not Stripe's interval enum. */
 function cadence(interval: string, count: number): string {
   // The server sends '' for a price that lost its recurring block, and the rest of this file guards
-  // that with '|| period'. Without the same guard here a row reads '£25 every ' and stops mid-word.
+  // that with '|| period'. Without the same guard here a row reads '$25 every ' and stops mid-word.
   if (!interval) return 'on a repeating schedule';
   const n = Math.max(1, Math.round(count || 1));
   if (n === 1) {
@@ -114,7 +114,7 @@ function cadence(interval: string, count: number): string {
   return `every ${n} ${many[interval] ?? `${interval}s`}`;
 }
 
-/** Stripe's status enum in plain words, with a severity so the pill colour matches how worried an
+/** Stripe's status enum in plain words, with a severity so the pill color matches how worried an
  *  admin should be. past_due and unpaid are the two that need a human — a donor's card has stopped
  *  working and nobody will tell them but us. */
 function statusOf(p: Plan): { text: string; tone: 'ok' | 'warn' | 'danger' | 'muted' } {
@@ -186,7 +186,7 @@ function invoiceLabel(inv: PlanInvoice): string {
     case 'uncollectible':
       return 'Written off';
     case 'void':
-      return 'Cancelled';
+      return 'Canceled';
     default:
       return inv.status || 'Unknown';
   }
@@ -674,7 +674,7 @@ function PlanModal({ plan, onUpdated, onClose }: { plan: Plan; onUpdated: (p: Pl
                 <div className="plan-act">
                   <p className="plan-act__title">Give it an end date</p>
                   <p className="hint" style={{ marginBlockEnd: '0.45rem', lineHeight: 1.5 }}>
-                    For a donor who's pledged "£25 a month until Ramadan" — Stripe keeps collecting until then, and
+                    For a donor who's pledged "$25 a month until Ramadan" — Stripe keeps collecting until then, and
                     stops on its own.
                   </p>
                   {schedOpen ? (

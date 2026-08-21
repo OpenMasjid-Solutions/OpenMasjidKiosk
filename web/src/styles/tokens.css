@@ -147,7 +147,7 @@
      symptom: the real cause is that every [data-wallpaper] block below is a dark gradient and
      sits at the SAME specificity as this block, so it simply overwrote whatever scene light
      mode set. Light glass (white at ~55% alpha) then composited over a near-black wallpaper to
-     mid-grey, with #0C4A6E ink on top — under AA, everywhere at once.
+     mid-gray, with #0C4A6E ink on top — under AA, everywhere at once.
      Fixed properly in two parts: each wallpaper now has a light counterpart at two-attribute
      specificity (further down), and the on-scene ink follows the scene rather than the theme. */
   --scene-base: #EAF6FF;
@@ -341,7 +341,7 @@
 }
 
 /* Smooth theme transition.
- * Scoped to the surfaces and text that actually re-colour on a theme flip, rather than every node
+ * Scoped to the surfaces and text that actually re-color on a theme flip, rather than every node
  * in the tree — a universal selector put a four-property transition, including the paint-heavy
  * box-shadow, on SVG internals, spacers and motion wrappers permanently. Same fade for the things
  * that already animated; just no longer applied to everything. (Ported from OpenMasjidStudents.) */

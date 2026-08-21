@@ -8,9 +8,9 @@
 //
 //     const decimals = money(0).replace(/[^0-9.,]/g, '').includes('.') ? 2 : 0;
 //
-// `formatMoney` drops the decimals on a whole number, so `money(0)` is "£0" and never "£0.00" —
-// for every currency there is. The sniff therefore always answered 0, and an admin refunding £50 of
-// a £100 donation typed `50` and gave back **50 pence**. The placeholder, computed from the same
+// `formatMoney` drops the decimals on a whole number, so `money(0)` is "$0" and never "$0.00" —
+// for every currency there is. The sniff therefore always answered 0, and an admin refunding $50 of
+// a $100 donation typed `50` and gave back **50 pence**. The placeholder, computed from the same
 // number, told them to type `10000` instead. Three-decimal currencies (KWD, BHD, OMR) were out by a
 // factor of 1000 in the same direction.
 //
@@ -39,8 +39,8 @@ const donationsCode = donationsTsx
   .join('\n');
 
 test('the money formatter really does drop the decimals — which is what broke the sniff', () => {
-  // Pinning the property the old code assumed away. This is CORRECT behaviour and is not being
-  // changed: "£25" reads better than "£25.00" down a list. It is simply not something you can
+  // Pinning the property the old code assumed away. This is CORRECT behavior and is not being
+  // changed: "$25" reads better than "$25.00" down a list. It is simply not something you can
   // recover a currency's scale from.
   assert.equal(formatMoney(0, 'GBP'), '£0');
   assert.equal(formatMoney(2500, 'USD'), '$25');
@@ -65,7 +65,7 @@ test('a typed refund amount converts at the currency’s real scale', () => {
 });
 
 test('a refund of the whole remaining amount round-trips through the box', () => {
-  // The path an admin takes most: read the "up to £X" label, type that number back in.
+  // The path an admin takes most: read the "up to $X" label, type that number back in.
   for (const ccy of ['GBP', 'USD', 'JPY', 'KWD']) {
     for (const minor of [1, 50, 5000, 123456]) {
       const shown = (minor / factor(ccy)).toFixed(decimals(ccy));

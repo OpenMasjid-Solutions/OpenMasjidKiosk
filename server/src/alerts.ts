@@ -152,3 +152,76 @@ export function routeSummary(r: AlertRoute): { os: boolean; email: boolean; what
   const whatsapp = r.whatsapp && normalisePhone(r.phone) !== '';
   return { os: r.os, email, whatsapp, silent: !r.os && !email && !whatsapp };
 }
+
+// ── Pacing WhatsApp: ours now, because the platform stopped ─────────────────
+/**
+ * OpenMasjidOS 0.51.1 removed every limit it used to impose on WhatsApp — the per-recipient
+ * cooldown, the hourly and daily caps, quiet hours, the warm-up ramp, the random gap between
+ * messages. A message handed over now goes out within seconds. That is a large improvement for a
+ * reader-offline alert and a hazard for everything else, because it silently deleted a backstop we
+ * were relying on without ever having decided to.
+ *
+ * WHY THIS MATTERS MORE THAN IT LOOKS. Ban risk attaches to the phone NUMBER; that number is shared
+ * by every app on the box; and a blocked number cannot be recovered — the masjid loses the number
+ * their community reaches them on. It is the one failure in this app that no one can undo.
+ *
+ * THE ALERT THAT MADE THIS NECESSARY is `payment-failed`. It fires on every PaymentIntent that
+ * Stripe refuses, and it is the only alert with no natural bound: expired keys on a Friday means one
+ * message per person who tries to give, for the whole of jummah. The platform's 60-second
+ * per-recipient cooldown used to absorb exactly that. Nothing absorbs it now. (`reader-offline` is
+ * debounced and latched to one message per outage; refunds and cancellations are one per human
+ * action. This gate is cheap insurance for those and load-bearing for that one.)
+ *
+ * WHAT IT DOES: one WhatsApp per alert id per window, and it counts what it held back so the next
+ * message can say so — "and 23 more since" is far more useful to a caretaker than 23 messages, and
+ * it means suppression is never silent.
+ *
+ * `test` is deliberately exempt: an admin pressed a button and is watching the screen for the
+ * result. Throttling that would make the button look broken.
+ *
+ * State is in memory. A restart resets it and lets one extra message through, which is the right
+ * direction to fail — a duplicate alert costs nothing, a swallowed one costs the thing the alert
+ * was for. Pure, so the rule is unit-tested rather than asserted in a comment.
+ */
+export const WHATSAPP_MIN_GAP_MS = 30 * 60_000;
+
+export interface WhatsAppGateState {
+  /** When we last actually handed a message to the platform for this alert. */
+  lastSentAt: number;
+  /** How many we have held back since then. */
+  suppressed: number;
+}
+
+export interface WhatsAppGateResult {
+  send: boolean;
+  /** How many were held back before this one — 0 unless we are breaking a quiet spell. */
+  suppressedBefore: number;
+  next: WhatsAppGateState;
+}
+
+export function whatsappGate(id: AlertId, state: WhatsAppGateState | undefined, now: number): WhatsAppGateResult {
+  // The admin is standing there watching for it.
+  if (id === 'test') return { send: true, suppressedBefore: 0, next: { lastSentAt: now, suppressed: 0 } };
+  // NEVER SENT is its own case, not `lastSentAt: 0` and a big subtraction. The arithmetic version
+  // happens to work with a real clock only because `Date.now()` dwarfs the window, so it is right
+  // by luck rather than by construction — and it is wrong for any caller with a small clock,
+  // which is exactly how the test that found this was written.
+  if (!state || state.lastSentAt <= 0) {
+    return { send: true, suppressedBefore: state?.suppressed ?? 0, next: { lastSentAt: now, suppressed: 0 } };
+  }
+  if (now - state.lastSentAt >= WHATSAPP_MIN_GAP_MS) {
+    return { send: true, suppressedBefore: state.suppressed, next: { lastSentAt: now, suppressed: 0 } };
+  }
+  return {
+    send: false,
+    suppressedBefore: state.suppressed,
+    next: { lastSentAt: state.lastSentAt, suppressed: state.suppressed + 1 },
+  };
+}
+
+/** Append "and N more since" when a burst was held back, so suppression is visible to the reader. */
+export function withSuppressedNote(text: string, suppressedBefore: number): string {
+  if (suppressedBefore <= 0) return text;
+  const n = suppressedBefore;
+  return `${text}\n\n(${n} more alert${n === 1 ? '' : 's'} like this ${n === 1 ? 'was' : 'were'} held back in the last half hour, to protect the masjid's WhatsApp number. Check the admin panel for the full picture.)`;
+}

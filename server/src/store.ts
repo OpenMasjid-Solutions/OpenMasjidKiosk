@@ -121,10 +121,10 @@ const GIVING_DEFAULTS: GivingConfig = {
   celebrateThresholdMinor: 0,
 };
 
-/** A giving campaign (an "appeal") the kiosk shows as a tab — its own amounts, colour,
+/** A giving campaign (an "appeal") the kiosk shows as a tab — its own amounts, color,
  *  background, thank-you, monthly/cover-fees options and (optionally) its own Stripe account.
  *  Exactly one campaign is the **main** one (the always-present first tab). Amounts are integer
- *  MINOR units. Colours are '#rrggbb' or '' (inherit the default). Images are URLs (an uploaded
+ *  MINOR units. Colors are '#rrggbb' or '' (inherit the default). Images are URLs (an uploaded
  *  '/uploads/…' path, or an external https URL) or '' (use the default look / masjid logo). */
 /** Every campaign has a type, which drives the card-fee rule (see deriveFees): a **Donation** lets the
  *  admin offer fee-covering; **Zakat** always enforces it (so the full Zakat reaches the masjid);
@@ -137,10 +137,10 @@ export interface Campaign {
   /** Required campaign type — drives the fee rule (see coverFees/forceCoverFees + deriveFees). */
   type: CampaignType;
   description: string;
-  /** Primary colour hex ('#rrggbb') — drives the giving screen's background gradient. '' inherits
-   *  the accent (or the kiosk default). Think of it as the campaign's "wallpaper" colour. */
+  /** Primary color hex ('#rrggbb') — drives the giving screen's background gradient. '' inherits
+   *  the accent (or the kiosk default). Think of it as the campaign's "wallpaper" color. */
   primaryColor: string;
-  /** Accent colour hex ('#rrggbb') or '' to inherit the kiosk default (cyan). Drives the tiles'
+  /** Accent color hex ('#rrggbb') or '' to inherit the kiosk default (cyan). Drives the tiles'
    *  "Donate" band, pills and buttons. */
   accentColor: string;
   /** Full-screen background image URL for this campaign's tab, or '' for the default scene. */
@@ -276,6 +276,20 @@ export interface DonationRecord {
 
 /** A tuition (students/billing) payment in the outbox — held only to push it into the Students ledger
  *  and retry until recorded. Deliberately holds NO PIN / typed name. `allocations` null = pay-full. */
+/** One WhatsApp send, as far as we know about it. `refused` is OURS — the platform rejected the
+ *  message outright with a reason (an unapproved group, a number with no country code, our own
+ *  gateway number) and nothing was ever queued. The other four are the platform's own states. */
+export interface WhatsAppSendRecord {
+  state: 'queued' | 'sent' | 'failed' | 'expired' | 'refused';
+  at: number;
+  /** The platform's message id, so a `queued` can later be resolved. Empty for `refused`. */
+  messageId: string;
+  /** Plain language, from the platform. Empty unless something went wrong. */
+  reason: string;
+  /** How many alerts of this kind our own pacing gate held back before this one. */
+  suppressed: number;
+}
+
 export interface TuitionOutboxRow {
   paymentIntentId: string;
   deviceId: string;
@@ -355,7 +369,7 @@ export interface Device {
   revoked: boolean;
   /** Kiosk UI rotation in DEGREES, set from the web UI: '0' (as mounted) | '90' | '180' | '270'. The
    *  tablet rotates its own content by this angle (works even where the device ignores orientation
-   *  requests). Legacy named values are normalised to degrees on read. */
+   *  requests). Legacy named values are normalized to degrees on read. */
   orientation: string;
   /** Which side of the tablet the card reader sits on, so the kiosk can point donors to it during the
    *  card step: 'off' (no hint) | 'left' | 'right'. Left/right are in the app's LOGICAL landscape
@@ -378,7 +392,7 @@ const LEGACY_ORIENTATION: Record<string, DeviceOrientation> = {
   portraitReverse: '270',
 };
 
-/** Normalise any stored/incoming orientation to a valid degree string (default '0'). */
+/** Normalize any stored/incoming orientation to a valid degree string (default '0'). */
 export function normalizeOrientation(v: unknown): DeviceOrientation {
   const s = String(v ?? '');
   if ((DEVICE_ORIENTATIONS as readonly string[]).includes(s)) return s as DeviceOrientation;
@@ -395,7 +409,7 @@ export function normalizeOrientation(v: unknown): DeviceOrientation {
 export const DEVICE_NFC_SIDES = ['off', 'left', 'right', 'top', 'bottom'] as const;
 export type DeviceNfcSide = (typeof DEVICE_NFC_SIDES)[number];
 
-/** Normalise any stored/incoming NFC side to a valid value (default 'off'). */
+/** Normalize any stored/incoming NFC side to a valid value (default 'off'). */
 export function normalizeNfcSide(v: unknown): DeviceNfcSide {
   const s = String(v ?? '');
   return (DEVICE_NFC_SIDES as readonly string[]).includes(s) ? (s as DeviceNfcSide) : 'off';
@@ -559,9 +573,9 @@ export class Store {
       -- admin panel does is a settings edit that the settings themselves already show.
       --
       -- WHY: a masjid's admin login is shared in practice (the standalone fallback is one password,
-      -- and SSO sessions mint the same cookie), and Stripe's own dashboard only ever says "cancelled
+      -- and SSO sessions mint the same cookie), and Stripe's own dashboard only ever says "canceled
       -- by API key" — the same key for every admin. Without this there is no way to answer "who
-      -- cancelled Fatima's monthly gift, and when?". Best-effort: a failure to write an audit row
+      -- canceled Fatima's monthly gift, and when?". Best-effort: a failure to write an audit row
       -- must never fail the action it describes.
       CREATE TABLE IF NOT EXISTS admin_audit (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -857,6 +871,52 @@ export class Store {
     return all;
   }
 
+  /**
+   * The last thing that happened to a WhatsApp message for each alert.
+   *
+   * WHY THIS IS PERSISTED. Before OpenMasjidOS 0.51.1 there was no way to learn the fate of a
+   * message: we were told `queued: true` and that was the end of it, so an admin whose alerts
+   * silently stopped arriving had nothing to look at and no reason to suspect the platform rather
+   * than us. Now the platform can tell us, and the only useful place to put that answer is in front
+   * of the admin on the screen where they turned the channel on.
+   *
+   * Kept in the kv table rather than its own: it is one small record per alert, overwritten each
+   * time, and nothing reads it but the settings screen.
+   *
+   * NO MESSAGE TEXT AND NO PHONE NUMBER is stored here — a state, a platform-authored reason, and a
+   * timestamp. The number already lives in the route; the text is not ours to keep.
+   */
+  getWhatsAppOutcomes(): Record<string, WhatsAppSendRecord> {
+    const saved = this.getJson<Record<string, Partial<WhatsAppSendRecord>>>('whatsapp_outcomes', {});
+    const out: Record<string, WhatsAppSendRecord> = {};
+    for (const id of ALERT_IDS) {
+      const r = saved?.[id];
+      if (!r || typeof r !== 'object') continue;
+      const state = r.state;
+      if (state !== 'queued' && state !== 'sent' && state !== 'failed' && state !== 'expired' && state !== 'refused') continue;
+      out[id] = {
+        state,
+        at: Number(r.at) || 0,
+        messageId: typeof r.messageId === 'string' ? r.messageId.slice(0, 128) : '',
+        reason: typeof r.reason === 'string' ? r.reason.slice(0, 200) : '',
+        suppressed: Math.max(0, Math.trunc(Number(r.suppressed) || 0)),
+      };
+    }
+    return out;
+  }
+
+  setWhatsAppOutcome(id: AlertId, rec: WhatsAppSendRecord): void {
+    const all = this.getWhatsAppOutcomes();
+    all[id] = {
+      state: rec.state,
+      at: rec.at || Date.now(),
+      messageId: (rec.messageId || '').slice(0, 128),
+      reason: (rec.reason || '').slice(0, 200),
+      suppressed: Math.max(0, Math.trunc(rec.suppressed || 0)),
+    };
+    this.setRaw('whatsapp_outcomes', JSON.stringify(all));
+  }
+
   /** The emailed donation-receipt template (admin-editable). Off by default. */
   getEmailReceipt(): EmailReceipt {
     const s = this.getJson<Partial<EmailReceipt>>('email_receipt', {});
@@ -925,7 +985,7 @@ export class Store {
   setGiving(patch: Partial<GivingConfig>): GivingConfig {
     const cur = this.getGiving();
     const merged: GivingConfig = { ...cur, ...clean(patch as Record<string, unknown>) } as GivingConfig;
-    // Sanitise: at most 6 positive integer presets; sane custom bounds; known policies.
+    // Sanitize: at most 6 positive integer presets; sane custom bounds; known policies.
     merged.presetsMinor = (Array.isArray(merged.presetsMinor) ? merged.presetsMinor : [])
       .map((n) => Math.round(Number(n)))
       .filter((n) => Number.isFinite(n) && n > 0)
@@ -1005,7 +1065,7 @@ export class Store {
     };
   }
 
-  /** Clamp/normalise campaign fields (server-authoritative — never trust the client). */
+  /** Clamp/normalize campaign fields (server-authoritative — never trust the client). */
   private sanitizeCampaign(c: Campaign): Campaign {
     const hex = (v: string): string => (/^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : '');
     const img = (v: string): string => {

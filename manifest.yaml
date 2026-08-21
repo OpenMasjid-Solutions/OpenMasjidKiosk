@@ -5,7 +5,7 @@ id: kiosk
 name: OpenMasjid Kiosk
 tagline: Tap-to-donate kiosk for a wall-mounted tablet with a Stripe card reader
 category: donations
-version: 0.12.0-dev.7
+version: 0.12.0-dev.8
 author: OpenMasjid-Solutions
 license: AGPL-3.0-only
 icon: icon.svg
@@ -48,7 +48,7 @@ https: true
 # picks one in-app, then fetches that account's keys server-to-server per process start.
 # Keys live in memory only — never sent to the tablet/browser, never written to disk.
 stripe: true
-# Best-effort alerts (e.g. "£20 donation received at the foyer kiosk") relayed to the
+# Best-effort alerts (e.g. "$20 donation received at the foyer kiosk") relayed to the
 # masjid's configured webhook via POST /api/fabric/notify. Fails soft; never blocks.
 notifications: true
 # Send donors a branded receipt email via the masjid's OpenMasjidOS email provider

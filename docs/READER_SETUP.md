@@ -16,7 +16,7 @@ protected by the exit PIN — donors never see any of it.
 ## 1. Get the reader ready
 
 - **Charge it.** Hold the M2's power button until the light comes on.
-- **Bluetooth:** just power it on and keep it within a metre of the tablet. No pairing in Android
+- **Bluetooth:** just power it on and keep it within a meter of the tablet. No pairing in Android
   Settings — the kiosk app finds it directly.
 - **USB:** plug the M2 into the tablet with a USB-C/USB cable. Android will ask for permission to
   use the USB device the first time — tap **OK**.
@@ -62,7 +62,7 @@ disconnected reader remotely.
 - **No readers found (USB)** — reseat the cable and accept the Android USB permission prompt. Some
   cheap cables are charge-only; use a data cable.
 - **Keeps disconnecting** — charge the reader; a low battery drops the connection. Keep it within a
-  metre for Bluetooth.
+  meter for Bluetooth.
 - **Reader problem / won't connect** — disconnect, then find and connect again. If it still fails,
   restart the reader (hold power ~8 seconds) and retry.
 

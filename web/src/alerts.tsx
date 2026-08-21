@@ -10,7 +10,7 @@
  *  caretaker and "a donation was refunded" to reach the treasurer. */
 import { useEffect, useState } from 'react';
 import { BellRing, Check, Loader2, MessageCircle, RefreshCw, Send, TriangleAlert } from 'lucide-react';
-import { getAlerts, refreshWhatsApp, sendTestAlert, setAlertRoute, type AlertSetting, type AlertsView, type WhatsAppAvailability } from './api';
+import { getAlerts, refreshWhatsApp, sendTestAlert, setAlertRoute, type AlertSetting, type AlertsView, type WhatsAppAvailability, type WhatsAppSendRecord } from './api';
 
 /** What to tell the admin about WhatsApp not being available — each reason needs a different fix,
  *  so a single "unavailable" would leave them guessing which. */
@@ -25,6 +25,39 @@ function whatsappNote(w: WhatsAppAvailability): string {
     default:
       return 'WhatsApp isn’t set up on this server yet — an admin can add it in OpenMasjidOS → Settings → WhatsApp.';
   }
+}
+
+/**
+ * What became of the last WhatsApp for this alert, in one line.
+ *
+ * This exists because a refused message and a lost one used to look identical. The platform
+ * answers a bad send with a plain sentence — "That group has not been approved", "That phone
+ * number needs a country code", "That is the number WhatsApp is linked to" — and every one of
+ * those went to a debug log nobody reads. Shown once, quietly, next to the switch that caused it.
+ */
+function LastWhatsApp({ rec }: { rec: WhatsAppSendRecord | null }) {
+  if (!rec) return null;
+  const when = new Date(rec.at).toLocaleString();
+  const bad = rec.state === 'failed' || rec.state === 'expired' || rec.state === 'refused';
+  const label =
+    rec.state === 'sent'
+      ? 'Last message sent'
+      : rec.state === 'queued'
+        ? 'Last message queued'
+        : rec.state === 'refused'
+          ? 'Last message was refused'
+          : rec.state === 'expired'
+            ? 'Last message expired without sending'
+            : 'Last message failed';
+  return (
+    <p className={`muted alert-row__hint${bad ? ' text-warn' : ''}`}>
+      {bad ? <TriangleAlert size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />} {label} {'—'} {when}
+      {rec.reason ? `. ${rec.reason}` : ''}
+      {rec.suppressed > 0
+        ? ` (${rec.suppressed} more of these were held back beforehand, to protect the masjid’s number.)`
+        : ''}
+    </p>
+  );
 }
 
 function AlertRow({
@@ -133,6 +166,7 @@ function AlertRow({
           <TriangleAlert size={13} aria-hidden="true" /> WhatsApp is on for this alert but there’s no number, so nothing will be sent.
         </p>
       )}
+      <LastWhatsApp rec={a.lastWhatsApp} />
     </div>
   );
 }

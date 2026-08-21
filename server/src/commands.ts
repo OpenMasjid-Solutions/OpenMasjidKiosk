@@ -25,7 +25,7 @@
  *
  * On top of that the route is refused over the Cloudflare tunnel (see tunnel.ts): the platform is
  * always on the same LAN, so there is no legitimate remote caller to lose, and a credential check
- * is the wrong last line of defence for something that can act on hardware.
+ * is the wrong last line of defense for something that can act on hardware.
  *
  * Everything here except [runCommand] is pure, so the rules are unit-tested rather than asserted
  * in a comment.
@@ -256,7 +256,7 @@ function agoShort(iso: string, now = Date.now()): string {
 }
 
 /** The reader status in plain words — the same wording the Devices page uses, so the two never
- *  describe the same reader differently. Anything unrecognised is passed through rather than
+ *  describe the same reader differently. Anything unrecognized is passed through rather than
  *  flattened to "unknown", which would hide a status worth seeing. */
 function readerWords(s: string): string {
   const map: Record<string, string> = {
@@ -329,7 +329,7 @@ export function buildCommands(deps: CommandDeps): KioskCommand[] {
           if (hit) {
             return { ok: true, text: `${kioskTakingsLine(hit)} — all time.` };
           }
-          // Unrecognised. Offer ONE more go (the step lives in the token), then stop rather than
+          // Unrecognized. Offer ONE more go (the step lives in the token), then stop rather than
           // keep capturing their conversation over a name we are not going to guess right.
           const names = t.byDevice.map((d) => d.deviceName || 'Kiosk').join(', ');
           if (ctx.followUpToken === TAKINGS_PICK) {
@@ -422,7 +422,7 @@ export function findCommand(list: readonly KioskCommand[], id: string): KioskCom
  *
  * A handler that overruns is reported as "still working" rather than left to hit the platform's
  * 10s cut-off, because a timed-out HTTP call tells the admin nothing while a sentence can tell
- * them to ask again in a moment. The handler is not cancelled — there is nothing safe to cancel a
+ * them to ask again in a moment. The handler is not canceled — there is nothing safe to cancel a
  * half-finished hardware action with — it simply stops being what we answer with.
  *
  * `onError` is how the real exception reaches the container log. It is a parameter rather than a

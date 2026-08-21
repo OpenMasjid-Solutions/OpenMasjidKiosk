@@ -47,7 +47,7 @@ test('scheduledEndSec ends AFTER the Nth payment, never on it', () => {
   assert.equal(iso(scheduledEndSec(t0, 'year', 1, 1)), '2027-09-01');
 });
 
-test('scheduledEndSec honours an interval_count (a quarterly plan)', () => {
+test('scheduledEndSec honors an interval_count (a quarterly plan)', () => {
   const t0 = sec('2026-09-01T00:00:00Z');
   assert.equal(iso(scheduledEndSec(t0, 'month', 3, 1)), '2026-12-01'); // one more quarter
   assert.equal(iso(scheduledEndSec(t0, 'month', 3, 2)), '2027-03-01');

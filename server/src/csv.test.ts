@@ -22,7 +22,7 @@ test('a dangerous value that also needs quoting is both prefixed and quoted', ()
 });
 
 test('ordinary values pass through unchanged', () => {
-  for (const v of ['Aisha Khan', 'aisha@example.com', '£50.00', '', 'A-1', 'one_time']) {
+  for (const v of ['Aisha Khan', 'aisha@example.com', '$50.00', '', 'A-1', 'one_time']) {
     assert.equal(csvCell(v), v);
   }
 });

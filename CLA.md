@@ -46,7 +46,7 @@ Contribution, and derivative works of it, under license terms of the Project's
 choosing — including terms different from AGPL-3.0, such as a commercial or
 otherwise proprietary license** (i.e. to offer the software under a dual-license
 model). This right exists so the Project can be sustained, including by offering
-commercial licenses to organisations that cannot accept AGPL terms.
+commercial licenses to organizations that cannot accept AGPL terms.
 
 For clarity: this grant lets the Project offer **additional** licenses on top of
 the public AGPL-3.0 release. It does **not** remove the public's AGPL-3.0 rights,
@@ -128,7 +128,7 @@ Signing is handled automatically on each pull request:
 
 4. Your GitHub username and the signing details are then recorded in the
    `signatures/` file in the repository. You only sign **once** — future PRs are
-   recognised automatically.
+   recognized automatically.
 
 If You **cannot** agree to the relicensing grant in §2, You may instead contribute
 **under AGPL-3.0 only**: say so explicitly in Your PR description, and We will

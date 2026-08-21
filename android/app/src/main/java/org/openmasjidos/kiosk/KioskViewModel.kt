@@ -57,7 +57,7 @@ const val KIOSK_AUTO_RETURN_MS = 45_000L
 enum class MonthlyOutcome { None, Created, NotSupported }
 
 /**
- * The itemised total a parent must see BEFORE the reader is armed, when their madrasah has chosen to
+ * The itemized total a parent must see BEFORE the reader is armed, when their madrasah has chosen to
  * pass Stripe's processing fee to the payer (students/billing 0.51.0, §11.4).
  *
  * Every number here comes from the SERVER's reply to the PaymentIntent it just created. The tablet
@@ -85,7 +85,7 @@ data class ManualEntry(
 /** Outcome the UI reports back after presenting the manual card form. */
 enum class ManualResult { Completed, Canceled, Failed }
 
-/** One LINE of a bill (contract 0.43.0): "Monthly tuition £200", "Book fee £50", "Bursary −£30".
+/** One LINE of a bill (contract 0.43.0): "Monthly tuition $200", "Book fee $50", "Bursary −$30".
  *  [payable] is the only thing the tick logic cares about — a settled line and a credit line are both
  *  shown (a part-paid bill should say what is already dealt with) but neither can be chosen. */
 data class TuitionItemUi(
@@ -164,7 +164,7 @@ data class TuitionState(
     val selected: Set<String> = emptySet(),
     /** The school takes money when nothing is due (pay a term up front). Drives the amount pad. */
     val allowAdvance: Boolean = false,
-    /** Floor for a typed amount — the school's, never below the kiosk's own £1/$1 minimum. */
+    /** Floor for a typed amount — the school's, never below the kiosk's own $1 minimum. */
     val minAmountMinor: Long = 100L,
 ) {
     /** Every open bill across the family, for the totals and the pay-selection maths. */
@@ -173,8 +173,8 @@ data class TuitionState(
     /** What is actually PAYABLE — the open bills added up.
      *
      *  NOT [balanceMinor]. The household figure is a NET: one child's credit cancels another's bill
-     *  in it, so a family with Yusuf £340 ahead and Yunus £160 behind reports a £0 balance and £180
-     *  of credit while £160 is genuinely owed. Gating the pay controls on the balance left the
+     *  in it, so a family with Yusuf $340 ahead and Yunus $160 behind reports a $0 balance and $180
+     *  of credit while $160 is genuinely owed. Gating the pay controls on the balance left the
      *  parent staring at three of Yunus's bills with no way to pay any of them. Credit belongs to
      *  the child holding it and never pays a sibling's bill, so the bills are the honest total. */
     val dueMinor: Long get() = invoices.sumOf { it.balanceMinor }.takeIf { it > 0 } ?: balanceMinor
@@ -182,11 +182,11 @@ data class TuitionState(
     /** True when EVERY open bill came with lines. The two selections can't be mixed in one charge (the
      *  provider takes `lines` or `allocations`, and a `lines[]` covering only part of the charge is a
      *  hard rejection), so this decides which one the WHOLE screen uses — rendering included. */
-    val itemised: Boolean get() = invoices.isNotEmpty() && invoices.all { it.items.isNotEmpty() }
+    val itemized: Boolean get() = invoices.isNotEmpty() && invoices.all { it.items.isNotEmpty() }
 
-    /** What ticking this bill selects, honouring that whole-screen choice: its lines only when every
+    /** What ticking this bill selects, honoring that whole-screen choice: its lines only when every
      *  bill has them, else the bill itself. */
-    fun unitsOf(inv: TuitionInvoiceUi): List<String> = if (itemised) inv.unitIds else listOf(inv.id)
+    fun unitsOf(inv: TuitionInvoiceUi): List<String> = if (itemized) inv.unitIds else listOf(inv.id)
 
     /** What a ticked unit id is worth, whichever kind of unit it is. */
     fun unitAmount(id: String): Long =
@@ -223,7 +223,7 @@ data class GivingState(
     val preparingManual: Boolean = false,
     /** Tuition (students/billing) shell state — non-null only for a `tuition` campaign. */
     val tuition: TuitionState? = null,
-    /** Non-null → show the itemised tuition/fee/total and wait for the parent, before the reader is
+    /** Non-null → show the itemized tuition/fee/total and wait for the parent, before the reader is
      *  armed. Only ever set when the school passes the processing fee on (§11.4). */
     val feeQuote: TuitionFeeQuote? = null,
 )
@@ -491,7 +491,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     private var givingJob: Job? = null
 
     /** Set while the tuition flow is paused on the fee-confirm screen, waiting for the parent to
-     *  accept the itemised total. Completed by [confirmTuitionFee] / [cancelTuitionFee]; cleared by
+     *  accept the itemized total. Completed by [confirmTuitionFee] / [cancelTuitionFee]; cleared by
      *  the coroutine that created it. Null the rest of the time, and null for every school that
      *  absorbs the processing fee — which is almost all of them. */
     private var feeGate: CompletableDeferred<Boolean>? = null
@@ -607,7 +607,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Cancel the flow and go back to the amount screen. */
     fun cancelGiving() {
-        // Release the fee gate FIRST. Cancelling the job would strand a coroutine suspended on it,
+        // Release the fee gate FIRST. Canceling the job would strand a coroutine suspended on it,
         // and the parent pressing Cancel on the fee screen must mean the same thing as walking away.
         feeGate?.complete(false)
         givingJob?.cancel()
@@ -792,7 +792,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 startManualCollect()
                 return@launch
             }
-            // NB: rethrow CancellationException on every suspend call below. This job is cancelled
+            // NB: rethrow CancellationException on every suspend call below. This job is canceled
             // when the donor switches to keyed entry (enterManually → startManualCollect); if we
             // swallowed the cancellation we'd fall through and briefly flash the "Sorry" error screen
             // before the card form opened. Rethrowing ends the superseded job silently.
@@ -883,7 +883,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             val pi = try {
                 repo.createPaymentIntent(g.amountMinor, campaign?.id, name, email, monthly = false, manual = true, coverFees = g.coverFees, idem)
             } catch (c: CancellationException) {
-                throw c // superseded/cancelled — don't flash an error
+                throw c // superseded/canceled — don't flash an error
             } catch (e: Exception) {
                 manualWhy = (e.javaClass.simpleName + ": " + e.message.orEmpty()).take(240)
                 null
@@ -984,7 +984,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     // Typing re-arms the idle-abandon timer (and the return-to-main timer on a non-main tab) so an
     // abandoned Student ID is always cleared — see rescheduleIdleReset's tuition branch. The ID is
-    // normalised the way the school does it (uppercase, no spaces/hyphens) so "yus-1234" just works.
+    // normalized the way the school does it (uppercase, no spaces/hyphens) so "yus-1234" just works.
     fun setTuitionStudentCode(v: String) {
         updateTuition { it.copy(studentCode = v.uppercase().filter { ch -> ch != ' ' && ch != '-' }.take(32), notFound = false, error = null) }
         onUserActivity()
@@ -1130,7 +1130,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         updateTuition { it.copy(payFull = full, error = null) }
     }
 
-    /** Tick or untick one unit of the bill — a LINE where the school itemises its bills, else the whole
+    /** Tick or untick one unit of the bill — a LINE where the school itemizes its bills, else the whole
      *  bill (contract 0.43.0 §11.0b). */
     fun toggleTuitionUnit(id: String) {
         onUserActivity()
@@ -1183,9 +1183,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         val pay = when {
             amountMinor != null -> TuitionPay.Amount(amountMinor, studentKey)
             payFull -> TuitionPay.Full
-            // Lines where the school itemises its bills, whole bills where it doesn't. Never both in
+            // Lines where the school itemizes its bills, whole bills where it doesn't. Never both in
             // one charge — the provider takes one breakdown or the other.
-            t.itemised -> TuitionPay.Items(ids)
+            t.itemized -> TuitionPay.Items(ids)
             else -> TuitionPay.Invoices(ids)
         }
         // Show the amount immediately on the Card/Processing/Thanks screens (no "$0" flash before the

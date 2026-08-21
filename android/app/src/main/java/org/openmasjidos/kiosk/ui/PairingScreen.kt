@@ -208,7 +208,7 @@ private fun pairErrorText(reason: PairResult.Reason?): String? = when (reason) {
     PairResult.Reason.GENERIC -> stringResource(R.string.pairing_error_generic)
 }
 
-/** Text-field colours tuned for the dark scene in both themes. */
+/** Text-field colors tuned for the dark scene in both themes. */
 @Composable
 private fun onSceneFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = InkDark,

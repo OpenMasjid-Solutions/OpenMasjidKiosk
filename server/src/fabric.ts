@@ -253,18 +253,45 @@ export async function fabricAlert(
   }
 }
 
-// ── WhatsApp, through the platform's paced queue (manifest `whatsapp: true`) ──
-// We never see the gateway, its credentials, or the masjid's number. Ban risk attaches to the
-// NUMBER, so the platform owns a single serialised queue shared by every app and by its own alerts:
-// randomised gaps, typing indicators, per-recipient cooldowns, hourly/daily caps, a warm-up ramp,
-// and quiet hours that queue rather than drop. That is why success here is `202 { queued: true }`
-// and never "sent" — delivery is seconds to hours away, so NOTHING auth-critical may depend on it.
+// ── WhatsApp, through the platform's queue (manifest `whatsapp: true`) ──
+// We never see the gateway, its credentials, or the masjid's number.
+//
+// WHAT THE PLATFORM USED TO DO FOR US, AND NO LONGER DOES (OpenMasjidOS 0.51.1). It used to pace
+// everything: randomized gaps, per-recipient and per-group cooldowns, hourly and daily caps, a
+// warm-up ramp on a new number, and quiet hours. All of that is gone. The only pause left is a
+// typing indicator sized to the message. A message handed over now goes out within seconds.
+//
+// That removes a delay we were relying on without having decided to. Ban risk still attaches to the
+// NUMBER, that number is shared by every app on the box, and a blocked number cannot be recovered —
+// the masjid simply loses the number their community reaches them on. So the pacing is OUR job now:
+// see `whatsappGate` in alerts.ts, which is what stops a Stripe outage turning forty failed
+// donations into forty messages on one caretaker's phone.
+//
+// Two things that did NOT change: `202 { queued: true }` still means ACCEPTED, never delivered —
+// there is no delivery receipt from WhatsApp — and nothing auth-critical may ever ride on it.
+//
+// What is NEW and worth using: the 202 carries an `id`, and `GET .../whatsapp/status/<id>` says
+// what became of it. The queue is also persisted across restarts now; before 0.51.1 it lived in
+// memory, so anything held for a retry was destroyed on every container restart while we had been
+// told `queued: true`.
 
 export type WhatsAppReason = 'ready' | 'not-configured' | 'not-linked' | 'unreachable';
 
 export interface WhatsAppStatus {
   available: boolean;
   reason: WhatsAppReason;
+  /** 0.51.1+: the platform can tell us what became of a message. ABSENT on an older platform, and
+   *  an absent field must read as false — never assume the endpoint is there. */
+  outcomes: boolean;
+}
+
+/** What became of one queued message. `queued` is the honest answer for most of a message's life. */
+export type WhatsAppState = 'queued' | 'sent' | 'failed' | 'expired' | 'unknown';
+
+export interface WhatsAppOutcome {
+  state: WhatsAppState;
+  /** Only on failed/expired, and only ever the platform's own words. */
+  reason?: string;
 }
 
 let waCache: { at: number; value: WhatsAppStatus } | null = null;
@@ -278,7 +305,7 @@ const WA_CACHE_MS = 60_000;
  * and a masjid does not link a phone twice a minute.
  */
 export async function fabricWhatsAppStatus(force = false): Promise<WhatsAppStatus> {
-  if (!config.omosBaseUrl || !config.omosAppSecret) return { available: false, reason: 'not-configured' };
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { available: false, reason: 'not-configured', outcomes: false };
   const now = Date.now();
   if (!force && waCache && now - waCache.at < WA_CACHE_MS) return waCache.value;
   warnIfCleartextSecret();
@@ -293,23 +320,26 @@ export async function fabricWhatsAppStatus(force = false): Promise<WhatsAppStatu
     clearTimeout(t);
     // A platform too old to know about WhatsApp 404s here. That is "not set up", not an error.
     if (!res.ok) {
-      const value: WhatsAppStatus = { available: false, reason: res.status === 404 ? 'not-configured' : 'unreachable' };
+      const value: WhatsAppStatus = { available: false, reason: res.status === 404 ? 'not-configured' : 'unreachable', outcomes: false };
       waCache = { at: now, value };
       return value;
     }
-    const j = (await res.json().catch(() => ({}))) as { available?: boolean; reason?: string };
+    const j = (await res.json().catch(() => ({}))) as { available?: boolean; reason?: string; outcomes?: boolean };
     const reason: WhatsAppReason =
       j.reason === 'ready' || j.reason === 'not-configured' || j.reason === 'not-linked' || j.reason === 'unreachable'
         ? j.reason
         : j.available === true
           ? 'ready'
           : 'not-configured';
-    const value: WhatsAppStatus = { available: j.available === true, reason };
+    // `outcomes` is absent on a platform older than 0.51.1. Absent MUST read as false — asking a
+    // platform that has no status endpoint just 404s every id and would look like "every message
+    // failed", which is worse than not asking.
+    const value: WhatsAppStatus = { available: j.available === true, reason, outcomes: j.outcomes === true };
     waCache = { at: now, value };
     return value;
   } catch (err) {
     log.debug(`Fabric whatsapp status failed: ${err instanceof Error ? err.message : String(err)}`);
-    const value: WhatsAppStatus = { available: false, reason: 'unreachable' };
+    const value: WhatsAppStatus = { available: false, reason: 'unreachable', outcomes: false };
     waCache = { at: now, value };
     return value;
   }
@@ -330,7 +360,7 @@ export function clearWhatsAppCache(): void {
  * `queued: true` means ACCEPTED FOR LATER, not delivered. Fails soft in every case: an alert that
  * could not be queued must never disturb the donation, refund or reader event that raised it.
  */
-export async function fabricWhatsApp(to: string, text: string): Promise<{ queued: boolean; reason?: string }> {
+export async function fabricWhatsApp(to: string, text: string): Promise<{ queued: boolean; id?: string; reason?: string }> {
   if (!config.omosBaseUrl || !config.omosAppSecret) return { queued: false, reason: 'no-fabric' };
   if (!to.trim() || !text.trim()) return { queued: false, reason: 'empty' };
   warnIfCleartextSecret();
@@ -347,14 +377,56 @@ export async function fabricWhatsApp(to: string, text: string): Promise<{ queued
     clearTimeout(t);
     if (!res.ok) {
       const j = (await res.json().catch(() => ({}))) as { error?: string };
-      log.debug(`whatsapp send refused (${res.status}): ${j.error ?? ''}`);
+      // WARN, not debug. A 400/403 here is the platform telling us in a plain sentence why this will
+      // never work — an unapproved group, a number with no country code, our own gateway number. It
+      // is the most useful line anyone will get, and at debug it was invisible on a real install.
+      log.warn(`whatsapp send REFUSED (${res.status}): ${j.error ?? '(no reason given)'}`);
       return { queued: false, reason: j.error || `http_${res.status}` };
     }
-    const j = (await res.json().catch(() => ({}))) as { queued?: boolean; error?: string };
-    return j.queued === true ? { queued: true } : { queued: false, reason: j.error || 'refused' };
+    const j = (await res.json().catch(() => ({}))) as { queued?: boolean; id?: string; error?: string };
+    // The id is what makes "did that actually go?" answerable later — see [fabricWhatsAppOutcome].
+    const id = typeof j.id === 'string' && /^[\w.:-]{1,128}$/.test(j.id) ? j.id : undefined;
+    return j.queued === true ? { queued: true, id } : { queued: false, reason: j.error || 'refused' };
   } catch (err) {
     log.debug(`Fabric whatsapp send failed: ${err instanceof Error ? err.message : String(err)}`);
     return { queued: false, reason: 'unreachable' };
+  }
+}
+
+/**
+ * What became of a message we queued (OpenMasjidOS 0.51.1+).
+ *
+ * Scoped to our own app by the platform: another app's id 404s exactly like an unknown one, so a
+ * 404 is never proof of anything except "not ours or gone". The records are bounded to the most
+ * recent 200, which is why we poll shortly after sending rather than days later.
+ *
+ * Carries NO message text and NO recipient — just a state — so nothing here can leak a donor's or
+ * an admin's details back out of the platform.
+ *
+ * Fails soft to `unknown`: this is diagnostics, and a diagnostic that throws is worse than one that
+ * shrugs. `unknown` deliberately reads as "no news", never as failure.
+ */
+export async function fabricWhatsAppOutcome(id: string): Promise<WhatsAppOutcome> {
+  if (!config.omosBaseUrl || !config.omosAppSecret || !id.trim()) return { state: 'unknown' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp/status/${encodeURIComponent(id)}`, {
+      headers: { 'x-openmasjid-app-secret': config.omosAppSecret },
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) return { state: 'unknown' }; // 404 = not ours, unknown, or aged out of the ring
+    const j = (await res.json().catch(() => ({}))) as { state?: string; reason?: string };
+    const state: WhatsAppState =
+      j.state === 'queued' || j.state === 'sent' || j.state === 'failed' || j.state === 'expired' ? j.state : 'unknown';
+    const reason = typeof j.reason === 'string' ? j.reason.slice(0, 200) : undefined;
+    return reason ? { state, reason } : { state };
+  } catch (err) {
+    log.debug(`whatsapp outcome lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { state: 'unknown' };
   }
 }
 
@@ -585,7 +657,7 @@ export async function fetchFabricStripeAccounts(): Promise<FabricStripeAccountRe
 // aware (see index.ts rewriteUrl + HTML injection). We ask the platform for our public base
 // instead of guessing, and show it on the "Add a remote kiosk" page. Never persisted; fails soft.
 
-/** The platform's answer for this app's public address. `basePath` is normalised to a leading
+/** The platform's answer for this app's public address. `basePath` is normalized to a leading
  *  slash with no trailing slash (e.g. "/kiosk"), or "" when remote access is off. */
 export interface FabricSite {
   enabled: boolean;
@@ -596,7 +668,7 @@ export interface FabricSite {
 
 const SITE_OFF: FabricSite = { enabled: false, domain: '', publicUrl: '', basePath: '' };
 
-/** Normalise a path to "" or "/seg[/seg…]" (leading slash, no trailing slash). Restricted to a safe
+/** Normalize a path to "" or "/seg[/seg…]" (leading slash, no trailing slash). Restricted to a safe
  *  URL-path charset so the value we MATCH/STRIP (index.ts rewriteUrl) is byte-identical to the one we
  *  inject into `<base href>`/`window.__OMOS_BASE__` — no divergence, and no HTML-injection surface if
  *  the platform ever returned a hostile basePath. */

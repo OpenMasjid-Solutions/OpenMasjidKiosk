@@ -74,7 +74,7 @@ test('a version that already carries a prerelease is left alone', () => {
   assert.equal(applyVersionSuffix('0.11.0-dev.1', '-dev'), '0.11.0-dev.1');
   assert.equal(applyVersionSuffix('0.11.0-dev.12', '-dev'), '0.11.0-dev.12');
   assert.equal(applyVersionSuffix('0.11.0-rc.1', '-dev'), '0.11.0-rc.1');
-  // A plain release version still takes one, so the old behaviour is intact where it applied.
+  // A plain release version still takes one, so the old behavior is intact where it applied.
   assert.equal(applyVersionSuffix('0.11.0', '-dev'), '0.11.0-dev');
 });
 

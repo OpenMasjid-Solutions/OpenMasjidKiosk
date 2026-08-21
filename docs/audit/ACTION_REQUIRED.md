@@ -33,7 +33,7 @@ But two other controls on that screen are escapes, not diagnostics, and neither 
 Ten taps on the background of the giving screen is all it takes. The fix the audit proposes is small
 and obvious — gate those two on `exitAllowed` as well — but it changes the kiosk lockdown on a path
 that **cannot be compiled or run on the dev machine**, and it interacts with first-run setup, which is
-exactly what the current behaviour exists to protect. Getting it wrong strands a volunteer at a
+exactly what the current behavior exists to protect. Getting it wrong strands a volunteer at a
 tablet with no way into Settings to join Wi-Fi.
 
 **What I would do:** set an exit PIN on every kiosk today (Devices → the kiosk → exit PIN) — that
@@ -202,8 +202,8 @@ I did not guess at this because picking a masjid's timezone for them is exactly 
 
 ## 7. Two small product decisions I left alone
 
-- ~~**`consumeTuitionSession` is dead code**~~ ([KIOSK-014](SECURITY_AUDIT.md#kiosk-014)) — **deleted 2026-08-13.** It was never called, so removing it changed no behaviour, and it took its misleading "single-use" comment with it. `getTuitionSession` now documents the truth: a session is **reusable until it expires**, deliberately, so a parent whose card is declined doesn't have to type the Student ID and re-confirm the child again. Wiring single-use *on* remains the open product question ("should a declined tuition card force a fresh lookup?") and is still nobody's call but yours. Not a vulnerability either way: every mint recomputes the amount server-side and re-checks the device binding.
-- **Android has no unit tests at all.** `KioskViewModel.backoffUntil` and `ScryptPin.verify` are pure functions guarding a public terminal, and neither can be tested today. A `test/` source set with a handful of JVM tests would have caught KIOSK-002 outright. Worth an issue — and it is the only compile-and-behaviour gap left, since the dev machine has no Android SDK and CI's `build-apk` job proves compilation but nothing else.
+- ~~**`consumeTuitionSession` is dead code**~~ ([KIOSK-014](SECURITY_AUDIT.md#kiosk-014)) — **deleted 2026-08-13.** It was never called, so removing it changed no behavior, and it took its misleading "single-use" comment with it. `getTuitionSession` now documents the truth: a session is **reusable until it expires**, deliberately, so a parent whose card is declined doesn't have to type the Student ID and re-confirm the child again. Wiring single-use *on* remains the open product question ("should a declined tuition card force a fresh lookup?") and is still nobody's call but yours. Not a vulnerability either way: every mint recomputes the amount server-side and re-checks the device binding.
+- **Android has no unit tests at all.** `KioskViewModel.backoffUntil` and `ScryptPin.verify` are pure functions guarding a public terminal, and neither can be tested today. A `test/` source set with a handful of JVM tests would have caught KIOSK-002 outright. Worth an issue — and it is the only compile-and-behavior gap left, since the dev machine has no Android SDK and CI's `build-apk` job proves compilation but nothing else.
 
 ---
 
@@ -213,6 +213,6 @@ Stated so you can check them rather than inherit them:
 
 1. **That percent-decoding is the only canonicalisation Fastify's router applies to static path segments.** I tested duplicate slashes, dot segments, encoded dot segments, encoded slashes, case, trailing slashes and null bytes (all correctly 404) alongside the encoding that worked. The fix does not depend on this being an exhaustive list — it fails closed on the raw form *and* the decoded forms — but the list itself came from probing, not from the router's source.
 2. **That `kioskpay.html` is the only page ever loaded in the card WebView.** True in the current code; the KIOSK-005 allowlist would need widening if that changes.
-3. **That the reusable `build-apk.yml` compiling successfully means the Kotlin changes are correct.** It means they *compile*. KIOSK-002 and KIOSK-015 are pure functions I reasoned about carefully; KIOSK-005 changes runtime navigation behaviour and **should get one real keyed-card payment as a smoke test** before you rely on it.
+3. **That the reusable `build-apk.yml` compiling successfully means the Kotlin changes are correct.** It means they *compile*. KIOSK-002 and KIOSK-015 are pure functions I reasoned about carefully; KIOSK-005 changes runtime navigation behavior and **should get one real keyed-card payment as a smoke test** before you rely on it.
 4. **That "50 wrong pairing codes in 10 minutes across the whole network" is comfortably above legitimate use.** A volunteer types one code, correctly or once wrong. If a masjid ever bulk-pairs a large fleet with a lot of mistyping, they would see a 429 and have to wait — recoverable, and the admin can re-issue codes.
 5. **That the audit trail's `actor` is best-effort by necessity.** Our session cookie asserts that *someone* signed in, not who. When the platform can name the SSO user we record that; otherwise the row says so plainly. If you want reliable attribution, the session cookie needs to carry an identity — a bigger change than an audit run should make.

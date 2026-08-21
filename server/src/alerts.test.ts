@@ -14,15 +14,19 @@ import { readFileSync } from 'node:fs';
 import {
   ALERT_IDS,
   ALERT_META,
-  DEFAULT_ROUTE,
   alertEmailLooksValid,
+  DEFAULT_ROUTE,
   defaultRoutes,
   isAlertId,
   normalisePhone,
   phoneLooksValid,
   routeSummary,
   sanitizeRoute,
+  WHATSAPP_MIN_GAP_MS,
+  whatsappGate,
+  withSuppressedNote,
   type AlertRoute,
+  type WhatsAppGateState,
 } from './alerts';
 import { Store } from './store';
 
@@ -179,4 +183,87 @@ test('unknown keys in a patch are ignored', () => {
   const current: AlertRoute = { os: true, email: '', whatsapp: false, phone: '' };
   const after = sanitizeRoute({ os: false, nonsense: true, __proto__: { evil: 1 } } as never, current);
   assert.deepEqual(after, { os: false, email: '', whatsapp: false, phone: '' });
+});
+
+// ── Pacing WhatsApp ourselves, now that the platform stopped ────────────────
+// OpenMasjidOS 0.51.1 removed every limit it used to impose (per-recipient cooldown, hourly and
+// daily caps, quiet hours, the warm-up ramp, the random gap). Ban risk still attaches to the phone
+// NUMBER, that number is shared by every app on the box, and a blocked number cannot be recovered.
+// So these tests are about the one failure in this app nobody can undo.
+
+test('a burst of the same alert sends once and counts the rest', () => {
+  // `payment-failed` is the alert that made this necessary: it fires on every PaymentIntent Stripe
+  // refuses, so expired keys on a Friday used to mean one message per person who tried to give.
+  let st: WhatsAppGateState | undefined;
+  const t0 = 1_000_000;
+  const first = whatsappGate('payment-failed', st, t0);
+  assert.equal(first.send, true, 'the first one always goes');
+  st = first.next;
+
+  let sent = 0;
+  for (let i = 1; i <= 40; i++) {
+    const g = whatsappGate('payment-failed', st, t0 + i * 30_000); // one every 30s for 20 minutes
+    if (g.send) sent++;
+    st = g.next;
+  }
+  assert.equal(sent, 0, '40 failures inside the window must not become 40 messages');
+  assert.equal(st?.suppressed, 40, 'and every one of them is counted');
+});
+
+test('the window reopens, and the next message carries what was held back', () => {
+  const t0 = 1_000_000;
+  let st = whatsappGate('payment-failed', undefined, t0).next;
+  for (let i = 1; i <= 5; i++) st = whatsappGate('payment-failed', st, t0 + i * 60_000).next;
+  assert.equal(st.suppressed, 5);
+
+  const after = whatsappGate('payment-failed', st, t0 + WHATSAPP_MIN_GAP_MS + 1);
+  assert.equal(after.send, true);
+  assert.equal(after.suppressedBefore, 5, 'the next message knows what it stands for');
+  assert.equal(after.next.suppressed, 0, 'and the count resets once it has been reported');
+
+  const note = withSuppressedNote('The card reader is offline.', after.suppressedBefore);
+  assert.match(note, /5 more alerts/);
+  assert.match(note, /held back/i);
+  // Suppression must never be silent: the reader has to be able to tell there were others.
+  assert.notEqual(note, 'The card reader is offline.');
+});
+
+test('a single alert is never annotated', () => {
+  assert.equal(withSuppressedNote('The card reader is offline.', 0), 'The card reader is offline.');
+});
+
+test('the test message is never throttled', () => {
+  // An admin pressed a button and is watching the screen. Throttling it makes the button look broken.
+  let st: WhatsAppGateState | undefined;
+  for (let i = 0; i < 5; i++) {
+    const g = whatsappGate('test', st, 1_000_000 + i * 1_000);
+    assert.equal(g.send, true, `press ${i + 1} must send`);
+    st = g.next;
+  }
+});
+
+test('alerts are paced independently of one another', () => {
+  // A reader going offline must not be swallowed because Stripe was failing a minute earlier.
+  const t0 = 1_000_000;
+  const a = whatsappGate('payment-failed', undefined, t0);
+  const b = whatsappGate('reader-offline', undefined, t0 + 1_000);
+  assert.equal(a.send, true);
+  assert.equal(b.send, true, 'a different alert has its own window');
+});
+
+test('the gap is long enough to matter and short enough to be useful', () => {
+  // Documented as a real decision rather than a magic number: half an hour is long enough that a
+  // sustained outage cannot spend the number, and short enough that a caretaker hears about a
+  // genuinely new problem within one prayer.
+  assert.ok(WHATSAPP_MIN_GAP_MS >= 10 * 60_000, 'too short to protect the number');
+  assert.ok(WHATSAPP_MIN_GAP_MS <= 60 * 60_000, 'too long and a real outage goes unreported');
+});
+
+test('a fresh process always sends the first alert, whatever the clock says', () => {
+  // Regression: "never sent" used to be encoded as lastSentAt:0 and decided by subtraction, which is
+  // only correct because Date.now() happens to be far larger than the window. Right by luck.
+  for (const now of [1, 1_000, 60_000, 1_000_000, Date.now()]) {
+    assert.equal(whatsappGate('payment-failed', undefined, now).send, true, `now=${now}`);
+    assert.equal(whatsappGate('reader-offline', { lastSentAt: 0, suppressed: 3 }, now).send, true, `stale zero, now=${now}`);
+  }
 });

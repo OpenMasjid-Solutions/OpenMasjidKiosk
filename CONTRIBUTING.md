@@ -55,7 +55,7 @@ and `/download` to the server on `:8080`.
 
 Two tests deliberately reach across from `server/` into `web/` — `theme-contrast.test.ts` reads the
 design tokens and `refund-amount.test.ts` imports the currency arithmetic. The server's runner is
-the only one CI executes, and asserting web behaviour there is worth more than asserting it nowhere.
+the only one CI executes, and asserting web behavior there is worth more than asserting it nowhere.
 
 ## Code
 

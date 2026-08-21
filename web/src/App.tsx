@@ -74,7 +74,7 @@ export function App() {
   // Follow the dashboard's theme/wallpaper/accent live when opened from OpenMasjidOS.
   useOmosAppearanceSync(app?.embedded);
 
-  // On-scene text colour follows whatever is ACTUALLY behind it, which is not always the theme.
+  // On-scene text color follows whatever is ACTUALLY behind it, which is not always the theme.
   // With a preset wallpaper the theme decides (both now have their own light/dark gradient), so
   // `data-scene` is left off entirely and tokens.css picks the ink from data-theme.
   //

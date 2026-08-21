@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.sp
  * over the *shape* of the type scale — heavier, tighter display headings. No external
  * font is fetched (self-contained, matching the "no CDN" rule).
  *
- * SIZED FOR A WALL, NOT A PHONE. A donor reads this tablet standing up, from half a metre or
+ * SIZED FOR A WALL, NOT A PHONE. A donor reads this tablet standing up, from half a meter or
  * more away, often in a hurry — so every step is roughly a third larger than Material's phone
  * defaults, and body copy never drops below 16sp. **Define the whole scale here, including the
  * styles Material would otherwise supply** (displaySmall, headlineMedium/Small, titleMedium/Small,

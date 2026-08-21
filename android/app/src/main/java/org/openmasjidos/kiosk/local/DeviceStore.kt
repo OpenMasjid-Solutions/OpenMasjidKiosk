@@ -52,7 +52,7 @@ class DeviceStore(private val context: Context) {
         val CFG_MASJID_NAME = stringPreferencesKey("cfg_masjid_name")
         // Global giving policy + campaigns (the per-appeal giving screens). Campaigns are stored as a
         // JSON string; without persisting them the tablet would fetch the config but drop the amounts/
-        // colours/messages on save, so the kiosk would never reflect edits.
+        // colors/messages on save, so the kiosk would never reflect edits.
         val CFG_MANUAL = booleanPreferencesKey("cfg_manual")
         val CFG_PUBKEY = stringPreferencesKey("cfg_pubkey")
         val CFG_NAME_POLICY = stringPreferencesKey("cfg_name_policy")

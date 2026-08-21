@@ -40,7 +40,7 @@ detail of every change — it is distilled into a major-changes-only entry when 
   background dark, so the admin panel was half one thing and half the other — and the page titles,
   the top bar and the clock stayed pale because they had to sit on that dark backdrop. The whole
   page is light now, taken from OpenMasjid Students where it was already right.
-  - **Your wallpaper is still your wallpaper.** Each one has a light version that keeps its colour —
+  - **Your wallpaper is still your wallpaper.** Each one has a light version that keeps its color —
     Ocean is still blue, Forest still green, Berry still pink — so the panel looks like the same
     choice, just in daylight.
   - **Text follows whatever is actually behind it.** If you use your own background image, the
@@ -49,8 +49,8 @@ detail of every change — it is distilled into a major-changes-only entry when 
   - Every combination of theme and wallpaper was checked for contrast against the accessibility
     standard, and one that had never met it — the Sunset wallpaper in **dark** mode, where page
     titles sit on its brightest orange — is very slightly deeper so that it now does.
-  - Switching between light and dark also got lighter on the browser: the colour fade used to be
-    attached to every element on the page, including ones that never change colour.
+  - Switching between light and dark also got lighter on the browser: the color fade used to be
+    attached to every element on the page, including ones that never change color.
 - **Decide who gets told what, in Settings → Notifications.** Until now every alert this app raises
   went wherever OpenMasjidOS was set to send it — one place, one address, for all of them. Each
   alert now has its own row, and can go to any combination of three places:
@@ -75,14 +75,14 @@ detail of every change — it is distilled into a major-changes-only entry when 
   paces them deliberately to protect it, so one can take anywhere from seconds to a few minutes.
   It's for things worth interrupting someone about; email remains the reliable channel.
 - **Refunding part of a donation gave back a hundredth of what you typed.** Choosing "Refund only
-  part of it" on a £100 donation and typing `50` refunded **50 pence**, not £50 — and the box
+  part of it" on a $100 donation and typing `50` refunded **50 pence**, not $50 — and the box
   underneath suggested you type `10000` instead. The confirmation line did show the real figure, so
   an admin reading carefully would have caught it, but nothing else would: Stripe accepted the small
   refund, the donation showed as partly refunded, and the totals were right about the wrong number.
   Full refunds were never affected. Neither were donations themselves — this was only ever the
   refund box in the admin panel.
-  - It happened because the panel worked out "how many pence is £1" by looking at how a zero
-    formatted and checking for a decimal point — and amounts are written `£0`, never `£0.00`, so
+  - It happened because the panel worked out "how many pence is $1" by looking at how a zero
+    formatted and checking for a decimal point — and amounts are written `$0`, never `$0.00`, so
     the answer was always "one". Currencies with three decimal places (Kuwaiti dinar, Bahraini
     dinar, Omani rial) were out by a thousand, in the same direction.
   - The amount now comes from your currency itself, the way every other figure in the app already
@@ -115,7 +115,7 @@ detail of every change — it is distilled into a major-changes-only entry when 
     picture. In light mode that meant white text on a white page — the titles simply vanished. It
     now assumes the theme you are actually using.
   - The veil that sits over a background image to keep text readable followed the theme while the
-    text colour followed the image, so on a dark photo in light mode they worked against each other.
+    text color followed the image, so on a dark photo in light mode they worked against each other.
     They now move together.
 - **Three things in the admin panel were styled with names that don't exist**, so they rendered as
   nothing at all: the busy spinner on the Email receipts buttons (pressing "Send me a test" looked
@@ -158,7 +158,7 @@ detail of every change — it is distilled into a major-changes-only entry when 
 - **A school can now ask the payer to cover the card fee** (needs OpenMasjid Students 0.51.0). It is
   **off unless the school turns it on**, and off means nothing whatsoever changes — which is what
   almost every school will see.
-  - When it is on, the kiosk shows the parent an itemised total **before the card reader is armed**:
+  - When it is on, the kiosk shows the parent an itemized total **before the card reader is armed**:
     tuition, the processing fee, and what will actually be charged — plus a plain sentence saying the
     fee is **not the madrasah's**. It is what Visa, Mastercard and American Express charge to accept a
     card and it goes straight to the payment processor, and paying at the office avoids it. A total
@@ -173,6 +173,31 @@ detail of every change — it is distilled into a major-changes-only entry when 
     the total their card is asked for.
   - Cash and any manual payment never attract a fee — there is no processor taking a cut to pass on.
   - Walking away at that screen cancels cleanly, like every other step; nothing is charged.
+- **WhatsApp alerts: you can now see what happened to them, and the kiosk paces itself.** Needs
+  OpenMasjidOS 0.51.1, which fixed a fault on the platform side that made this app look unreliable:
+  one held-up message could block every message from every app for half an hour, and the queue was
+  thrown away whenever the platform restarted. If your WhatsApp alerts have been arriving late, out
+  of order, or not at all, that is very likely why.
+  - **A refused message now says why.** Under each alert in Settings → Notifications you can see what
+    became of the last one: sent, queued, or refused with the reason in plain words — the group has
+    not been approved, the number is missing its country code, or you have entered the masjid's own
+    WhatsApp number. Until now a refused message and a lost one looked exactly the same, which is a
+    poor thing to discover when the alert you were relying on is the one that did not arrive.
+  - **At most one WhatsApp per kind of alert every half hour**, and the next one tells you how many
+    were held back. This is new, and it is deliberate: the platform used to space messages out for
+    us and has stopped. Without it, a card processor outage during a busy prayer could raise one
+    alert per attempted donation — dozens of messages in an hour, from the masjid's own number.
+    A WhatsApp ban attaches to the number itself and cannot be undone, so the kiosk now protects it.
+  - **Your email and OpenMasjidOS alerts are never paced** and never have been. They carry no such
+    risk, and nothing about them changes.
+  - **Send test message is never held back** either — you pressed it and you are waiting for it.
+  - None of this makes WhatsApp reliable enough to depend on: it is still "handed over", never
+    "delivered", and nothing that matters for signing in will ever be sent that way. Email remains
+    the channel to trust.
+- **American spelling and dollar amounts throughout.** Wording across the app, the setup pages and
+  the documentation now uses American spelling, and examples are written in dollars. Your own
+  currency setting is unaffected — a masjid collecting in pounds, rupees or dirhams still sees its
+  own symbol everywhere, exactly as before.
 
 ## 0.11.0
 **Monthly giving works properly for the first time, and a donation can now be refunded from the
@@ -229,7 +254,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
 - **Monthly donations are no longer set up as a "free trial."** They read as Active with a real next
   invoice date — here, in Stripe, and in the donor's own Stripe emails. Nothing about the money
   changes.
-- **Campaign colours accept a typed hex code**, so a masjid can enter its exact brand colour instead
+- **Campaign colors accept a typed hex code**, so a masjid can enter its exact brand color instead
   of hunting for it by eye.
 - **Campaign tabs have an adjustable size** — Small / Medium / Large / Extra large in
   **Campaigns → Kiosk settings**. Medium is the original size, so nothing changes until you pick one.
@@ -264,9 +289,9 @@ admin panel. Update your tablets after installing** — several of these fixes a
   from outside, and it should never have been. It is now closed, and there is a test that keeps it
   closed. **If you use remote adoption, change your kiosk admin password.** If you have never turned
   it on, you were never affected.
-- **New: an activity record for the things that reach outside the app.** Cancelling, pausing or
+- **New: an activity record for the things that reach outside the app.** Canceling, pausing or
   rescheduling someone's monthly donation, removing a kiosk, or changing the exit PIN are now written
-  down with what happened and when. Stripe only ever records "cancelled by this masjid", so if two
+  down with what happened and when. Stripe only ever records "canceled by this masjid", so if two
   people share the admin login there was previously no way to tell who stopped a donor's standing
   order.
 - **Card reader and card form security tightened.** The typed-card screen can no longer be navigated
@@ -293,17 +318,17 @@ admin panel. Update your tablets after installing** — several of these fixes a
   made, and the reason a payment failed when it did, so you can tell a donor their card expired
   instead of guessing.
 - Everything is read **live from Stripe** each time you open the page, so it can't show you a plan
-  that was cancelled elsewhere or a status that's out of date.
+  that was canceled elsewhere or a status that's out of date.
 - Plans created before this release still appear, but can't say which campaign they belonged to, and
   their totals leave out the first payment taken on the reader (that one is in Donations). Both are
   marked on screen rather than quietly guessed at.
 
 ## 0.9.36
 - **Fixed: a child's bills couldn't be paid when a sibling was in credit.** If one child was paid
-  ahead and another owed, the school's household total nets the two out — so a family with £340 of
-  credit on one child and £160 owed on another showed "£180 paid ahead", listed the £160 of unpaid
+  ahead and another owed, the school's household total nets the two out — so a family with $340 of
+  credit on one child and $160 owed on another showed "$180 paid ahead", listed the $160 of unpaid
   bills, and offered no way to pay any of them. The kiosk now works from what the **bills** come to
-  rather than that netted total: "Balance due £160" at the top, the bills tickable, and a "Pay £160"
+  rather than that netted total: "Balance due $160" at the top, the bills tickable, and a "Pay $160"
   button. Any credit on the family is still shown, underneath, where it can't be mistaken for having
   nothing to pay.
 - **A "Leave" button on the balance screen.** It used to be a small text link at the very bottom of
@@ -333,11 +358,11 @@ admin panel. Update your tablets after installing** — several of these fixes a
   their own bills underneath.
 - **Add money for one child.** Where a family has more than one child, "pay a different amount" is now
   a button per child — **"Add money for Maryam"** — so the money lands on that child's account. Paying
-  ahead for one child while another still owes now works properly, and the smallest payment is still £1/$1.
+  ahead for one child while another still owes now works properly, and the smallest payment is still $1/$1.
 - **Nothing due no longer opens a keypad.** A parent who owes nothing was previously dropped straight
   onto a number pad, which reads as being asked for money. The kiosk now says what the account is first
   — the credit on it, or simply "Nothing due" — and offers to take a payment only if they want to.
-- **Pay one thing off a bill.** A February bill is often £200 of tuition **plus** a £50 book fee, and a
+- **Pay one thing off a bill.** A February bill is often $200 of tuition **plus** a $50 book fee, and a
   parent asking to pay just the book fee couldn't be served. With **OpenMasjid Students 0.43.0** the
   kiosk lists what a bill is made of and lets them tick the lines they want — and the school's ledger
   settles exactly those lines, not the oldest bill instead. Lines already paid are shown as done, and a
@@ -355,7 +380,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
 
 ## 0.9.32
 - **Keys react like a phone's.** Press a key on the kiosk keyboard and it lights up in your accent
-  colour and lifts a big copy of the letter **above your finger**, so you can see what you typed even
+  color and lifts a big copy of the letter **above your finger**, so you can see what you typed even
   though your hand is covering the key. Space, shift, backspace and Done highlight too (no bubble —
   they're wide enough to read around a finger).
 - **Student ID stays in capitals.** The ID keypad is now locked to capitals, so the keys show `YUS1234`
@@ -370,13 +395,13 @@ admin panel. Update your tablets after installing** — several of these fixes a
   Needs **OpenMasjid Students 0.41.0** and a school that has advance payments switched on — otherwise
   the kiosk behaves exactly as before and says nothing is due.
 - **The screen now says what the account actually is.** A zero balance used to look the same whether a
-  family was square or had already paid ahead. The kiosk now shows **"Balance due £X"**, **"£X paid
+  family was square or had already paid ahead. The kiosk now shows **"Balance due $X"**, **"$X paid
   ahead — it comes off the next bill automatically"**, or **"Nothing due"**, and each child in the
   family is listed with their own figure.
 - **Pay a different amount against a balance.** Alongside "Full balance" and "Choose what to pay",
   a parent can type any amount — part of what's owed, or more than it. Anything beyond the bill becomes
   credit rather than being lost.
-- **No sub-£1/$1 payments.** Every route to the reader — full balance, picked months, or a typed amount
+- **No sub-$1/$1 payments.** Every route to the reader — full balance, picked months, or a typed amount
   — is floored at the school's own minimum and never below a pound/dollar, since a smaller charge costs
   more in card fees than it collects. The kiosk shows the minimum on the keypad, and the server enforces
   it independently of the tablet.
@@ -388,12 +413,12 @@ admin panel. Update your tablets after installing** — several of these fixes a
   weight bolder, so the kiosk reads from across the foyer instead of at arm's length. Buttons, the
   keyboard keys, the PIN pad and the tap-to-type boxes all grew to match, and any screen that runs
   out of room now scrolls instead of cutting a button off.
-- **Text now contrasts with whatever colours you set.** The kiosk works out the text colour from the
+- **Text now contrasts with whatever colors you set.** The kiosk works out the text color from the
   campaign background it's actually painted on, rather than assuming, so headings and small print stay
-  readable on a light, dark or strongly-coloured campaign. Secondary lines (subtitles, hints, "Due …")
-  are no longer a faint grey.
+  readable on a light, dark or strongly-colored campaign. Secondary lines (subtitles, hints, "Due …")
+  are no longer a faint gray.
 - **"Hold your card on the reader for at least 5 seconds"** now appears on the payment screen, in the
-  accent colour under the tap prompt. Lifting the card early is the most common reason a payment looks
+  accent color under the tap prompt. Lifting the card early is the most common reason a payment looks
   like it failed.
 - **The keyboard only opens when you tap a box.** It used to open by itself on the details and tuition
   screens, which made people think a name, email or ID was required before they could carry on. Empty
@@ -420,7 +445,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
   **Requires OpenMasjid Students 0.39.0 or newer, and a tablet app update:** on 0.39.0 the old
   name + PIN lookup is rejected outright, so an un-updated kiosk's tuition tile can't fetch a balance.
 - **Invoices say whose they are.** Students now bills **per child**, so when a family has more than one
-  child at the school, each month in "Choose what to pay" is labelled with the child it belongs to.
+  child at the school, each month in "Choose what to pay" is labeled with the child it belongs to.
 - Paying, receipts and the Students ledger are **unchanged** — an in-flight payment, a retry from the
   outbox, and every other campaign type behave exactly as before.
 
@@ -481,7 +506,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
 ## 0.9.22
 - **Fixed the campaign live preview.** It now sits full-width at the top of the editor and reliably
   shows both the portrait and landscape giving screens (it was rendering broken before).
-- **More readable giving screen** — larger text, and a darker, higher-contrast secondary text colour on
+- **More readable giving screen** — larger text, and a darker, higher-contrast secondary text color on
   the bright background (kiosk + preview).
 - **Bigger "Choose your own amount" button** — a bold, filled pill instead of a thin outline.
 - **Better on-screen keyboard** — the number row is now a compact strip (not a second bank of letter
@@ -511,14 +536,14 @@ admin panel. Update your tablets after installing** — several of these fixes a
 ## 0.9.19
 - **Clearer "Add a kiosk" screen.** It now shows the exact **server address** to type on the tablet
   (this admin page's own address) with a one-tap Copy button — and warns you if you're viewing it on
-  localhost (which a tablet can't reach). The pairing code is now clearly labelled too, so it's obvious
+  localhost (which a tablet can't reach). The pairing code is now clearly labeled too, so it's obvious
   what goes in each field on the tablet. Admin-only; no tablet update needed.
 
 ## 0.9.18
 - **Reimagined campaign designer.** The editor is now a roomy two-pane window: tabbed settings
   (Design · Amounts · Type & fees · Payments · Kiosks · Message) beside a **live, true-to-device
   preview of both the portrait and landscape giving screens**. The preview now mirrors the tablet
-  exactly — real two-tone tiles, colours, per-orientation columns, and bright/dark scenes.
+  exactly — real two-tone tiles, colors, per-orientation columns, and bright/dark scenes.
 - **Per-kiosk campaign targeting, both ways.** Each campaign's new **Kiosks** tab sets exactly which
   kiosks show it (new campaigns go to **all kiosks** by default; turn that off to pick specific ones);
   the **Devices** page now lists which campaigns each kiosk is currently showing.
@@ -559,8 +584,8 @@ admin panel. Update your tablets after installing** — several of these fixes a
 - **Choose which kiosks show a campaign.** Each campaign can be set to show on **all kiosks** or only
   **specific** ones (Admin → Campaigns → “Show on which kiosks”). Your main campaign always shows
   everywhere.
-- **Colour themes.** The campaign editor now has one-tap **colour presets** (a primary + accent that
-  go well together). Picking one just fills the colour fields — you can still fine-tune either.
+- **Color themes.** The campaign editor now has one-tap **color presets** (a primary + accent that
+  go well together). Picking one just fills the color fields — you can still fine-tune either.
 
 ## 0.9.12
 - **Campaign type (Donation / Zakat / Tuition).** Every campaign now has a required **Type** that sets
@@ -574,14 +599,14 @@ admin panel. Update your tablets after installing** — several of these fixes a
 - **Much bigger, bolder amounts.** The donation numbers now fill the tile — large and heavy — so
   they're easy to read across the room, and the **“Donate”** button band is taller with bigger text
   so it's the obvious thing to tap.
-- **Colour-coded, bigger tabs.** Each campaign tab is now tinted with that campaign's own colour and
+- **Color-coded, bigger tabs.** Each campaign tab is now tinted with that campaign's own color and
   is larger and bolder, so it's clear which appeals you can switch between.
 - **No more cut-off descriptions.** Campaign titles and descriptions now have a character limit (with
   a live counter in the editor), and the giving screen fits a fuller description without clipping.
 
 ## 0.9.10
-- **Two colours: a primary and an accent.** Each campaign now has a **Primary colour** (a soft wash
-  behind the giving screen) and an **Accent colour** (the “Donate” band on each amount tile and the
+- **Two colors: a primary and an accent.** Each campaign now has a **Primary color** (a soft wash
+  behind the giving screen) and an **Accent color** (the “Donate” band on each amount tile and the
   buttons) — like the reference design. Set both in Admin → Campaigns.
 - **Bigger, bolder amounts + a touch of glass.** The amount numbers are now large and heavy black on
   clean white tiles with a subtle glass sheen, so they read at a glance from across the room.
@@ -595,7 +620,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
 
 ## 0.9.9
 - **Bigger, bolder amount buttons.** The six giving amounts are now much larger and use a two-tone
-  design — a big amount on the tile with a solid coloured **“Donate”** band beneath — so they read
+  design — a big amount on the tile with a solid colored **“Donate”** band beneath — so they read
   instantly across a room.
 - **Seamless “Enter card details”.** Tapping to type a card no longer flashes a “Sorry — that didn’t
   go through” message for a moment before the card form opens; it now goes straight to a calm
@@ -639,7 +664,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
 - **Redesigned the giving screen to the full-screen layout you wanted.** The masjid name + tagline
   sit across the top, then a big, edge-to-edge grid of donation buttons (three across) — each with a
   large amount, a “Donate” label and an accent bar — a small “Choose your own amount”, and a subtle
-  footer. The buttons have a touch of glass transparency. Replaces the cramped centred card.
+  footer. The buttons have a touch of glass transparency. Replaces the cramped centered card.
 
 ## 0.9.4
 - **Typed card entry rebuilt to actually work on a locked kiosk.** Keyed card payments now use
@@ -689,7 +714,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
 - **Multiple giving campaigns, shown as tabs.** The kiosk no longer starts on a “Tap to donate”
   screen — it opens straight on your **main campaign’s** giving screen (amounts, one-time/monthly).
   Add more appeals (e.g. Zakat, Building Fund) in the new **Campaigns** admin tab; each becomes its
-  own tab across the top of the kiosk, with **its own colour, background image, logo, amounts,
+  own tab across the top of the kiosk, with **its own color, background image, logo, amounts,
   monthly option, cover-fees option and thank-you message**. The first tab is your always-shown main
   campaign.
 - **Auto-return to the main campaign.** When a donor opens another appeal and then walks away, the
@@ -854,7 +879,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
   minutes; keep it powered and nearby.
 
 ## 0.5.3
-- **The activity log is now a proper draggable window** — bigger, centred on screen, and you can
+- **The activity log is now a proper draggable window** — bigger, centered on screen, and you can
   drag it around by its title bar. Removed the (non-functional) green "full-screen" light; the red
   light closes it.
 
@@ -919,7 +944,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
   dashboard's custom wallpaper image exactly the way the other OpenMasjid apps do — the image URL
   you set in OpenMasjidOS is used directly (make sure it's an `https://` link). This also removes
   the internal image-proxy entirely, so the previous proxy's security hardening is no longer
-  needed. (Named preset wallpapers + accent colour already inherited.)
+  needed. (Named preset wallpapers + accent color already inherited.)
 - **Fix — "Identify" (flash to locate a kiosk) now actually stands out.** Tapping *Identify* in
   Admin → Devices makes the tablet pulse a bold gold wash for several seconds — easy to spot on a
   wall. Kiosks also now check in every 15s (was 45s), so Identify, config changes and online
@@ -985,7 +1010,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
   proxied through the app's own HTTPS origin (`/api/public/wallpaper`) — the platform serves
   them over plain HTTP, which a secure page otherwise blocks as mixed content; this also
   fixes on-image text readability (canvas luminance). Named preset wallpapers + the accent
-  colour already inherited. Note: the OS **"ambient" video** backdrop is a per-device local
+  color already inherited. Note: the OS **"ambient" video** backdrop is a per-device local
   setting and is deliberately not shared over the Fabric, so it can't be inherited — pick a
   preset or a wallpaper image in OpenMasjidOS for the kiosk to match.
 

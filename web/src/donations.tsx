@@ -237,8 +237,8 @@ function DonationModal({
   //
   // It used to sniff it: `money(0).…includes('.') ? 2 : 0`. That looked defensive and was wrong for
   // every currency at once, because `formatMoney` drops the decimals on a whole number — so
-  // `money(0)` is "£0", never "£0.00", and the sniff therefore always answered 0. An admin giving
-  // back £50 of a £100 donation typed 50 and refunded **£0.50**, while the placeholder below (also
+  // `money(0)` is "$0", never "$0.00", and the sniff therefore always answered 0. An admin giving
+  // back $50 of a $100 donation typed 50 and refunded **$0.50**, while the placeholder below (also
   // computed from this number) told them to type 10000. Three-decimal currencies were out by 1000.
   const decimals = decimalsFor(currency);
   const typedMinor = toMinor(amountText.replace(/[^0-9.]/g, ''), currency);

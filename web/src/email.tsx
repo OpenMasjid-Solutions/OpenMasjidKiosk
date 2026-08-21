@@ -259,9 +259,9 @@ export function EmailReceiptSection() {
             </div>
 
             <div className="field">
-              <label className="label">Accent colour</label>
+              <label className="label">Accent color</label>
               <div className="row" style={{ alignItems: 'center', gap: '0.6rem' }}>
-                <input type="color" className="accent-swatch-input" aria-label="Accent colour" value={isHex(accent) ? accent : ACCENT_DEFAULT} onChange={(e) => setAccent(e.target.value)} />
+                <input type="color" className="accent-swatch-input" aria-label="Accent color" value={isHex(accent) ? accent : ACCENT_DEFAULT} onChange={(e) => setAccent(e.target.value)} />
                 {accent && <button type="button" className="btn btn--ghost btn--sm" onClick={() => setAccent('')}>Default</button>}
               </div>
             </div>

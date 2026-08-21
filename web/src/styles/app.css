@@ -129,7 +129,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .muted { color: var(--color-ink-muted); }
 .faint { color: var(--color-ink-faint); }
 .row { display: flex; align-items: center; gap: 0.6rem; }
-/* A row of FORM FIELDS rather than controls. `.row` centres its children, which is right for buttons
+/* A row of FORM FIELDS rather than controls. `.row` centers its children, which is right for buttons
    and pills but wrong for label+input stacks: the moment one field carries a hint line it becomes
    taller, and centring then pushes its neighbour's label and input DOWN by half the difference, so
    two fields side by side visibly fail to line up. Align to the top so the labels share a baseline
@@ -378,11 +378,11 @@ h1, h2, h3, p, ul { margin: 0; }
 
 /* A number that reports something taken back rather than received — the refunded total in a
    donation's detail window. Used before it existed, so the figure that most needs to stand out was
-   rendering in ordinary body colour. */
+   rendering in ordinary body color. */
 .text-warn { color: var(--color-warning); }
 
 /* A quiet explanatory line under a panel heading: the WhatsApp availability note, the pacing note,
-   the "not connected to OpenMasjidOS" note. Pairs with `.muted`, which sets the colour. Also
+   the "not connected to OpenMasjidOS" note. Pairs with `.muted`, which sets the color. Also
    previously undefined, so the notes ran flush against the controls above them. */
 .note {
   display: block; margin-block: 0.45rem; padding-inline-start: 0.65rem;
@@ -400,7 +400,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .pair-code {
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: clamp(2.2rem, 9vw, 3.2rem); font-weight: 700; line-height: 1.1;
-  letter-spacing: 0.35em; padding-inline-start: 0.35em; /* re-centre against trailing spacing */
+  letter-spacing: 0.35em; padding-inline-start: 0.35em; /* re-center against trailing spacing */
   color: var(--color-primary); font-variant-numeric: tabular-nums;
 }
 .pair-instr { max-width: 22rem; line-height: 1.5; }
@@ -465,7 +465,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .camp-pill__dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15); }
 .camp-pill__main { color: var(--color-gold); font-weight: 600; }
 
-/* Theme presets (campaign editor): a row of two-swatch chips that fill the colour fields. */
+/* Theme presets (campaign editor): a row of two-swatch chips that fill the color fields. */
 .theme-presets { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .theme-preset {
   display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.6rem 0.35rem 0.4rem;
@@ -535,7 +535,7 @@ button.status-pill:hover { filter: brightness(1.08); }
 .switch--on .switch-knob { inset-inline-start: calc(100% - 1.28rem); }
 
 /* ── Live giving-screen preview (both orientations) ──────────────────────────────────
-   Colours come from campaigns.tsx computeScene() (mirrors the Android kiosk). Deliberately simple +
+   Colors come from campaigns.tsx computeScene() (mirrors the Android kiosk). Deliberately simple +
    bulletproof: each screen sizes to its CONTENT (no aspect-ratio fill, no container queries — those
    clipped before), with fixed rem type. Landscape reads wide (3-col, shorter); portrait reads narrow
    (2-col, taller) — so both orientations are clear at a glance. */
@@ -647,7 +647,7 @@ button.status-pill:hover { filter: brightness(1.08); }
 .img-field .input { flex: 1; min-width: 12rem; }
 .img-preview { flex: none; width: 2.4rem; height: 2.4rem; border-radius: 8px; object-fit: cover; box-shadow: inset 0 0 0 1px var(--color-border); }
 
-/* Accent-colour picker row. */
+/* Accent-color picker row. */
 .accent-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .accent-swatch-input { width: 2.8rem; height: 2.2rem; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer; box-shadow: inset 0 0 0 1px var(--color-border); }
 .accent-swatch-input::-webkit-color-swatch-wrapper { padding: 2px; }
@@ -683,10 +683,10 @@ button.status-pill:hover { filter: brightness(1.08); }
 .donation-amt { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-ink); }
 .donation-row__meta { font-size: 0.82rem; }
 .badge--monthly { background: var(--color-primary-subtle); color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary-subtle); }
-/* Refunded money. Struck through rather than hidden or recoloured on its own: the donation still
+/* Refunded money. Struck through rather than hidden or recolored on its own: the donation still
    happened and stays in the log, but scanning the list must never read a returned gift as income.
-   The strike is what carries the meaning, so the colour is a reinforcement and not the only signal
-   (it still reads on a mono display, and to anyone who can't distinguish the two colours). */
+   The strike is what carries the meaning, so the color is a reinforcement and not the only signal
+   (it still reads on a mono display, and to anyone who can't distinguish the two colors). */
 .badge--refunded { background: color-mix(in srgb, var(--color-danger) 12%, transparent); color: var(--color-danger); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent); }
 .donation-amt--refunded,
 .detail-amt--refunded { text-decoration: line-through; text-decoration-thickness: 2px; color: var(--color-ink-muted); }
@@ -694,7 +694,7 @@ button.status-pill:hover { filter: brightness(1.08); }
 .device-danger { background: var(--color-danger); color: var(--color-on-primary); }
 .device-danger:hover { background: var(--color-danger); filter: brightness(1.06); }
 
-/* Per-device activity log modal — a real centred window over a dimmed, blurred backdrop
+/* Per-device activity log modal — a real centered window over a dimmed, blurred backdrop
    (z-index above the sticky top bar + dock) so it never overlaps the cards behind it. */
 .modal-scrim {
   position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
@@ -850,7 +850,7 @@ button.status-pill:hover { filter: brightness(1.08); }
 .inv-row--warn .inv-sub { color: var(--color-warning); }
 .inv-row--bad .inv-sub { color: var(--color-danger); }
 
-/* The hex box beside a colour swatch. Monospace so a code reads as a code, and narrow so the row
+/* The hex box beside a color swatch. Monospace so a code reads as a code, and narrow so the row
    still fits the swatch, the field and the reset button on a laptop. */
 .color-hex {
   width: 8.5rem; flex: none; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: lowercase;

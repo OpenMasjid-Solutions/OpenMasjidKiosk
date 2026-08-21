@@ -51,7 +51,7 @@ If it prints anything else, `git checkout dev` first. If you are on `main`, you 
     | Section | Lives on | Contains | Written |
     |---|---|---|---|
     | `## Unreleased` (always at the top) | **`dev` only** | **Every** dev change, in full: fixes, internals, docs sweeps, dead code, anything a tester on the dev channel would notice or want explained. | On each publishable dev build, as part of the same commit. |
-    | `## X.Y.Z` | **both** branches | **MAJOR changes only** — what a masjid actually needs to know: new capability, changed behaviour, a fix for something they hit. Not internals, not refactors, not doc edits. | At release, by distilling `## Unreleased`. |
+    | `## X.Y.Z` | **both** branches | **MAJOR changes only** — what a masjid actually needs to know: new capability, changed behavior, a fix for something they hit. Not internals, not refactors, not doc edits. | At release, by distilling `## Unreleased`. |
 
     **At release:** distil `## Unreleased` down to the major-only `## X.Y.Z` entry. `main` gets that entry and **no `## Unreleased` section at all** — a stable install must never read notes for code it isn't running. `dev` gets the same `## X.Y.Z` entry *plus* a fresh empty `## Unreleased` above it for the next cycle. The two files differ only by that section, and that difference is deliberate and permanent — do not "fix" it by syncing them.
 
@@ -235,7 +235,7 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
 - Play Store distribution (sideload via `/new` is the model; Play listing is a later decision).
 
 ### 🔭 Later (design for, don't build)
-- ~~Per-device amount presets & campaigns~~ — **built.** Campaigns are first-class (own amounts, colours, images, type, Stripe account, thank-you) and each targets chosen kiosks.
+- ~~Per-device amount presets & campaigns~~ — **built.** Campaigns are first-class (own amounts, colors, images, type, Stripe account, thank-you) and each targets chosen kiosks.
 - ~~`domain: true`~~ — **built**, though not as the "public giving link from a kiosk QR" originally imagined. It carries **remote adoption** (pairing a tablet at another site) and the **donor's monthly-cancel link**. A public giving *page* remains unbuilt.
 - Still later: Gift Aid; Terminal offline mode; Play Store / managed provisioning (QR device-owner enrolment); WisePOS-style internet readers; donor accounts; a screen for the `admin_audit` trail (the data and `GET /api/admin/audit` exist; nothing renders them).
 
@@ -274,9 +274,9 @@ Follow BUILDING_AN_APP.md §7 exactly; Donations is the working example.
 - **Manifest flags:** `sso: true`, `stripe: true`, `https: true`, `notifications: true`.
 - **Compose must reference** `${OPENMASJID_BASE_URL:-}`, `${OPENMASJID_APP_ID:-}`, `${OPENMASJID_APP_SECRET:-}` in `environment:` — without these lines the injected values never reach the container and the Fabric silently no-ops (the documented Display trap).
 - **SSO:** on the request that loads the admin panel, forward the `omos_session` cookie (from the request only) server→server to `GET ${OPENMASJID_BASE_URL}/api/auth/session` with `X-OpenMasjid-App-Secret`. Identity assertion only; fail closed; cache ~45 s; mint our own session ≤ 1 h; **always** keep the local admin-password fallback so the panel works standalone and never bricks when the platform is unreachable (distinguish *SSO not configured* from *platform unreachable*).
-- **Stripe account (this is "the Fabric gets the Stripe acc from the OS"):** the admin adds named Stripe accounts once in **OS Settings → Payments**. Our Payments screen lists them via `GET /api/fabric/stripe/accounts` (no keys) and stores only the chosen **account id**. On process start (and on account change) fetch keys via `GET /api/fabric/stripe?account=<id>` with the app secret; hold `publishableKey`/`secretKey` **in memory only**. Show a **TEST MODE** badge for `sk_test_`/`pk_test_`. Keep manual key entry as the **standalone fallback** only (platform absent), clearly labelled.
+- **Stripe account (this is "the Fabric gets the Stripe acc from the OS"):** the admin adds named Stripe accounts once in **OS Settings → Payments**. Our Payments screen lists them via `GET /api/fabric/stripe/accounts` (no keys) and stores only the chosen **account id**. On process start (and on account change) fetch keys via `GET /api/fabric/stripe?account=<id>` with the app secret; hold `publishableKey`/`secretKey` **in memory only**. Show a **TEST MODE** badge for `sk_test_`/`pk_test_`. Keep manual key entry as the **standalone fallback** only (platform absent), clearly labeled.
 - **Restore resilience (required):** read `OPENMASJID_*` from env on every start; never persist them or fetched keys or a "linked" flag; all Fabric calls time out (~4 s) and fail soft to standalone.
-- **Notifications:** after a successful donation, `POST /api/fabric/notify` (`"£20 donation received at the foyer kiosk"`, level `success`). Best-effort; never block or depend on it.
+- **Notifications:** after a successful donation, `POST /api/fabric/notify` (`"$20 donation received at the foyer kiosk"`, level `success`). Best-effort; never block or depend on it.
 
 ---
 
@@ -399,7 +399,7 @@ adoption · About (version, docs links, the AGPL **Source code** link) · **What
 - Amounts validated server-side (presets/min/max, integer minor units); idempotency keys on all Stripe creates; donation recorded only after server-side Stripe verification (+ capture when `requires_capture`).
 - Admin: Fabric SSO as identity assertion only (never call the platform as the admin); fail-closed session check; local-password fallback; signed HTTP-only SameSite cookies; restore-resilience rules (§6) observed to the letter.
 - Kiosk PIN: scrypt hash in synced config; offline verify; exponential backoff on attempts; PIN rotation from admin invalidates old immediately on next heartbeat.
-- Uploads (wallpapers) validated and size-capped; rich text sanitised; every kiosk route authenticated; `/new` and pairing endpoints rate-limited (6-digit pairing codes single-use, 10-min TTL, attempt-limited so the 1M-code space can't be brute-forced).
+- Uploads (wallpapers) validated and size-capped; rich text sanitized; every kiosk route authenticated; `/new` and pairing endpoints rate-limited (6-digit pairing codes single-use, 10-min TTL, attempt-limited so the 1M-code space can't be brute-forced).
 - PCI posture: card data reader→Stripe only (P2PE-style); our code never sees a PAN — state this in the README.
 
 ---
@@ -502,7 +502,7 @@ Code: `server/src/commands.ts` (registry + pure rules), the route in `index.ts`,
   LAN running admin commands with no credential at all. Pinned by a test.
 - **`/fabric/*` is LAN-only** and must never cross the tunnel. This is *not* covered by the `/api`
   allowlist — `tunnel.ts` had to learn `/fabric` separately, because every non-`/api` path fell
-  through as allowed. A credential check is the wrong last line of defence for something that can
+  through as allowed. A credential check is the wrong last line of defense for something that can
   act on hardware.
 - **10 second timeout; the platform also caps the body at 16 KB.** We never approach that cap and
   do not check it: every reply goes through `tidyReply`, whose `COMMAND_TEXT_MAX` of 1000 characters
@@ -554,7 +554,7 @@ the success side — a failed turn must never leave someone's ordinary conversat
 input. **Ask one thing at a time**; these are WhatsApp messages, not a form. And the sender is
 re-authorised every turn, so a permission removed mid-conversation takes effect immediately.
 
-A stray or unrecognised token must read as a **fresh turn**, never as an answer to a question we did
+A stray or unrecognized token must read as a **fresh turn**, never as an answer to a question we did
 not ask — the route blanks anything that is not one of ours, and a test covers it.
 
 ### Sending: per-alert routing lives in OUR settings (`whatsapp: true`)
@@ -592,6 +592,58 @@ that empties itself reads as the app losing it, and they retype the same number)
 
 `routeSummary()` reports what a route will *actually* do, so "WhatsApp on" with no number shows as
 sending nothing rather than looking covered.
+
+### The platform stopped pacing WhatsApp (OpenMasjidOS 0.51.1) — so we do
+
+**Minimum platform versions:** WhatsApp send **0.51.0+**; message status and the durable queue
+**0.51.1+**. Treat an absent `outcomes` field as `false` — never assume the status endpoint exists.
+
+**What was broken on the platform, and looked like ours.** Its queue always examined the *first*
+message; if that one could not go yet it slept and looked at the same one again, so a single held-up
+message blocked every message from every app. A failing message paused the whole queue for its retry
+delay — up to 15 minutes, up to 5 attempts. With a 30-minute per-group cooldown, one group image
+could stop all WhatsApp traffic for half an hour. The queue also lived only in memory, so anything
+held for a rate limit or a retry was destroyed on restart, which on the dev channel is often — while
+we had been told `202 { queued: true }` and had no way to learn otherwise. All fixed in 0.51.1.
+
+**What the platform no longer does for us — and this is the part that changes our code.** Quiet
+hours, the hourly and daily caps, the per-recipient 60-second cooldown, the per-group cooldown, the
+group caps, the warm-up ramp on a newly linked number, and the random 6–20 second gap between
+messages are **all gone**. Only a typing indicator remains. A message we hand over goes out in
+seconds.
+
+That deleted a backstop we were relying on without having decided to. **`payment-failed` is the
+alert that made it matter**: it fires on every PaymentIntent Stripe refuses and has no natural bound,
+so expired keys on a Friday meant one message per person who tried to give, for the whole of jummah.
+The 60-second cooldown used to absorb exactly that.
+
+So pacing is ours: **`whatsappGate` in `alerts.ts`** — one WhatsApp per alert id per 30 minutes, with
+the number held back carried on the next message so suppression is never silent. `test` is exempt
+(an admin is watching the screen). State is in memory, so a restart lets one extra through — the
+right direction to fail, since a duplicate alert costs nothing and a swallowed one costs the thing
+the alert was about.
+
+**Ban risk attaches to the NUMBER**, that number is shared by every app on the box, and a blocked
+number cannot be recovered — the masjid loses the number their community reaches them on. It is the
+one failure in this app nobody can undo. Hence also: one message per call (never a loop over a
+roster), no retry around a `202` (it is already queued; retrying just duplicates), and the admin
+chooses recipients because we know who ours are and the platform does not.
+
+**Refusals are surfaced, not swallowed.** `POST /api/fabric/whatsapp` answers `400`/`403` with a
+plain sentence — an unapproved group, a number with no country code, an empty message, too many
+images queued, or (new in 0.51.1) *the masjid's own gateway number*, which used to be accepted and
+go nowhere. Those used to reach a `log.debug` and nothing else, which is most of why this felt
+mysterious: a refused message and a lost one were indistinguishable. They are now logged at **warn**,
+stored per alert, and shown on the Notifications screen beside the switch that caused them.
+
+**We store the message id and resolve it.** The `202` carries an `id`; `GET /api/fabric/whatsapp/status/<id>`
+says `queued | sent | failed | expired`. `scheduleWhatsAppFollowUp` asks once after a minute and once
+after ten, then stops — the platform keeps only the most recent 200 records, and `queued` is an
+honest final answer. The record holds no message text and no recipient. A 404 means "not ours or
+gone", never failure.
+
+**Unchanged:** `202` means *accepted*, never delivered. There is no delivery receipt from WhatsApp.
+Nothing auth-critical may ever ride on it — no codes, no resets. Email has a real provider; use that.
 
 ### What we deliberately do NOT do
 

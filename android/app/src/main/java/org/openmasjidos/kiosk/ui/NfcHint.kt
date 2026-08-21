@@ -136,7 +136,7 @@ private fun NfcSymbol(color: Color, faceInboard: Edge, pulsing: Boolean) {
             .graphicsLayer { scaleX = scale; scaleY = scale },
     ) {
         val stroke = size.minDimension * 0.085f
-        // The source dot sits near the reader's edge and the arcs open toward the screen centre, so
+        // The source dot sits near the reader's edge and the arcs open toward the screen center, so
         // the waves always read as coming OFF the reader toward the donor. 0° is east and angles run
         // clockwise, so each edge gets its own start angle; the 110° sweep is the same for all four.
         val cx = when (faceInboard) {
@@ -206,18 +206,18 @@ private fun MarchingArrows(towards: Edge, color: Color, active: Boolean) {
         val nearestFirst = towards == Edge.Left || towards == Edge.Top
         for (k in 0 until n) {
             val index = if (nearestFirst) k else (n - 1 - k)
-            val centre = slot * (index + 0.5f)
+            val center = slot * (index + 0.5f)
             // The bright spot sweeps far → near as `phase` grows, so the motion reads as flowing
             // toward the reader rather than away from it.
             val wave = 0.5f + 0.5f * sin(2f * PI.toFloat() * (phase - (n - 1 - k) / n.toFloat()))
             val a = 0.28f + 0.72f * wave
-            drawChevron(centre, mid, halfAlong, halfAcross, towards, color.copy(alpha = a), stroke)
+            drawChevron(center, mid, halfAlong, halfAcross, towards, color.copy(alpha = a), stroke)
         }
     }
 }
 
 /** One chevron — "<" ">" "^" or "v" — with its apex on the side it points to. [alongPos] is the
- *  position down the marching axis and [acrossPos] the centre of the other one. */
+ *  position down the marching axis and [acrossPos] the center of the other one. */
 private fun DrawScope.drawChevron(
     alongPos: Float,
     acrossPos: Float,

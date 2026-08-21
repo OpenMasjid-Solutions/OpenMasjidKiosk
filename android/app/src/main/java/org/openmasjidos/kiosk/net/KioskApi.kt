@@ -69,8 +69,8 @@ data class TuitionInfo(
     val minAmountMinor: Long = 100L,
 )
 
-/** One LINE of a bill (contract 0.43.0 §11.0b) — "Monthly tuition £200", "Book fee £50", "Bursary −£30".
- *  [kind] is `tuition` | `charge` | `credit` and is an OPEN set: an unrecognised kind is still rendered,
+/** One LINE of a bill (contract 0.43.0 §11.0b) — "Monthly tuition $200", "Book fee $50", "Bursary −$30".
+ *  [kind] is `tuition` | `charge` | `credit` and is an OPEN set: an unrecognized kind is still rendered,
  *  because dropping one would make the lines stop adding up to the bill. [amountMinor] is signed (a
  *  credit line is negative); [balanceMinor] is what is still payable — 0 for a settled or credit line. */
 data class TuitionItem(

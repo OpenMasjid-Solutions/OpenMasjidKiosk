@@ -74,7 +74,7 @@ import java.util.Locale
 
 /**
  * Resolved per-campaign appearance for the giving screen (computed in [GivingHome]). Lets one bright
- * or dark, accent-tinted look flow through every step without hard-coding colours.
+ * or dark, accent-tinted look flow through every step without hard-coding colors.
  */
 data class SceneStyle(
     val bright: Boolean,
@@ -92,7 +92,7 @@ data class SceneStyle(
  * The donor-facing giving flow (§9) for one campaign: amount → (details) → card → thank-you.
  * GiveALittle-simple — huge full-screen tiles, warm wording, no jargon. Card data is never touched
  * here; the reader + Stripe SDK handle it, and the server verifies every payment before it counts.
- * The full-screen background + campaign tabs are drawn by [GivingHome]; colours come from [style].
+ * The full-screen background + campaign tabs are drawn by [GivingHome]; colors come from [style].
  */
 @Composable
 fun GivingScreen(
@@ -166,8 +166,8 @@ fun GivingScreen(
     }
 }
 
-/** Transparent centred column for the form-like steps (GivingHome owns the background).
- *  Scrollable as well as centred: kiosk type is deliberately large, and on a short screen (or in
+/** Transparent centered column for the form-like steps (GivingHome owns the background).
+ *  Scrollable as well as centered: kiosk type is deliberately large, and on a short screen (or in
  *  landscape) a step like the card prompt must be able to scroll rather than clip its buttons. */
 @Composable
 private fun CenteredScene(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
@@ -759,7 +759,7 @@ private fun TuitionConfirmStep(
     modifier: Modifier = Modifier,
 ) {
     val t = tuition ?: TuitionState()
-    // Centred, but scrollable so a short landscape screen can never clip the two buttons.
+    // Centered, but scrollable so a short landscape screen can never clip the two buttons.
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -804,7 +804,7 @@ private fun TuitionConfirmStep(
 }
 
 /**
- * WHOSE MONEY IS THIS? The itemised total, shown before the reader is armed, when the madrasah has
+ * WHOSE MONEY IS THIS? The itemized total, shown before the reader is armed, when the madrasah has
  * chosen to pass Stripe's processing fee to the payer (students/billing 0.51.0, §11.4).
  *
  * Two things are requirements rather than niceties, and both are here:
@@ -936,7 +936,7 @@ private fun TuitionInvoicesStep(
     val t = tuition ?: TuitionState()
     val currency = t.currency.ifBlank { "USD" }
     // What can be paid is what the BILLS come to, never the household balance: that figure is netted,
-    // so one child being in credit hides another child's real, payable bills behind a £0 total.
+    // so one child being in credit hides another child's real, payable bills behind a $0 total.
     val owes = t.dueMinor > 0
     val kids = t.students
     // One child needs no headings — the family line above already names the account. Several do.
@@ -971,7 +971,7 @@ private fun TuitionInvoicesStep(
             Text(t.familyLabel.ifBlank { "Your account" }, style = MaterialTheme.typography.headlineSmall, color = style.onScene, textAlign = TextAlign.Center)
             Spacer(Modifier.height(4.dp))
             // The headline is what's DUE. Credit is shown too when there is any, but it never
-            // replaces a real balance — "£180 paid ahead" above three unpaid bills is a lie of
+            // replaces a real balance — "$180 paid ahead" above three unpaid bills is a lie of
             // omission, and it is exactly what the netted household figure produces.
             TuitionAccountLine(t.dueMinor, t.creditMinor, currency, style, big = true)
             Spacer(Modifier.height(16.dp))
@@ -1035,7 +1035,7 @@ private fun TuitionInvoicesStep(
                         )
                     }
                 }
-                // Money for THIS child. With one ledger per child, "add £50" has to say for whom —
+                // Money for THIS child. With one ledger per child, "add $50" has to say for whom —
                 // and a family where one child is clear and another owes is the ordinary case.
                 if (perChild && t.allowAdvance && kid.key.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
@@ -1113,8 +1113,8 @@ private fun TuitionInvoicesStep(
  *  invoice the credit is the only signal left.
  *
  *  Due and credit CAN both be non-zero here even though Students never reports both on one ledger,
- *  because a household total nets its children against each other: one child £340 ahead and another
- *  £160 behind is £160 due AND £180 of credit. Both get said — leading with the credit alone reads
+ *  because a household total nets its children against each other: one child $340 ahead and another
+ *  $160 behind is $160 due AND $180 of credit. Both get said — leading with the credit alone reads
  *  as "nothing to pay" over a screen full of unpaid bills. */
 @Composable
 private fun TuitionAccountLine(
@@ -1188,10 +1188,10 @@ private fun TuitionBillCard(
         inv.studentName.takeIf { showStudentName && it.isNotBlank() },
         inv.dueDate.takeIf { it.isNotBlank() }?.let { "Due $it" },
     ).joinToString(" · ")
-    // Lines only when EVERY bill on the screen has them — a half-itemised selection can't be expressed
+    // Lines only when EVERY bill on the screen has them — a half-itemized selection can't be expressed
     // on the wire, so the choice is made once for the whole account, not per bill.
     val units = t.unitsOf(inv)
-    val lines = if (t.itemised) inv.items else emptyList()
+    val lines = if (t.itemized) inv.items else emptyList()
     // One line is not a list. Render it as the single row it has always been — the tick target is the
     // line itself where there is one, so even this simple case is paid the precise way.
     if (lines.size <= 1) {
@@ -1442,7 +1442,7 @@ private fun ColumnScope.CardStep(
     if (!preparing) {
         // The single most common failure at the reader is lifting the card too early — a contactless
         // read plus the online authorisation takes a few seconds, and a card pulled away mid-read
-        // reads to the donor as "it didn't work". Say the quiet part out loud, in the accent colour
+        // reads to the donor as "it didn't work". Say the quiet part out loud, in the accent color
         // so it is not mistaken for fine print.
         Spacer(Modifier.height(14.dp))
         Text(
@@ -1596,7 +1596,7 @@ private fun symbolFor(currency: String) = when (currency.uppercase()) {
 }
 
 /** A SIGNED amount, for the one place a negative can appear: a credit line on a bill (a bursary, a
- *  correction). The minus belongs in front of the symbol — "−£30", not "£-30". */
+ *  correction). The minus belongs in front of the symbol — "−$30", not "$-30". */
 private fun formatSignedMoney(minor: Long, currency: String): String =
     if (minor < 0) "−${formatMoney(-minor, currency)}" else formatMoney(minor, currency)
 

@@ -64,9 +64,9 @@ permissions:
 # :dev is a MOVING tag, so two overlapping dev builds race to own it — and the winner is whichever
 # finishes LAST, not whichever is newer. This build is slow (Gradle APK + two architectures), which
 # makes the overlap window wide, so a lagging older commit could repoint :dev backwards. Superseded
-# dev builds are cancelled so the tag follows the branch tip.
+# dev builds are canceled so the tag follows the branch tip.
 #
-# Scoped to dev deliberately: a release build must never be cancelled. (Tag pushes are each their
+# Scoped to dev deliberately: a release build must never be canceled. (Tag pushes are each their
 # own ref anyway, so they could not cancel one another regardless.)
 concurrency:
   group: build-image-${{ github.ref }}

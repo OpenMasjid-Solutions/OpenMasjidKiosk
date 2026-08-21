@@ -46,7 +46,7 @@
       "category": "audit-logging",
       "file": "server/src/index.ts",
       "line": 927,
-      "summary": "The three plan write routes stop or alter a real donor's standing order and recorded nothing on success. A masjid's admin login is shared in practice and Stripe's dashboard only ever says 'cancelled by API key', so there was no way to reconstruct who did what. Added an append-only admin_audit table, writes from plan cancel/pause/schedule plus device revoke and PIN rotation, and a read-only GET /api/admin/audit.",
+      "summary": "The three plan write routes stop or alter a real donor's standing order and recorded nothing on success. A masjid's admin login is shared in practice and Stripe's dashboard only ever says 'canceled by API key', so there was no way to reconstruct who did what. Added an append-only admin_audit table, writes from plan cancel/pause/schedule plus device revoke and PIN rotation, and a read-only GET /api/admin/audit.",
       "status": "fixed",
       "commit": "54250f9"
     },
@@ -58,7 +58,7 @@
       "category": "kiosk-escape",
       "file": "android/app/src/main/java/org/openmasjidos/kiosk/ui/ManualCardWebView.kt",
       "line": 58,
-      "summary": "The WebViewClient overrode only shouldInterceptRequest, so a top-level navigation would turn a full-screen donor-facing WebView inside a locked kiosk into an unrestricted browser. No live path reaches it (kioskpay.html makes no top-level navigation; 3DS renders in an iframe), so this is defence in depth. Fixed with a main-frame-only allowlist; sub-frames left unrestricted so 3-D Secure keeps working.",
+      "summary": "The WebViewClient overrode only shouldInterceptRequest, so a top-level navigation would turn a full-screen donor-facing WebView inside a locked kiosk into an unrestricted browser. No live path reaches it (kioskpay.html makes no top-level navigation; 3DS renders in an iframe), so this is defense in depth. Fixed with a main-frame-only allowlist; sub-frames left unrestricted so 3-D Secure keeps working.",
       "status": "fixed",
       "commit": "02e7cb7"
     },
@@ -190,7 +190,7 @@
       "category": "code-health",
       "file": "server/src/students.ts",
       "line": 536,
-      "summary": "Exported and never called. Its doc comment says a tuition session is single-use for the pay step; in fact a session survives its 15-minute TTL and can mint several PaymentIntents. Not a vulnerability (every mint recomputes the amount server-side and re-checks the device binding, and re-minting is useful after a declined card), but a comment asserting a security property that does not hold. Deleted 2026-08-13 along with the comment claiming the single-use property, which changed no behaviour because nothing called it. Whether a DECLINED tuition card should force a fresh lookup remains an open product question, recorded in ACTION_REQUIRED.md §7 — but that is a feature request now, not a finding.",
+      "summary": "Exported and never called. Its doc comment says a tuition session is single-use for the pay step; in fact a session survives its 15-minute TTL and can mint several PaymentIntents. Not a vulnerability (every mint recomputes the amount server-side and re-checks the device binding, and re-minting is useful after a declined card), but a comment asserting a security property that does not hold. Deleted 2026-08-13 along with the comment claiming the single-use property, which changed no behavior because nothing called it. Whether a DECLINED tuition card should force a fresh lookup remains an open product question, recorded in ACTION_REQUIRED.md §7 — but that is a feature request now, not a finding.",
       "status": "fixed",
       "commit": "0.11.0"
     },

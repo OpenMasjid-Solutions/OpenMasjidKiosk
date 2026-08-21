@@ -38,11 +38,11 @@ test('createCampaign adds a non-main appeal, appended after main, with increment
   assert.deepEqual(list.slice(1).map((c) => c.title), ['Zakat', 'Building Fund']);
 });
 
-test('updateCampaign sanitises hex colour, caps presets to 6, and clamps custom bounds', () => {
+test('updateCampaign sanitizes hex color, caps presets to 6, and clamps custom bounds', () => {
   const s = freshStore();
   const c = s.createCampaign({ title: 'X' });
   const up = s.updateCampaign(c.id, {
-    accentColor: 'not-a-colour',
+    accentColor: 'not-a-color',
     presetsMinor: [100, 200, 300, 400, 500, 600, 700, 800],
     customMinMinor: 500,
     customMaxMinor: 100, // below min → clamped up to min
@@ -52,7 +52,7 @@ test('updateCampaign sanitises hex colour, caps presets to 6, and clamps custom 
   assert.equal(up.customMinMinor, 500);
   assert.equal(up.customMaxMinor, 500);
   const good = s.updateCampaign(c.id, { accentColor: '#1FA37A' })!;
-  assert.equal(good.accentColor, '#1fa37a'); // normalised to lower-case
+  assert.equal(good.accentColor, '#1fa37a'); // normalized to lower-case
 });
 
 test('updateCampaign keeps only /uploads or http(s) image URLs, rejecting others', () => {
@@ -127,7 +127,7 @@ test('per-device: campaign targeting filters getKioskConfig, and orientation is 
   s.setDeviceOrientation(a.id, '90');
   assert.equal(s.getKioskConfig('', a.id).config.orientation, '90');
   assert.equal(s.getKioskConfig('', b.id).config.orientation, '0'); // per-device, B unaffected
-  s.setDeviceOrientation(a.id, 'portrait'); // legacy named value normalises to degrees
+  s.setDeviceOrientation(a.id, 'portrait'); // legacy named value normalizes to degrees
   assert.equal(s.getDevice(a.id)!.orientation, '90');
   s.setDeviceOrientation(a.id, 'nonsense');
   assert.equal(s.getDevice(a.id)!.orientation, '0'); // invalid → no rotation

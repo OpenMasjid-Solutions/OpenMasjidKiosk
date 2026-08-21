@@ -37,7 +37,7 @@ const SECRET = 'a'.repeat(48);
 //    than on a database. Every field the commands read, and nothing else.
 function fakeStore(over: Partial<CommandStore> = {}): CommandStore {
   return {
-    getCurrency: () => 'GBP',
+    getCurrency: () => 'USD',
     donationTotals: () => ({
       today: 12_00,
       thisWeek: 43_00,
@@ -55,14 +55,14 @@ function fakeStore(over: Partial<CommandStore> = {}): CommandStore {
       { id: 'd2', name: 'Hall', lastSeen: new Date(Date.now() - 3 * 3600_000).toISOString(), readerStatus: 'disconnected', appVersion: '0.11.0', revoked: false },
     ],
     listDonations: () => [
-      { deviceName: 'Foyer', campaignTitle: 'General Fund', amountMinor: 10_00, refundedMinor: 0, currency: 'GBP', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
-      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 50_00, refundedMinor: 0, currency: 'GBP', kind: 'monthly', status: 'succeeded', createdAt: new Date(Date.now() - 90 * 60_000).toISOString() },
+      { deviceName: 'Foyer', campaignTitle: 'General Fund', amountMinor: 10_00, refundedMinor: 0, currency: 'USD', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
+      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 50_00, refundedMinor: 0, currency: 'USD', kind: 'monthly', status: 'succeeded', createdAt: new Date(Date.now() - 90 * 60_000).toISOString() },
     ],
     ...over,
   };
 }
 
-const money = (minor: number, currency: string) => `${currency === 'GBP' ? '£' : ''}${(minor / 100).toFixed(2)}`;
+const money = (minor: number, currency: string) => `${currency === 'USD' ? '$' : ''}${(minor / 100).toFixed(2)}`;
 const cmds = (over: Partial<CommandStore> = {}) => buildCommands({ store: fakeStore(over), money, onlineWithinMs: 35_000 });
 const turn = (text = '', followUpToken = '') => ({ text, requestId: 'r', locale: 'en', followUpToken });
 const run = async (id: string, text = '', token = '') => {
@@ -294,10 +294,10 @@ test('takings answers in full on the first turn, then offers to narrow down', as
   const r = await run('takings');
   assert.equal(r.ok, true);
   const text = r.ok ? r.text : '';
-  assert.match(text, /Today: £12\.00/);
-  assert.match(text, /This week: £43\.00/);
-  assert.match(text, /This month: £191\.00/);
-  assert.match(text, /All time: £1422\.00 from 31 gifts/);
+  assert.match(text, /Today: \$12\.00/);
+  assert.match(text, /This week: \$43\.00/);
+  assert.match(text, /This month: \$191\.00/);
+  assert.match(text, /All time: \$1422\.00 from 31 gifts/);
   assert.match(text, /after refunds/i, 'says which figure it is, so nobody quotes gross to a committee');
   assert.ok(r.ok && r.followUp, 'offers the drill-down when there is more than one kiosk');
   assert.equal(r.ok && r.followUp?.token, 'takings:pick');
@@ -328,7 +328,7 @@ test('takings does NOT ask anything when there is only one kiosk', async () => {
 test('the follow-up turn resolves a kiosk name, and ends the exchange', async () => {
   const r = await run('takings', 'Foyer', 'takings:pick');
   assert.equal(r.ok, true);
-  assert.match(r.ok ? r.text : '', /Foyer — £900\.00 from 20 gifts/);
+  assert.match(r.ok ? r.text : '', /Foyer — \$900\.00 from 20 gifts/);
   assert.equal(r.ok && r.followUp, undefined, 'answered, so stop capturing their conversation');
 });
 
@@ -344,12 +344,12 @@ test('"all" lists every kiosk', async () => {
   const r = await run('takings', 'all', 'takings:pick');
   assert.equal(r.ok, true);
   const text = r.ok ? r.text : '';
-  assert.match(text, /Foyer — £900\.00/);
-  assert.match(text, /Hall — £522\.00/);
+  assert.match(text, /Foyer — \$900\.00/);
+  assert.match(text, /Hall — \$522\.00/);
   assert.equal(r.ok && r.followUp, undefined);
 });
 
-test('an unrecognised name gets ONE more go, then stops', async () => {
+test('an unrecognized name gets ONE more go, then stops', async () => {
   // A typo should not mean starting over — but nor should we keep reading their messages forever
   // over a name we are not going to guess. The step lives in the token; we hold no state.
   const first = await run('takings', 'kitchen', 'takings:pick');
@@ -375,11 +375,11 @@ test('an ambiguous name resolves to nothing rather than the wrong kiosk', () => 
 });
 
 test('a stray follow-up token is ignored and treated as a fresh turn', async () => {
-  // The platform could hand back a token from an exchange we no longer recognise. It must read as
+  // The platform could hand back a token from an exchange we no longer recognize. It must read as
   // "start again", never as an answer to a question we did not ask.
   const r = await run('takings', 'Foyer', 'someone-elses-token');
   assert.equal(r.ok, true);
-  assert.match(r.ok ? r.text : '', /Today: £12\.00/, 'gave the headline figures, not a drill-down');
+  assert.match(r.ok ? r.text : '', /Today: \$12\.00/, 'gave the headline figures, not a drill-down');
 });
 
 test('kiosks leads with what needs attention', async () => {
@@ -431,7 +431,7 @@ test('recent lists the last few gifts and NEVER a donor', async () => {
   const r = await run('recent');
   assert.equal(r.ok, true);
   const text = r.ok ? r.text : '';
-  assert.match(text, /£10\.00/);
+  assert.match(text, /\$10\.00/);
   assert.match(text, /Foyer/);
   assert.match(text, /General Fund/);
   assert.match(text, /monthly/, 'a standing order is worth distinguishing');
@@ -447,7 +447,7 @@ test('NO DONOR IDENTITY reaches WhatsApp from any command', async () => {
         deviceName: 'Foyer',
         campaignTitle: 'General Fund',
         amountMinor: 1000,
-        currency: 'GBP',
+        currency: 'USD',
         kind: 'one_time',
         status: 'succeeded',
         createdAt: new Date().toISOString(),
@@ -539,13 +539,13 @@ test('a failed turn can never carry a follow-up', () => {
 
 test('`recent` never reports a refunded gift as money the masjid still has', () => {
   // Every other figure this app quotes is netted — `takings` nets in SQL, the Donations page strikes
-  // the row through. This line did neither, so a £500 gift refunded the same afternoon was still
-  // read out over WhatsApp as £500 taken.
+  // the row through. This line did neither, so a $500 gift refunded the same afternoon was still
+  // read out over WhatsApp as $500 taken.
   const store = fakeStore({
     listDonations: () => [
-      { deviceName: 'Foyer', campaignTitle: 'General', amountMinor: 500_00, refundedMinor: 500_00, currency: 'GBP', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
-      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 100_00, refundedMinor: 40_00, currency: 'GBP', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
-      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 20_00, refundedMinor: 0, currency: 'GBP', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
+      { deviceName: 'Foyer', campaignTitle: 'General', amountMinor: 500_00, refundedMinor: 500_00, currency: 'USD', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
+      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 100_00, refundedMinor: 40_00, currency: 'USD', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
+      { deviceName: 'Hall', campaignTitle: 'Zakat', amountMinor: 20_00, refundedMinor: 0, currency: 'USD', kind: 'one_time', status: 'succeeded', createdAt: new Date().toISOString() },
     ],
   });
   const list = buildCommands({ store, money, onlineWithinMs: 35_000 });
@@ -553,9 +553,9 @@ test('`recent` never reports a refunded gift as money the masjid still has', () 
     assert.equal(r.ok, true);
     const text = r.ok ? r.text : '';
     assert.match(text, /REFUNDED/, 'a fully refunded gift must say so');
-    assert.match(text, /£40\.00 refunded/, 'a partial must say how much went back');
+    assert.match(text, /\$40\.00 refunded/, 'a partial must say how much went back');
     // The untouched gift stays plain — the marker must not leak onto every line.
-    const plain = text.split('\n').find((l) => l.includes('£20.00'));
+    const plain = text.split('\n').find((l) => l.includes('$20.00'));
     assert.ok(plain && !/refunded/i.test(plain), 'an untouched donation is not annotated');
   });
 });

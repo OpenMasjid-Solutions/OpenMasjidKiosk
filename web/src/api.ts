@@ -155,17 +155,32 @@ export interface AlertSummary {
   silent: boolean;
 }
 
+/** What became of the last WhatsApp for one alert. `refused` is the platform rejecting the message
+ *  outright with a reason; the rest are its own delivery states. Null until one has been tried. */
+export interface WhatsAppSendRecord {
+  state: 'queued' | 'sent' | 'failed' | 'expired' | 'refused';
+  at: number;
+  messageId: string;
+  reason: string;
+  /** How many alerts of this kind our own pacing held back before this one went. */
+  suppressed: number;
+}
+
 export interface AlertSetting {
   id: string;
   label: string;
   description: string;
   route: AlertRoute;
   summary: AlertSummary;
+  lastWhatsApp: WhatsAppSendRecord | null;
 }
 
 export interface WhatsAppAvailability {
   available: boolean;
   reason: 'ready' | 'not-configured' | 'not-linked' | 'unreachable';
+  /** The platform can tell us what became of a message (OpenMasjidOS 0.51.1+). Absent on an older
+   *  one, and absent must read as false. */
+  outcomes?: boolean;
 }
 
 export interface AlertsView {
@@ -514,7 +529,7 @@ export const saveGiving = (body: GivingPatch) =>
   request<GivingSettings>('/api/admin/giving', { method: 'PUT', body: JSON.stringify(body) });
 
 // ── Campaigns (giving appeals shown as kiosk tabs) ────────────────────────────────
-// Each appeal is its own giving screen: its amounts, colour, images, thank-you, monthly /
+// Each appeal is its own giving screen: its amounts, color, images, thank-you, monthly /
 // cover-fees, and (optionally) its own Stripe account. The MAIN campaign is always shown on
 // the kiosk (even when `live` is off) and can't be deleted. Amounts are integer MINOR units.
 export interface Campaign {
@@ -523,7 +538,7 @@ export interface Campaign {
   /** Required campaign type — drives the card-fee rule (see coverFees/forceCoverFees). */
   type: CampaignType;
   description: string;
-  /** '#rrggbb' background colour for this tab, or '' to inherit. Drives the giving-screen gradient. */
+  /** '#rrggbb' background color for this tab, or '' to inherit. Drives the giving-screen gradient. */
   primaryColor: string;
   /** '#rrggbb', or '' to inherit the default accent. Drives the tiles' "Donate" band + buttons. */
   accentColor: string;
