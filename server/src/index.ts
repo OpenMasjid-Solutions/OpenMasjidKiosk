@@ -780,7 +780,16 @@ async function main(): Promise<void> {
           if (res.queued && res.id) scheduleWhatsAppFollowUp(r.id, id, res.id);
         }
         // Charge the budget for what was actually handed over, not for what was permitted.
-        store.setWhatsAppLedger(recordWhatsAppSends(store.getWhatsAppLedger(), id, whatsapp, now));
+        //
+        // AND ONLY WHEN SOMETHING WENT. A run where every send was refused must leave the ledger
+        // alone: nothing was handed over, so there is no budget to charge — and it is not
+        // suppression either. Recording it as a hold would make the NEXT message say "3 alerts were
+        // held back to protect the masjid's number" about three messages the platform rejected
+        // outright, which is a confident, wrong answer to the one question the admin is asking.
+        // Their real reasons are already on their rows.
+        if (whatsapp > 0) {
+          store.setWhatsAppLedger(recordWhatsAppSends(store.getWhatsAppLedger(), id, whatsapp, now));
+        }
       }
     }
 

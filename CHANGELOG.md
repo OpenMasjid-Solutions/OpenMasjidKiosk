@@ -60,6 +60,10 @@ detail of every change — it is distilled into a major-changes-only entry when 
 - **You can see what happened to each recipient's last WhatsApp**, on their own row — sent, queued,
   or refused with the reason in plain words. Previously there was one status for the whole alert,
   which stopped meaning anything as soon as an alert could go to more than one place.
+  - Fixed before it reached anyone: when *every* WhatsApp for an alert was refused, the next message
+    that did get through would have claimed some had been "held back to protect your number" —
+    blaming the limit for messages the gateway had actually rejected. Refusals are reported on their
+    own rows, with the real reason, and are no longer counted as anything being held back.
 
 - **Ask the kiosk how it's doing from WhatsApp.** OpenMasjidOS can now take admin commands sent to
   the masjid's own WhatsApp number, and the kiosk answers three of them. That matters for a kiosk

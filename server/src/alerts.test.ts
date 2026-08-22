@@ -434,6 +434,22 @@ test('the budget is charged for what went out, not for what was permitted', () =
   assert.equal(pacingUsage(ledger, p, t0).lastHour, 1);
 });
 
+test('a refusal is not counted as suppression', () => {
+  // `raiseAlert` leaves the ledger untouched when every send was refused. If it recorded a hold
+  // instead, the next message that DID get through would announce "3 alerts were held back to
+  // protect the masjid's number" about three the platform rejected outright — a confident wrong
+  // answer to the exact question the admin is asking. Their real reasons are on their own rows.
+  const p = pacing({ minGapMinutes: 0, maxPerHour: 10 });
+  const t0 = 10_000_000;
+  const ledger = emptyLedger(); // what the ledger looks like after an all-refused run
+  const v = whatsappPermit('reader-offline', ledger, p, t0 + 1);
+  assert.equal(v.suppressedBefore, 0, 'nothing to apologise for');
+  assert.equal(withSuppressedNote('x', v.suppressedBefore), 'x');
+  // A genuine pacing hold still counts, so the two cases stay distinguishable.
+  const held = recordWhatsAppSends(emptyLedger(), 'reader-offline', 0, t0);
+  assert.equal(whatsappPermit('reader-offline', held, p, t0 + 1).suppressedBefore, 1);
+});
+
 test('the test message is never held back, by any of the three limits', () => {
   // An admin pressed a button and is watching the screen. Throttling that makes it look broken.
   const p = pacing({ minGapMinutes: 240, maxPerHour: 1, maxPerDay: 1 });
