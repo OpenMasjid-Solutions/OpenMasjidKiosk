@@ -20,10 +20,29 @@ import fastifyMultipart from '@fastify/multipart';
 import { z } from 'zod';
 import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
-import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
+import { MAX_ALERT_RECIPIENTS, Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppStatus, fabricWhatsAppOutcome, clearWhatsAppCache, emailStatus, emailCanSend } from './fabric';
-import { ALERT_META, DEFAULT_ROUTE, alertEmailLooksValid, isAlertId, normalisePhone, phoneLooksValid, routeSummary, whatsappGate, withSuppressedNote, type AlertId, type WhatsAppGateState } from './alerts';
+import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppGroup, fabricWhatsAppGroups, fabricWhatsAppStatus, fabricWhatsAppOutcome, clearWhatsAppCache, emailStatus, emailCanSend } from './fabric';
+import {
+  ALERT_IDS,
+  ALERT_META,
+  DEFAULT_ROUTE,
+  PACING_LIMITS,
+  alertDelivery,
+  alertEmailLooksValid,
+  bodyForRecipient,
+  groupIdLooksValid,
+  isAlertId,
+  newRecipient,
+  pacingUsage,
+  permitReasonText,
+  phoneLooksValid,
+  recipientsFor,
+  recordWhatsAppSends,
+  whatsappPermit,
+  withSuppressedNote,
+  type AlertId,
+} from './alerts';
 import { escapeHtml, renderMonthlyStarted, renderReceipt, renderRefund, type ReceiptContext } from './email';
 import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, grossUpForStudentsFee, kioskFeeRate, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
@@ -562,18 +581,20 @@ async function main(): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: 'Please check the details and try again.' });
     return { data: emailReceiptView(store.setEmailReceipt(parsed.data)) };
   });
-  // ── Raising an alert: one entry point, three possible destinations ──────────
+  // ── Raising an alert: one entry point, many possible destinations ───────────
   // EVERY alert in this app goes through here rather than calling fabricAlert directly, so the
-  // admin's per-alert choices (Settings → Notifications) are impossible to bypass by accident.
+  // admin's choices (Settings → Notifications) are impossible to bypass by accident.
   //
-  // The three channels are ADDITIVE and independent, and each fails soft on its own. That is the
-  // whole point: an alert exists to tell someone something is wrong, so one channel being broken
-  // must never suppress the others, and none of them may ever disturb the donation, refund or
-  // reader event that raised it. Hence every path is caught and nothing is awaited by the caller.
-  /** Our WhatsApp pacing state, per alert. In memory on purpose: a restart lets one extra message
-   *  through, which is the safe direction to fail — a duplicate alert costs nothing, a swallowed
-   *  one costs the thing the alert was about. */
-  const waGate = new Map<AlertId, WhatsAppGateState>();
+  // The channels are ADDITIVE and independent, and each fails soft on its own. That is the whole
+  // point: an alert exists to tell someone something is wrong, so one channel being broken must
+  // never suppress the others, and none of them may ever disturb the donation, refund or reader
+  // event that raised it. Hence every path is caught and nothing is awaited by the caller.
+  //
+  // The WhatsApp pacing ledger used to live in a Map here, in memory, on the argument that a
+  // restart letting one extra message through is the safe direction to fail. That still holds for
+  // the burst gap — but the admin can now set a DAILY cap, and an in-memory ledger would reset it
+  // on every deploy, which on the dev channel is several times an afternoon. It is in the database
+  // now (`store.getWhatsAppLedger`), and the burst gap rides along in the same record.
 
   /**
    * Ask the platform what became of a queued message, a little later (0.51.1+).
@@ -597,19 +618,21 @@ async function main(): Promise<void> {
    *
    * Best-effort throughout. This is diagnostics; it must never disturb anything.
    */
-  const scheduleWhatsAppFollowUp = (alertId: AlertId, messageId: string): void => {
+  const scheduleWhatsAppFollowUp = (recipientId: string, alertId: AlertId, messageId: string): void => {
     const check = async (): Promise<boolean> => {
       const o = await fabricWhatsAppOutcome(messageId).catch(() => ({ state: 'unknown' as const, reason: undefined }));
       if (o.state === 'unknown' || o.state === 'queued') return false;
-      const prev = store.getWhatsAppOutcomes()[alertId];
-      // Only overwrite the record we created — a newer alert of the same kind may have replaced it.
+      const prev = store.getWhatsAppOutcomes()[recipientId];
+      // Only overwrite the record we created — a newer message to the same recipient may have
+      // replaced it while we were asking.
       if (prev && prev.messageId !== messageId) return true;
-      store.setWhatsAppOutcome(alertId, {
+      store.setWhatsAppOutcome(recipientId, {
         state: o.state,
         at: Date.now(),
         messageId,
         reason: o.reason ?? '',
         suppressed: prev?.suppressed ?? 0,
+        alertId,
       });
       if (o.state === 'failed' || o.state === 'expired') {
         log.warn(`WhatsApp for alert ${alertId} ended as ${o.state}${o.reason ? `: ${o.reason}` : ''}`);
@@ -628,148 +651,294 @@ async function main(): Promise<void> {
   /**
    * Re-ask about anything still sitting at `queued`.
    *
-   * At most one record per alert id — six reads a sweep, against a 600/min read budget — so this is
-   * far too small to matter, and it is what stops a late failure being reported as `queued` for
-   * ever. Records older than the platform's 24-hour window are left alone: it no longer has them,
-   * the lookup would 404, and `unknown` correctly changes nothing.
+   * At most one record per RECIPIENT — bounded by `MAX_ALERT_RECIPIENTS`, so at worst two dozen
+   * reads a sweep against a 600/min read budget. Still far too small to matter, and it is what stops
+   * a late failure being reported as `queued` for ever. Records older than the platform's 24-hour
+   * window are left alone: it no longer has them, the lookup would 404, and `unknown` correctly
+   * changes nothing.
    */
   const WA_HISTORY_MS = 24 * 60 * 60_000;
   const reconcileWhatsApp = async (): Promise<void> => {
     const now = Date.now();
-    for (const [alertId, rec] of Object.entries(store.getWhatsAppOutcomes())) {
+    for (const [recipientId, rec] of Object.entries(store.getWhatsAppOutcomes())) {
       if (rec.state !== 'queued' || !rec.messageId) continue;
       if (now - rec.at > WA_HISTORY_MS) continue; // aged out of the platform's history
       const o = await fabricWhatsAppOutcome(rec.messageId).catch(() => ({ state: 'unknown' as const, reason: undefined }));
       if (o.state === 'unknown' || o.state === 'queued') continue;
-      // Re-read: a newer alert of this kind may have replaced the record while we were asking.
-      const cur = store.getWhatsAppOutcomes()[alertId];
+      // Re-read: a newer message to this recipient may have replaced the record while we asked.
+      const cur = store.getWhatsAppOutcomes()[recipientId];
       if (!cur || cur.messageId !== rec.messageId) continue;
-      store.setWhatsAppOutcome(alertId as AlertId, {
+      store.setWhatsAppOutcome(recipientId, {
         state: o.state,
         at: Date.now(),
         messageId: rec.messageId,
         reason: o.reason ?? '',
         suppressed: cur.suppressed,
+        alertId: cur.alertId,
       });
       if (o.state === 'failed' || o.state === 'expired') {
-        log.warn(`WhatsApp for alert ${alertId} ended as ${o.state}${o.reason ? `: ${o.reason}` : ''} (late)`);
+        log.warn(`WhatsApp for alert ${cur.alertId || '?'} ended as ${o.state}${o.reason ? `: ${o.reason}` : ''} (late)`);
       }
     }
   };
 
+  /**
+   * Fan one alert out to every channel that wants it.
+   *
+   * THE ORDER OF BUSINESS: the OpenMasjidOS relay (per alert), then every subscribed email, then
+   * every subscribed WhatsApp number and group. All of it is ADDITIVE and each leg fails soft on its
+   * own — an alert exists to tell someone something is wrong, so one channel being broken must never
+   * suppress another, and none of them may disturb the donation, refund or reader event that raised
+   * it.
+   *
+   * `textWithoutNames` is the same message with the donor unnamed, and it is supplied by the CALL
+   * SITE rather than derived here. Only two alerts need it (`donation-refunded`,
+   * `monthly-cancelled`). Deriving it — regexing a name back out of finished prose — is the kind of
+   * thing that works on the examples you tried it on and leaks on the one you did not.
+   *
+   * WHY THE WHATSAPP LEG IS THE COMPLICATED ONE. Ban risk attaches to the masjid's phone NUMBER,
+   * that number is shared with every other app on the box, and a ban cannot be undone. So the
+   * budget is checked before the loop, charged only for what actually went out, and every message
+   * held back is counted so the next one that gets through can say how many were missed.
+   */
   const raiseAlert = async (
     id: AlertId,
     title: string,
     text: string,
     level: 'info' | 'success' | 'warning' | 'error' = 'warning',
-  ): Promise<{ os: boolean; email: boolean; whatsapp: boolean; reasons: string[] }> => {
+    textWithoutNames?: string,
+  ): Promise<{ os: boolean; email: number; whatsapp: number; reasons: string[] }> => {
     const route = store.getAlertRoutes()[id] ?? DEFAULT_ROUTE;
+    const subscribed = recipientsFor(store.getAlertRecipients(), id);
     const reasons: string[] = [];
     let os = false;
-    let email = false;
-    let whatsapp = false;
+    let email = 0;
+    let whatsapp = 0;
 
     if (route.os) {
       const r = await fabricAlert(id, title, text, level).catch(() => ({ delivered: false, reason: 'threw' }));
       os = r.delivered;
       if (!r.delivered && r.reason) reasons.push(`OpenMasjidOS: ${r.reason}`);
     }
-    if (alertEmailLooksValid(route.email)) {
+
+    // ── Email: no pacing, because there is nothing here to protect. A real provider, a real
+    //    reputation that is not a single phone number, and no ban to be had.
+    for (const r of subscribed.filter((x) => x.kind === 'email')) {
       // Plain text on purpose. An alert is one paragraph read on a phone at an awkward moment; a
       // branded HTML shell would add nothing and one more thing to render wrong.
-      const r = await fabricEmail({ to: route.email.trim(), subject: title, text }).catch(() => ({ sent: false, reason: 'threw' }));
-      email = r.sent;
-      if (!r.sent && r.reason) reasons.push(`email: ${r.reason}`);
+      const body = bodyForRecipient(r, text, textWithoutNames);
+      const sent = await fabricEmail({ to: r.address, subject: title, text: body }).catch(() => ({ sent: false, reason: 'threw' }));
+      if (sent.sent) email += 1;
+      else if (sent.reason) reasons.push(`email ${r.label || r.address}: ${sent.reason}`);
     }
-    const digits = route.whatsapp ? normalisePhone(route.phone) : '';
-    if (digits) {
-      // OUR OWN PACING. OpenMasjidOS 0.51.1 removed every limit it used to impose, so a Stripe
-      // outage would otherwise put one message per failed donation on a caretaker's phone. See
-      // `whatsappGate`: one per alert per half hour, with the count of what was held back riding
-      // along on the next one, so suppression is never silent.
-      const gate = whatsappGate(id, waGate.get(id), Date.now());
-      waGate.set(id, gate.next);
-      if (!gate.send) {
-        reasons.push('WhatsApp: held back to protect the masjid’s number (one of this kind per half hour)');
-        log.info(`alert ${id}: WhatsApp suppressed by our own pacing (${gate.next.suppressed} held back so far)`);
+
+    // ── WhatsApp: numbers and groups, inside one budget.
+    const waTargets = subscribed.filter((x) => x.kind === 'phone' || x.kind === 'group');
+    if (waTargets.length) {
+      const pacing = store.getWhatsAppPacing();
+      const now = Date.now();
+      const permit = whatsappPermit(id, store.getWhatsAppLedger(), pacing, now);
+      if (permit.allowed <= 0) {
+        const why = permitReasonText(permit.reason, pacing);
+        reasons.push(`WhatsApp: ${why}`);
+        log.info(`alert ${id}: WhatsApp ${why}`);
+        store.setWhatsAppLedger(recordWhatsAppSends(store.getWhatsAppLedger(), id, 0, now));
       } else {
-        const body = withSuppressedNote(`${title}\n\n${text}`, gate.suppressedBefore);
-        const r = await fabricWhatsApp(digits, body).catch(() => ({ queued: false, id: undefined, reason: 'threw' }));
-        whatsapp = r.queued;
-        // RECORD THE OUTCOME EITHER WAY. A refusal used to reach nothing but a debug line, so a
-        // message the platform rejected in a plain sentence — an unapproved group, a number
-        // missing its country code, the masjid's own gateway number — looked exactly like one
-        // that vanished into the queue. The settings screen reads this record and shows the sentence.
-        store.setWhatsAppOutcome(id, {
-          state: r.queued ? 'queued' : 'refused',
-          at: Date.now(),
-          messageId: r.queued ? (r.id ?? '') : '',
-          reason: r.queued ? '' : (r.reason ?? 'refused'),
-          suppressed: gate.suppressedBefore,
-        });
-        if (!r.queued && r.reason) reasons.push(`WhatsApp: ${r.reason}`);
-        // Resolve queued -> sent/failed shortly afterwards, when the platform can say (0.51.1+).
-        if (r.queued && r.id) scheduleWhatsAppFollowUp(id, r.id);
+        // The budget is in MESSAGES. When it cannot cover everyone, groups go first: one group send
+        // reaches more people per message than any individual number, so under a squeeze it is the
+        // channel that tells the most people. Say plainly who missed out rather than truncating in
+        // silence.
+        const ordered = [...waTargets].sort((a, b) => (a.kind === 'group' ? -1 : 0) - (b.kind === 'group' ? -1 : 0));
+        const going = ordered.slice(0, permit.allowed);
+        const skipped = ordered.length - going.length;
+        if (skipped > 0) {
+          reasons.push(`WhatsApp: ${skipped} recipient${skipped === 1 ? '' : 's'} not messaged — the hourly or daily limit was reached partway through`);
+        }
+        for (const r of going) {
+          const body = withSuppressedNote(`${title}\n\n${bodyForRecipient(r, text, textWithoutNames)}`, permit.suppressedBefore);
+          const sendIt =
+            r.kind === 'group'
+              ? fabricWhatsAppGroup(r.address, body)
+              : fabricWhatsApp(r.address, body);
+          const res = await sendIt.catch(() => ({ queued: false, id: undefined, reason: 'threw' }));
+          if (res.queued) whatsapp += 1;
+          // RECORD THE OUTCOME EITHER WAY, per recipient. A refusal used to reach nothing but a
+          // debug line, so a message the platform rejected in a plain sentence — an unapproved
+          // group, a number missing its country code, the masjid's own gateway number — looked
+          // exactly like one that vanished into the queue. The settings screen reads this record and
+          // shows the sentence on the row that caused it.
+          store.setWhatsAppOutcome(r.id, {
+            state: res.queued ? 'queued' : 'refused',
+            at: Date.now(),
+            messageId: res.queued ? (res.id ?? '') : '',
+            reason: res.queued ? '' : (res.reason ?? 'refused'),
+            suppressed: permit.suppressedBefore,
+            alertId: id,
+          });
+          if (!res.queued && res.reason) reasons.push(`WhatsApp ${r.label || r.address}: ${res.reason}`);
+          // Resolve queued -> sent/failed shortly afterwards, when the platform can say (0.51.1+).
+          if (res.queued && res.id) scheduleWhatsAppFollowUp(r.id, id, res.id);
+        }
+        // Charge the budget for what was actually handed over, not for what was permitted.
+        store.setWhatsAppLedger(recordWhatsAppSends(store.getWhatsAppLedger(), id, whatsapp, now));
       }
     }
+
     if (reasons.length) log.warn(`alert ${id} partially undelivered — ${reasons.join('; ')}`);
     return { os, email, whatsapp, reasons };
   };
 
   // Fire-and-forget wrapper for the call sites that must never block on an alert.
-  const alert = (id: AlertId, title: string, text: string, level: 'info' | 'success' | 'warning' | 'error' = 'warning'): void => {
-    void raiseAlert(id, title, text, level).catch(() => {});
+  const alert = (
+    id: AlertId,
+    title: string,
+    text: string,
+    level: 'info' | 'success' | 'warning' | 'error' = 'warning',
+    textWithoutNames?: string,
+  ): void => {
+    void raiseAlert(id, title, text, level, textWithoutNames).catch(() => {});
   };
 
-  // ── Notification settings: where each alert goes ────────────────────────────
+  // ── Notification settings: who gets told what ───────────────────────────────
   const alertsView = async () => {
     const routes = store.getAlertRoutes();
-    // What actually became of the last WhatsApp for each alert. Shown on the screen where the admin
-    // switched the channel on, because that is the only place the answer is any use — a refusal
-    // (unapproved group, missing country code, the masjid's own gateway number) used to reach
-    // nothing but a debug log and was indistinguishable from a message that simply vanished.
+    const recipients = store.getAlertRecipients();
+    // What actually became of the last WhatsApp to each RECIPIENT. Shown on the row that caused it,
+    // because that is the only place the answer is any use — a refusal (unapproved group, missing
+    // country code, the masjid's own gateway number) used to reach nothing but a debug log and was
+    // indistinguishable from a message that simply vanished.
     const outcomes = store.getWhatsAppOutcomes();
+    const pacing = store.getWhatsAppPacing();
+    const wa = await fabricWhatsAppStatus();
+    // Only ask for groups when WhatsApp is actually available — on a standalone install this would
+    // be a guaranteed-failing request on every load of the screen.
+    const groups = wa.available ? await fabricWhatsAppGroups() : ({ ok: false, reason: 'not-available' } as const);
     return {
       alerts: ALERT_META.map((m) => ({
-        ...m,
-        route: routes[m.id],
-        summary: routeSummary(routes[m.id]),
-        lastWhatsApp: outcomes[m.id] ?? null,
+        id: m.id,
+        label: m.label,
+        description: m.description,
+        carriesDonorIdentity: m.carriesDonorIdentity,
+        os: (routes[m.id] ?? DEFAULT_ROUTE).os,
+        delivery: alertDelivery(routes[m.id] ?? DEFAULT_ROUTE, recipients, m.id),
       })),
-      whatsapp: await fabricWhatsAppStatus(),
+      recipients: recipients.map((r) => ({ ...r, lastWhatsApp: outcomes[r.id] ?? null })),
+      maxRecipients: MAX_ALERT_RECIPIENTS,
+      groups: groups.ok ? groups.groups : [],
+      groupsProblem: groups.ok ? '' : groups.reason,
+      pacing,
+      pacingLimits: PACING_LIMITS,
+      usage: pacingUsage(store.getWhatsAppLedger(), pacing, Date.now()),
+      whatsapp: wa,
       embedded: ssoConfigured(),
       emailStatus: emailStatus(),
     };
   };
   app.get('/api/admin/alerts', { preHandler: requireAdmin }, async () => ({ data: await alertsView() }));
+
+  /** The platform relay, per alert. The only thing still decided per alert rather than per person. */
   app.put('/api/admin/alerts/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = String((req.params as { id: string }).id || '');
     if (!isAlertId(id)) return reply.code(404).send({ error: 'No such notification.' });
+    const parsed = z.object({ os: z.boolean() }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check those details.' });
+    store.setAlertRoute(id, parsed.data);
+    await audit(req, 'alert-route-changed', id, `os=${parsed.data.os}`);
+    return { data: await alertsView() };
+  });
+
+  app.post('/api/admin/alerts/recipients', { preHandler: requireAdmin }, async (req, reply) => {
     const parsed = z
       .object({
-        os: z.boolean().optional(),
-        email: z.string().max(200).optional(),
-        whatsapp: z.boolean().optional(),
-        phone: z.string().max(40).optional(),
+        kind: z.enum(['email', 'phone', 'group']),
+        address: z.string().min(1).max(200),
+        label: z.string().max(80).optional(),
       })
       .safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'Please check those details.' });
-    // Tell the admin WHY rather than saving a blank: a phone box that empties itself on save looks
-    // like the app lost it, and they would try again with the same number.
-    const p = parsed.data;
-    if (p.phone && p.phone.trim() && !phoneLooksValid(p.phone)) {
-      return reply.code(400).send({ error: 'That number needs its country code and no leading zero — e.g. +44 7700 900123 or +1 555 010 1234.' });
-    }
-    if (p.email && p.email.trim() && !alertEmailLooksValid(p.email)) {
+    const { kind, address } = parsed.data;
+    // Tell the admin WHY rather than saving a blank. A box that empties itself on save reads as the
+    // app having lost the value, and they retype the very same thing.
+    if (kind === 'email' && !alertEmailLooksValid(address)) {
       return reply.code(400).send({ error: 'That doesn’t look like an email address.' });
     }
-    store.setAlertRoute(id, p);
-    await audit(req, 'alert-route-changed', id, `os=${p.os ?? '-'} email=${p.email ? 'set' : '-'} whatsapp=${p.whatsapp ?? '-'}`);
+    if (kind === 'phone' && !phoneLooksValid(address)) {
+      return reply.code(400).send({ error: 'That number needs its country code and no leading zero — e.g. +1 555 010 1234.' });
+    }
+    if (kind === 'group') {
+      if (!groupIdLooksValid(address)) return reply.code(400).send({ error: 'That isn’t a WhatsApp group.' });
+      // Only a group the admin approved in OpenMasjidOS. The platform would refuse an unapproved one
+      // with a 403 anyway, but refusing here means the admin finds out while they are looking at the
+      // screen rather than when a real alert silently fails weeks later.
+      const groups = await fabricWhatsAppGroups();
+      if (!groups.ok) {
+        return reply.code(503).send({ error: 'Couldn’t check your approved WhatsApp groups just now. Please try again.' });
+      }
+      if (!groups.groups.some((g) => g.id === address)) {
+        return reply.code(400).send({ error: 'That group isn’t approved for apps in OpenMasjidOS → Settings → WhatsApp → Groups.' });
+      }
+    }
+    const draft = newRecipient(kind, address, parsed.data.label ?? '');
+    const row = store.addAlertRecipient(draft);
+    if (!row) {
+      const list = store.getAlertRecipients();
+      return reply.code(400).send({
+        error:
+          list.length >= MAX_ALERT_RECIPIENTS
+            ? `That’s the most recipients we can hold (${MAX_ALERT_RECIPIENTS}). To reach more people over WhatsApp, use a group — one message reaches everyone in it.`
+            : 'That address is already on the list.',
+      });
+    }
+    await audit(req, 'alert-recipient-added', row.id, `${row.kind}`);
     return { data: await alertsView() };
   });
+
+  app.patch('/api/admin/alerts/recipients/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const rid_ = String((req.params as { id: string }).id || '');
+    const parsed = z
+      .object({
+        label: z.string().max(80).optional(),
+        alerts: z.array(z.string()).max(ALERT_IDS.length).optional(),
+        includeNames: z.boolean().optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check those details.' });
+    const alertsPatch = parsed.data.alerts?.filter(isAlertId);
+    const row = store.updateAlertRecipient(rid_, {
+      ...(parsed.data.label !== undefined ? { label: parsed.data.label } : {}),
+      ...(alertsPatch ? { alerts: alertsPatch } : {}),
+      ...(parsed.data.includeNames !== undefined ? { includeNames: parsed.data.includeNames } : {}),
+    });
+    if (!row) return reply.code(404).send({ error: 'That recipient is no longer on the list.' });
+    await audit(req, 'alert-recipient-changed', row.id, `alerts=${row.alerts.length} names=${row.includeNames}`);
+    return { data: await alertsView() };
+  });
+
+  app.delete('/api/admin/alerts/recipients/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const rid_ = String((req.params as { id: string }).id || '');
+    if (!store.removeAlertRecipient(rid_)) return reply.code(404).send({ error: 'That recipient is no longer on the list.' });
+    await audit(req, 'alert-recipient-removed', rid_, '');
+    return { data: await alertsView() };
+  });
+
+  /** How hard we may lean on the masjid's WhatsApp number. Theirs to set — see alerts.ts. */
+  app.put('/api/admin/alerts/pacing', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z
+      .object({
+        minGapMinutes: z.number().int().optional(),
+        maxPerHour: z.number().int().optional(),
+        maxPerDay: z.number().int().optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please enter whole numbers.' });
+    const next = store.setWhatsAppPacing(parsed.data);
+    await audit(req, 'whatsapp-pacing-changed', '', `gap=${next.minGapMinutes}m hour=${next.maxPerHour} day=${next.maxPerDay}`);
+    return { data: await alertsView() };
+  });
+
   app.post('/api/admin/alerts/whatsapp/refresh', { preHandler: requireAdmin }, async () => {
     clearWhatsAppCache();
-    return { data: { whatsapp: await fabricWhatsAppStatus(true) } };
+    return { data: await alertsView() };
   });
 
   // In-app "send me a test": fire the declared `test` alert THROUGH THE SAME ROUTING as a real one,
@@ -782,7 +951,7 @@ async function main(): Promise<void> {
       'If you received this, your kiosk notifications are reaching you on this channel. Nothing is wrong — you pressed Send test.',
       'info',
     );
-    return { data: { ...res, delivered: res.os || res.email || res.whatsapp } };
+    return { data: { ...res, delivered: res.os || res.email > 0 || res.whatsapp > 0 } };
   });
 
   // ── Terminal Locations (a reader must connect with a locationId) ─────────────
@@ -1482,11 +1651,9 @@ async function main(): Promise<void> {
 
     // ── The admin: one alert, fanned out per Settings → Notifications (OpenMasjidOS, a direct
     //    email address, and/or WhatsApp — whichever they turned on for THIS alert) ──
-    alert(
-      'donation-refunded',
-      'A donation was refunded',
+    const refundAlertBody = (withNames: boolean): string =>
       [
-        `${formatMoney(refund.amountMinor || want, after.currency)} was refunded to ${after.donorName || 'a donor'}${addr ? ` (${addr})` : ''}`,
+        `${formatMoney(refund.amountMinor || want, after.currency)} was refunded to ${withNames ? after.donorName || 'a donor' : 'a donor'}${withNames && addr ? ` (${addr})` : ''}`,
         `from ${after.deviceName || 'the kiosk'}${after.campaignTitle ? ` · ${after.campaignTitle}` : ''}.`,
         fullyRefunded ? 'This was the full donation.' : `This was part of ${formatMoney(after.amountMinor, after.currency)}.`,
         addr ? (donorEmailed ? 'The donor has been emailed.' : 'The donor could NOT be emailed — please contact them.') : 'No donor email was given, so they have not been told.',
@@ -1495,8 +1662,19 @@ async function main(): Promise<void> {
           : '',
       ]
         .filter(Boolean)
-        .join(' '),
+        .join(' ');
+    alert(
+      'donation-refunded',
+      'A donation was refunded',
+      // TWO BODIES, and the second is not a nicety. A recipient can be a WhatsApp GROUP, and the
+      // platform's rule for those is blunt: a group post must never carry one person's own
+      // business, because everyone in a group can see everyone else's number. So the call site
+      // builds the unnamed version too and `includeNames` on the recipient picks. Derived here
+      // rather than regexed out of the finished sentence downstream, which is the version that
+      // works on the examples you tried and leaks on the one you did not.
+      refundAlertBody(true),
       'warning',
+      refundAlertBody(false),
     );
 
     // The audit trail exists for "actions that reach outside the app". Refunding is the only admin
@@ -1776,6 +1954,9 @@ ${body}
       'A donor stopped their monthly donation',
       `${plan.donorName || 'A donor'}${plan.donorEmail ? ` (${plan.donorEmail})` : ''} stopped their ${formatMoney(plan.firstAmountMinor, plan.currency)}/month donation${plan.campaignTitle ? ` to ${plan.campaignTitle}` : ''} using the link in their confirmation email. Nothing further will be collected.`,
       'info',
+      // The same sentence with nobody named — for a recipient (typically a group) set not to
+      // carry donor identity. See the note at the donation-refunded call site.
+      `A donor stopped their ${formatMoney(plan.firstAmountMinor, plan.currency)}/month donation${plan.campaignTitle ? ` to ${plan.campaignTitle}` : ''} using the link in their confirmation email. Nothing further will be collected.`,
     );
     return reply.send(
       cancelPage(

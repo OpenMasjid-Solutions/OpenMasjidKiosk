@@ -1,16 +1,57 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 OpenMasjid-Solutions
 
-/** Settings → Notifications: where each alert goes.
+/** Settings → Notifications: who gets told what.
  *
- *  OpenMasjidOS has its own alerts matrix and it stays underneath this — that is the "OpenMasjidOS"
- *  switch, on by default, so an existing install behaves exactly as it did before this screen
- *  existed. What the platform cannot do is per-person: it routes to the admin's one address and has
- *  no WhatsApp column for apps at all. A masjid needs "the foyer reader is offline" to reach the
- *  caretaker and "a donation was refunded" to reach the treasurer. */
-import { useEffect, useState } from 'react';
-import { BellRing, Check, Loader2, MessageCircle, RefreshCw, Send, TriangleAlert } from 'lucide-react';
-import { getAlerts, refreshWhatsApp, sendTestAlert, setAlertRoute, type AlertSetting, type AlertsView, type WhatsAppAvailability, type WhatsAppSendRecord } from './api';
+ *  ONE TABLE, and that is the whole design. A row is a destination, a column is an alert, and the
+ *  checkbox at the intersection is the entire setting. It is the shape OpenMasjidStudents uses for
+ *  the same job, and it replaces a per-alert form that could hold exactly one email address and one
+ *  phone number — so a masjid with a treasurer AND a caretaker had to pick one, and the same address
+ *  had to be retyped into every alert it wanted.
+ *
+ *  The OpenMasjidOS relay is the pinned first row rather than a control of its own, because it is a
+ *  destination like any other — it just happens to be one whose address the platform owns. Putting
+ *  it in the table means "who hears about a refund?" is one column to read down, with nothing
+ *  hiding elsewhere on the screen. */
+import { useEffect, useMemo, useState } from 'react';
+import {
+  BellRing,
+  Check,
+  Gauge,
+  Loader2,
+  Mail,
+  MessageCircle,
+  RefreshCw,
+  Send,
+  Trash2,
+  TriangleAlert,
+  Users,
+} from 'lucide-react';
+import {
+  addAlertRecipient,
+  getAlerts,
+  refreshWhatsApp,
+  removeAlertRecipient,
+  sendTestAlert,
+  setAlertRelay,
+  setWhatsAppPacing,
+  updateAlertRecipient,
+  type AlertRecipient,
+  type AlertsView,
+  type RecipientKind,
+  type WhatsAppAvailability,
+  type WhatsAppSendRecord,
+} from './api';
+import {
+  COUNTRIES,
+  DEFAULT_COUNTRY,
+  e164LooksValid,
+  formatE164ForDisplay,
+  formatNational,
+  placeholderFor,
+  toE164Digits,
+  type Country,
+} from './phone';
 
 /** What to tell the admin about WhatsApp not being available — each reason needs a different fix,
  *  so a single "unavailable" would leave them guessing which. */
@@ -28,153 +69,393 @@ function whatsappNote(w: WhatsAppAvailability): string {
 }
 
 /**
- * What became of the last WhatsApp for this alert, in one line.
+ * What became of the last WhatsApp to this recipient, in one line.
  *
- * This exists because a refused message and a lost one used to look identical. The platform
- * answers a bad send with a plain sentence — "That group has not been approved", "That phone
- * number needs a country code", "That is the number WhatsApp is linked to" — and every one of
- * those went to a debug log nobody reads. Shown once, quietly, next to the switch that caused it.
+ * This exists because a refused message and a lost one used to look identical. The platform answers
+ * a bad send with a plain sentence — "That group has not been approved", "That phone number needs a
+ * country code", "That is the number WhatsApp is linked to" — and every one of those went to a debug
+ * log nobody reads. Shown quietly, on the row that caused it.
  */
 function LastWhatsApp({ rec }: { rec: WhatsAppSendRecord | null }) {
   if (!rec) return null;
-  const when = new Date(rec.at).toLocaleString();
   const bad = rec.state === 'failed' || rec.state === 'expired' || rec.state === 'refused';
   const label =
     rec.state === 'sent'
-      ? 'Last message sent'
+      ? 'sent'
       : rec.state === 'queued'
-        ? 'Last message queued'
+        ? 'queued'
         : rec.state === 'refused'
-          ? 'Last message was refused'
+          ? 'refused'
           : rec.state === 'expired'
-            ? 'Last message expired without sending'
-            : 'Last message failed';
+            ? 'expired without sending'
+            : 'failed';
   return (
-    <p className={`muted alert-row__hint${bad ? ' text-warn' : ''}`}>
-      {bad ? <TriangleAlert size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />} {label} {'—'} {when}
-      {rec.reason ? `. ${rec.reason}` : ''}
-      {rec.suppressed > 0
-        ? ` (${rec.suppressed} more of these were held back beforehand, to protect the masjid’s number.)`
-        : ''}
-    </p>
+    <span className={`mx-last${bad ? ' text-warn' : ''}`} title={new Date(rec.at).toLocaleString()}>
+      {bad ? <TriangleAlert size={12} aria-hidden="true" /> : <Check size={12} aria-hidden="true" />} Last message {label}
+      {rec.reason ? `: ${rec.reason}` : ''}
+      {rec.suppressed > 0 ? ` (${rec.suppressed} held back before it)` : ''}
+    </span>
   );
 }
 
-function AlertRow({
-  a,
-  waAvailable,
-  onSaved,
-  onError,
+function kindIcon(kind: RecipientKind) {
+  if (kind === 'email') return <Mail size={13} aria-hidden="true" />;
+  if (kind === 'group') return <Users size={13} aria-hidden="true" />;
+  return <MessageCircle size={13} aria-hidden="true" />;
+}
+
+/** How a recipient's address reads on screen. A group shows the admin's own nickname. */
+function addressLabel(r: AlertRecipient, groupLabels: Map<string, string>): string {
+  if (r.kind === 'phone') return formatE164ForDisplay(r.address);
+  if (r.kind === 'group') return groupLabels.get(r.address) ?? 'A WhatsApp group';
+  return r.address;
+}
+
+// ── One recipient row ────────────────────────────────────────────────────────
+function RecipientRow({
+  r,
+  alertIds,
+  groupLabels,
+  busy,
+  onPatch,
+  onRemove,
 }: {
-  a: AlertSetting;
-  waAvailable: boolean;
-  onSaved: (v: AlertsView) => void;
-  onError: (m: string) => void;
+  r: AlertRecipient;
+  alertIds: string[];
+  groupLabels: Map<string, string>;
+  busy: boolean;
+  onPatch: (patch: { label?: string; alerts?: string[]; includeNames?: boolean }) => void;
+  onRemove: () => void;
 }) {
-  // Local copies so typing an address doesn't fire a save per keystroke; committed on blur.
-  const [email, setEmail] = useState(a.route.email);
-  const [phone, setPhone] = useState(a.route.phone);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    setEmail(a.route.email);
-    setPhone(a.route.phone);
-  }, [a.route.email, a.route.phone]);
-
-  const save = async (patch: Parameters<typeof setAlertRoute>[1]) => {
-    setBusy(true);
-    onError('');
-    try {
-      onSaved(await setAlertRoute(a.id, patch));
-    } catch (e) {
-      onError(e instanceof Error ? e.message : 'Couldn’t save that.');
-      // Put the boxes back to what the server actually holds, so the screen never shows a value
-      // that was refused.
-      setEmail(a.route.email);
-      setPhone(a.route.phone);
-    } finally {
-      setBusy(false);
-    }
+  const toggle = (id: string, on: boolean) => {
+    const next = on ? [...r.alerts, id] : r.alerts.filter((a) => a !== id);
+    onPatch({ alerts: next });
   };
-
+  const address = addressLabel(r, groupLabels);
   return (
-    <div className="alert-row">
-      <div className="alert-row__head">
-        <div>
-          <b>{a.label}</b>
-          <p className="muted alert-row__desc">{a.description}</p>
-        </div>
-        {a.summary.silent && (
-          <span className="status-pill status-pill--warn" title="Nothing is switched on, so this alert goes nowhere.">
-            <TriangleAlert size={13} aria-hidden="true" /> goes nowhere
-          </span>
+    <tr>
+      <th scope="row" className="mx-who">
+        <span className="mx-who__name">
+          {kindIcon(r.kind)} {r.label || address}
+        </span>
+        {r.label && <span className="mx-who__sub">{address}</span>}
+        {r.kind === 'group' && (
+          /* PER GROUP, and it defaults to off. Everyone in a WhatsApp group can see every other
+             member's number, and the platform's own rule is that a group post must never carry one
+             person's own business. A small trustees group is a different thing from a parents'
+             broadcast, so this is the admin's call rather than ours. */
+          <label className="mx-names">
+            <input
+              type="checkbox"
+              checked={r.includeNames}
+              disabled={busy}
+              onChange={(e) => onPatch({ includeNames: e.target.checked })}
+            />
+            <span>
+              Include donor names
+              <small className="muted"> — off means amounts, kiosks and funds only</small>
+            </span>
+          </label>
         )}
-      </div>
-
-      <div className="alert-row__channels">
-        <label className="alert-ch">
-          <input type="checkbox" checked={a.route.os} disabled={busy} onChange={(e) => void save({ os: e.target.checked })} />
-          <span>
-            OpenMasjidOS
-            <small className="muted"> — email/webhook, as you set it there</small>
-          </span>
-        </label>
-
-        <label className="alert-ch alert-ch--wide">
-          <span className="alert-ch__label">Also email</span>
-          <input
-            type="email"
-            className="input"
-            placeholder="nobody@example.org"
-            value={email}
-            disabled={busy}
-            onChange={(e) => setEmail(e.target.value)}
-            onBlur={() => email.trim() !== a.route.email && void save({ email: email.trim() })}
-            aria-label={`Email address for “${a.label}”`}
-          />
-        </label>
-
-        <label className="alert-ch">
+        <LastWhatsApp rec={r.lastWhatsApp} />
+      </th>
+      {alertIds.map((id) => (
+        <td key={id} className="mx-cell">
           <input
             type="checkbox"
-            checked={a.route.whatsapp}
-            disabled={busy || !waAvailable}
-            onChange={(e) => void save({ whatsapp: e.target.checked })}
+            aria-label={`${r.label || address} — ${id}`}
+            checked={r.alerts.includes(id)}
+            disabled={busy}
+            onChange={(e) => toggle(id, e.target.checked)}
           />
-          <span>
-            <MessageCircle size={14} aria-hidden="true" /> WhatsApp
-          </span>
-        </label>
+        </td>
+      ))}
+      <td className="mx-cell">
+        <button type="button" className="btn btn--ghost btn--sm" title="Remove" onClick={onRemove} disabled={busy}>
+          <Trash2 size={14} aria-hidden="true" />
+        </button>
+      </td>
+    </tr>
+  );
+}
 
-        <label className="alert-ch alert-ch--wide">
-          <span className="alert-ch__label">Number</span>
-          <input
-            type="tel"
-            className="input"
-            placeholder="+44 7700 900123"
-            value={phone}
-            disabled={busy || !waAvailable}
-            onChange={(e) => setPhone(e.target.value)}
-            onBlur={() => phone.trim() !== a.route.phone && void save({ phone: phone.trim() })}
-            aria-label={`WhatsApp number for “${a.label}”`}
-          />
-        </label>
+// ── Adding one ───────────────────────────────────────────────────────────────
+function AddRecipient({
+  view,
+  busy,
+  onAdd,
+}: {
+  view: AlertsView;
+  busy: boolean;
+  onAdd: (kind: RecipientKind, address: string, label: string) => Promise<void>;
+}) {
+  const [kind, setKind] = useState<RecipientKind>('email');
+  const [email, setEmail] = useState('');
+  const [country, setCountry] = useState<Country>(DEFAULT_COUNTRY);
+  const [national, setNational] = useState('');
+  const [group, setGroup] = useState('');
+  const [label, setLabel] = useState('');
+
+  const waOff = !view.whatsapp.available;
+  const stored = toE164Digits(country, national);
+  const canAdd =
+    kind === 'email'
+      ? /^[^\s@]+@[^\s@.]+\.[^\s@]+$/.test(email.trim())
+      : kind === 'phone'
+        ? e164LooksValid(stored)
+        : group !== '';
+
+  const submit = async () => {
+    const address = kind === 'email' ? email.trim() : kind === 'phone' ? stored : group;
+    await onAdd(kind, address, label.trim());
+    setEmail('');
+    setNational('');
+    setGroup('');
+    setLabel('');
+  };
+
+  const full = view.recipients.length >= view.maxRecipients;
+
+  return (
+    <div className="mx-add">
+      <div className="mx-add__kinds" role="group" aria-label="What kind of recipient">
+        {(['email', 'phone', 'group'] as RecipientKind[]).map((k) => (
+          <button
+            key={k}
+            type="button"
+            className={`btn btn--sm${kind === k ? ' btn--primary' : ' btn--ghost'}`}
+            onClick={() => setKind(k)}
+            disabled={busy || (k !== 'email' && waOff)}
+            title={k !== 'email' && waOff ? 'WhatsApp isn’t available on this server yet' : undefined}
+          >
+            {kindIcon(k)} {k === 'email' ? 'Email' : k === 'phone' ? 'WhatsApp number' : 'WhatsApp group'}
+          </button>
+        ))}
       </div>
 
-      {a.route.whatsapp && !a.summary.whatsapp && (
-        <p className="muted alert-row__hint">
-          <TriangleAlert size={13} aria-hidden="true" /> WhatsApp is on for this alert but there’s no number, so nothing will be sent.
+      {full ? (
+        <p className="muted note">
+          That’s the most recipients we can hold ({view.maxRecipients}). To reach more people over WhatsApp, use a
+          group — one message reaches everyone in it.
         </p>
+      ) : (
+        <div className="mx-add__row">
+          {kind === 'email' && (
+            <div className="field mx-add__grow">
+              <label className="label" htmlFor="rcp-email">
+                Email address
+              </label>
+              <input
+                id="rcp-email"
+                className="input"
+                type="email"
+                placeholder="office@example.org"
+                value={email}
+                disabled={busy}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+          )}
+
+          {kind === 'phone' && (
+            <>
+              <div className="field">
+                <label className="label" htmlFor="rcp-country">
+                  Country
+                </label>
+                <select
+                  id="rcp-country"
+                  className="input"
+                  value={country.code}
+                  disabled={busy}
+                  onChange={(e) => setCountry(COUNTRIES.find((c) => c.code === e.target.value) ?? DEFAULT_COUNTRY)}
+                >
+                  {COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field mx-add__grow">
+                <label className="label" htmlFor="rcp-phone">
+                  WhatsApp number
+                </label>
+                <input
+                  id="rcp-phone"
+                  className="input"
+                  type="tel"
+                  inputMode="tel"
+                  placeholder={placeholderFor(country)}
+                  value={formatNational(country, national)}
+                  disabled={busy}
+                  /* Re-formats on every keystroke, which is why the formatter accepts half-finished
+                     states — `(555) 12` is a legitimate thing to be looking at. */
+                  onChange={(e) => setNational(e.target.value)}
+                />
+              </div>
+            </>
+          )}
+
+          {kind === 'group' && (
+            <div className="field mx-add__grow">
+              <label className="label" htmlFor="rcp-group">
+                WhatsApp group
+              </label>
+              {view.groups.length > 0 ? (
+                <select id="rcp-group" className="input" value={group} disabled={busy} onChange={(e) => setGroup(e.target.value)}>
+                  <option value="">Choose a group…</option>
+                  {view.groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                /* "We couldn't ask" and "none are approved" need different words: one is a problem to
+                   chase, the other is a thing to go and do. */
+                <p className="muted">
+                  {view.groupsProblem && view.groupsProblem !== 'not-available'
+                    ? 'Couldn’t read your approved groups just now — try Check again below.'
+                    : 'No groups are approved yet. In OpenMasjidOS → Settings → WhatsApp → Groups, find your groups and approve the ones apps may post into.'}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="field">
+            <label className="label" htmlFor="rcp-label">
+              Name (optional)
+            </label>
+            <input
+              id="rcp-label"
+              className="input"
+              placeholder="e.g. Treasurer"
+              value={label}
+              disabled={busy}
+              onChange={(e) => setLabel(e.target.value)}
+            />
+          </div>
+
+          <button type="button" className="btn btn--primary" onClick={() => void submit()} disabled={busy || !canAdd}>
+            Add
+          </button>
+        </div>
       )}
-      <LastWhatsApp rec={a.lastWhatsApp} />
+
+      <p className="muted mx-add__hint">
+        New recipients start on the alerts that cost money or hide a problem. Tick the rest yourself. Adding someone
+        grants them no access to the app — they only receive the alerts you tick.
+      </p>
     </div>
   );
 }
 
+// ── How hard we may lean on the masjid's number ──────────────────────────────
+function PacingPanel({
+  view,
+  busy,
+  onSave,
+}: {
+  view: AlertsView;
+  busy: boolean;
+  onSave: (patch: { minGapMinutes?: number; maxPerHour?: number; maxPerDay?: number }) => void;
+}) {
+  const [gap, setGap] = useState(String(view.pacing.minGapMinutes));
+  const [hour, setHour] = useState(String(view.pacing.maxPerHour));
+  const [day, setDay] = useState(String(view.pacing.maxPerDay));
+
+  useEffect(() => {
+    setGap(String(view.pacing.minGapMinutes));
+    setHour(String(view.pacing.maxPerHour));
+    setDay(String(view.pacing.maxPerDay));
+  }, [view.pacing.minGapMinutes, view.pacing.maxPerHour, view.pacing.maxPerDay]);
+
+  const num = (s: string) => (s.trim() === '' ? undefined : Number(s));
+  const commit = () => onSave({ minGapMinutes: num(gap), maxPerHour: num(hour), maxPerDay: num(day) });
+  const lim = view.pacingLimits;
+
+  return (
+    <div className="mx-pacing">
+      <div className="card-head">
+        <Gauge size={16} className="panel-ico" aria-hidden="true" />
+        <div className="card-head__main">
+          <h3 className="section-title-inline">WhatsApp limits</h3>
+          <p className="muted">
+            How many WhatsApp messages this kiosk may send. It uses the masjid’s own number, a ban attaches to that
+            number and can’t be undone — so there is a ceiling, and it’s yours to set. Email and OpenMasjidOS alerts are
+            never limited.
+          </p>
+        </div>
+      </div>
+      <div className="mx-pacing__row">
+        <div className="field">
+          <label className="label" htmlFor="pace-hour">
+            Most per hour
+          </label>
+          <input
+            id="pace-hour"
+            className="input"
+            type="number"
+            inputMode="numeric"
+            min={lim.maxPerHour.min}
+            max={lim.maxPerHour.max}
+            value={hour}
+            disabled={busy}
+            onChange={(e) => setHour(e.target.value)}
+            onBlur={commit}
+          />
+        </div>
+        <div className="field">
+          <label className="label" htmlFor="pace-day">
+            Most per day
+          </label>
+          <input
+            id="pace-day"
+            className="input"
+            type="number"
+            inputMode="numeric"
+            min={lim.maxPerDay.min}
+            max={lim.maxPerDay.max}
+            value={day}
+            disabled={busy}
+            onChange={(e) => setDay(e.target.value)}
+            onBlur={commit}
+          />
+        </div>
+        <div className="field">
+          <label className="label" htmlFor="pace-gap">
+            Wait between repeats (minutes)
+          </label>
+          <input
+            id="pace-gap"
+            className="input"
+            type="number"
+            inputMode="numeric"
+            min={lim.minGapMinutes.min}
+            max={lim.minGapMinutes.max}
+            value={gap}
+            disabled={busy}
+            onChange={(e) => setGap(e.target.value)}
+            onBlur={commit}
+          />
+        </div>
+      </div>
+      <p className="muted mx-add__hint">
+        Used so far: <strong>{view.usage.lastHour}</strong> this hour, <strong>{view.usage.lastDay}</strong> today. The
+        wait applies per kind of alert, so one repeating problem can’t use up the whole hour on its own — anything held
+        back is counted and reported on the next message that goes. A test message is never held back.
+      </p>
+    </div>
+  );
+}
+
+// ── The screen ───────────────────────────────────────────────────────────────
 export function NotificationsSection() {
   const [view, setView] = useState<AlertsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testMsg, setTestMsg] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -190,11 +471,30 @@ export function NotificationsSection() {
     };
   }, []);
 
+  const groupLabels = useMemo(() => new Map((view?.groups ?? []).map((g) => [g.id, g.label])), [view?.groups]);
+  const alertIds = useMemo(() => (view?.alerts ?? []).map((a) => a.id), [view?.alerts]);
+
+  /** Every mutation returns the whole view, so the screen can never drift from the server. */
+  const run = async (fn: () => Promise<AlertsView>) => {
+    setBusy(true);
+    setErr('');
+    try {
+      setView(await fn());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Couldn’t save that.');
+      // Put the screen back to what the server actually holds, so it never shows a refused value.
+      await getAlerts()
+        .then(setView)
+        .catch(() => {});
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const recheck = async () => {
     setRefreshing(true);
     try {
-      const { whatsapp } = await refreshWhatsApp();
-      setView((v) => (v ? { ...v, whatsapp } : v));
+      setView(await refreshWhatsApp());
     } catch {
       /* the note below already says what to do */
     } finally {
@@ -209,13 +509,19 @@ export function NotificationsSection() {
       const r = await sendTestAlert();
       // Name the channels that actually took it. "Sent" alone would be a worse answer than none:
       // the whole reason to press this is to find out WHICH of your settings works.
-      const went = [r.os && 'OpenMasjidOS', r.email && 'email', r.whatsapp && 'WhatsApp'].filter(Boolean).join(', ');
+      const went = [
+        r.os && 'OpenMasjidOS',
+        r.email > 0 && `${r.email} email${r.email === 1 ? '' : 's'}`,
+        r.whatsapp > 0 && `${r.whatsapp} WhatsApp message${r.whatsapp === 1 ? '' : 's'}`,
+      ]
+        .filter(Boolean)
+        .join(', ');
       setTestMsg(
         r.delivered
-          ? `Sent via ${went}.${r.whatsapp ? ' WhatsApp is queued and paced, so it can take a few minutes.' : ''}${r.reasons.length ? ` Didn’t go by: ${r.reasons.join('; ')}.` : ''}`
+          ? `Sent via ${went}.${r.whatsapp > 0 ? ' WhatsApp is queued, so it can take a moment.' : ''}${r.reasons.length ? ` Didn’t go by: ${r.reasons.join('; ')}.` : ''}`
           : r.reasons.length
             ? `Nothing was sent — ${r.reasons.join('; ')}.`
-            : 'Nothing was sent, because nothing is switched on for the test message.',
+            : 'Nothing was sent, because nothing is ticked for the test message.',
       );
     } catch (e) {
       setTestMsg(e instanceof Error ? e.message : 'Couldn’t send the test.');
@@ -233,8 +539,8 @@ export function NotificationsSection() {
         <div className="card-head__main">
           <h2 className="section-title-inline">Notifications</h2>
           <p className="muted">
-            Who gets told when something happens. Each one can go to OpenMasjidOS (which sends it on by email or webhook,
-            as you’ve set it up there), straight to an email address, and to a WhatsApp number — or any combination.
+            Who to tell when something happens. Add an address, a WhatsApp number, or a WhatsApp group — then tick what
+            each one hears about. Adding someone grants no access to the app.
           </p>
         </div>
       </div>
@@ -264,16 +570,101 @@ export function NotificationsSection() {
             </p>
           )}
 
-          <div className="alert-list">
-            {view.alerts.map((a) => (
-              <AlertRow key={a.id} a={a} waAvailable={view.whatsapp.available} onSaved={setView} onError={setErr} />
-            ))}
+          {/* Wide on purpose, and it scrolls sideways rather than squeezing: an alert column that has
+              been crushed to two characters is worse than one you have to scroll to. */}
+          <div className="mx-wrap">
+            <table className="mx">
+              <thead>
+                <tr>
+                  <th className="mx-who">Who to tell</th>
+                  {view.alerts.map((a) => (
+                    <th key={a.id} className="mx-head" title={a.description}>
+                      {a.label}
+                      {a.carriesDonorIdentity && (
+                        <span className="mx-head__flag" title="This alert names the donor. A group can be set not to carry names.">
+                          names a donor
+                        </span>
+                      )}
+                    </th>
+                  ))}
+                  <th className="mx-head" />
+                </tr>
+              </thead>
+              <tbody>
+                {/* The platform relay is a DESTINATION, so it belongs in the table — it just happens
+                    to be the one whose address OpenMasjidOS owns. */}
+                <tr className="mx-relay">
+                  <th scope="row" className="mx-who">
+                    <span className="mx-who__name">OpenMasjidOS</span>
+                    <span className="mx-who__sub">Forwards by email or webhook, as you set it up there</span>
+                  </th>
+                  {view.alerts.map((a) => (
+                    <td key={a.id} className="mx-cell">
+                      <input
+                        type="checkbox"
+                        aria-label={`OpenMasjidOS — ${a.label}`}
+                        checked={a.os}
+                        disabled={busy}
+                        onChange={(e) => void run(() => setAlertRelay(a.id, e.target.checked))}
+                      />
+                    </td>
+                  ))}
+                  <td className="mx-cell" />
+                </tr>
+
+                {view.recipients.map((r) => (
+                  <RecipientRow
+                    key={r.id}
+                    r={r}
+                    alertIds={alertIds}
+                    groupLabels={groupLabels}
+                    busy={busy}
+                    onPatch={(patch) => void run(() => updateAlertRecipient(r.id, patch))}
+                    onRemove={() => void run(() => removeAlertRecipient(r.id))}
+                  />
+                ))}
+
+                {/* An alert nothing is ticked for goes nowhere, and that must be visible rather than
+                    inferred by reading down a column. */}
+                <tr className="mx-foot">
+                  <th scope="row" className="mx-who">
+                    <span className="muted">Where each one ends up</span>
+                  </th>
+                  {view.alerts.map((a) => (
+                    <td key={a.id} className="mx-cell">
+                      {a.delivery.silent ? (
+                        <span className="status-pill status-pill--warn" title="Nothing is ticked, so this alert goes nowhere.">
+                          <TriangleAlert size={12} aria-hidden="true" /> nowhere
+                        </span>
+                      ) : (
+                        <span className="muted mx-tally">
+                          {[
+                            a.delivery.os && 'OS',
+                            a.delivery.emails > 0 && `${a.delivery.emails}✉`,
+                            a.delivery.phones > 0 && `${a.delivery.phones}☎`,
+                            a.delivery.groups > 0 && `${a.delivery.groups}⌾`,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                      )}
+                    </td>
+                  ))}
+                  <td className="mx-cell" />
+                </tr>
+              </tbody>
+            </table>
           </div>
 
+          <AddRecipient view={view} busy={busy} onAdd={(k, a, l) => run(() => addAlertRecipient(k, a, l))} />
+
+          <PacingPanel view={view} busy={busy} onSave={(patch) => void run(() => setWhatsAppPacing(patch))} />
+
           <p className="muted note">
-            WhatsApp goes through the masjid’s own number and is deliberately paced by OpenMasjidOS, so a message can take
-            anywhere from seconds to a few minutes. Keep it for the things worth interrupting someone about — and note that
-            donors are never messaged, only the numbers you enter here.
+            <strong>Donors are never messaged.</strong> WhatsApp reaches only the numbers and groups you add here — there
+            is no phone field anywhere in the giving flow. A message is handed to OpenMasjidOS rather than delivered by
+            it, so treat WhatsApp as a nudge and email as the channel to rely on. Note that everyone in a WhatsApp group
+            can see every other member’s number.
           </p>
 
           <div className="row" style={{ alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
@@ -292,3 +683,6 @@ export function NotificationsSection() {
     </section>
   );
 }
+
+/** Kept so a stale import doesn't break the build during a partial refactor. */
+export type { AlertRecipient };

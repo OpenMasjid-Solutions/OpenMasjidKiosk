@@ -7,6 +7,60 @@
 _Development builds ahead of 0.11.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.12.0 is released._
 
+- **Notifications is now one table: who you want to tell, and what each of them hears about.** It
+  used to be a block per alert, each with room for exactly one email address and one phone number —
+  so a masjid with a treasurer *and* a caretaker had to choose, and the same address had to be
+  retyped into every alert it wanted. Now you add a person once and tick the alerts they should get.
+  - **Add as many as you need** — email addresses, WhatsApp numbers, or both. Adding someone grants
+    them no access to the app whatsoever; they only receive the alerts you tick.
+  - **Give each one a name** ("Treasurer", "Ustādh Bilāl") so the table reads like your team rather
+    than a list of addresses.
+  - **New recipients start on the alerts that cost money or hide a problem**, and not on the chatty
+    one. "A payment couldn't be started" fires every time a card is refused, so on a bad afternoon
+    it is dozens of messages — it is there to tick, not to be opted into by surprise.
+  - **Your existing settings are carried over exactly.** Every address you had saved becomes a
+    recipient, subscribed to precisely the alerts it was already on. An address you had used for
+    three alerts becomes **one** row with those three ticked, not three copies. A phone number that
+    was sitting in a box with WhatsApp switched *off* stays off — turning it on for you would be a
+    change you didn't ask for. Nothing to do after updating.
+  - The bottom row shows where each alert actually ends up, and says **"nowhere"** in plain words for
+    any alert nothing is ticked for.
+- **Send to a WhatsApp group, not just to numbers.** Pick from the groups you approved in
+  OpenMasjidOS → Settings → WhatsApp → Groups. One message reaches everyone in the group, which is
+  both faster and far safer for your number than messaging ten people one at a time — so if you
+  want a handful of people told, a group is the better way to do it.
+  - **You choose, per group, whether donor names are included.** Two alerts name a person — "a
+    donation was refunded" and "a donor stopped their monthly donation". Off (the default for a new
+    group) they still say the amount, the kiosk and the fund, just not who. That default is
+    deliberate: **everyone in a WhatsApp group can see every other member's phone number**, so a
+    refund notice in a parents' group tells the whole group who asked for their money back. For a
+    three-person trustees group you may well want the name — hence the switch. Individual numbers
+    and email addresses are unaffected and still include names, exactly as before.
+  - A group that you un-approve in OpenMasjidOS is refused with a clear reason rather than failing
+    quietly, and the screen distinguishes "you haven't approved any groups yet" from "we couldn't
+    read your groups just now" — one is a thing to go and do, the other is a thing to retry.
+- **Phone numbers are entered properly now: pick the country, type the number.** The number formats
+  itself as you type — `(555) 010-1234` — and examples throughout are American. Choosing the country
+  from the list means the country code is always right, which was the one thing the old single box
+  would refuse a number for, and only told you after you pressed save. Your existing numbers are
+  unchanged and are shown back to you formatted.
+- **You decide how many WhatsApp messages the kiosk may send — per hour and per day.** The old limit
+  was one message per kind of alert every **thirty minutes**, which was far too tight: a card reader
+  flapping on a Friday would tell you once and then go quiet. The new defaults are **20 an hour and
+  100 a day**, and both are yours to change in Settings → Notifications, along with how long to wait
+  before repeating the same alert (2 minutes by default, and you can turn that off).
+  - The screen shows how many have gone this hour and today, so the numbers you pick are informed.
+  - **There is still a ceiling, and it is on purpose.** WhatsApp goes through the masjid's own
+    number, a ban attaches to that number, and it cannot be undone — it is the one thing here nobody
+    can fix afterwards. Anything held back is counted and reported on the next message that goes, so
+    it is never silent. A test message is never held back.
+  - **Email and OpenMasjidOS alerts are not limited and never were.** They carry no such risk.
+  - The count now survives a restart. It was previously kept in memory, which was fine for a
+    half-hour gap and would have made a *daily* limit close to meaningless.
+- **You can see what happened to each recipient's last WhatsApp**, on their own row — sent, queued,
+  or refused with the reason in plain words. Previously there was one status for the whole alert,
+  which stopped meaning anything as soon as an alert could go to more than one place.
+
 - **Ask the kiosk how it's doing from WhatsApp.** OpenMasjidOS can now take admin commands sent to
   the masjid's own WhatsApp number, and the kiosk answers three of them. That matters for a kiosk
   more than for most apps: it is unattended hardware in a lobby, and when a card reader stops

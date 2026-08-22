@@ -17,10 +17,42 @@ import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { config } from './config';
 import { makeLog } from './logger';
-import { ALERT_IDS, defaultRoutes, sanitizeRoute, type AlertId, type AlertRoute, type AlertRoutes } from './alerts';
+import {
+  ALERT_IDS,
+  DEFAULT_PACING,
+  addressLooksValid,
+  canonicalAddress,
+  defaultRoutes,
+  isAlertId,
+  isRecipientKind,
+  migrateLegacyRoutes,
+  pruneLedger,
+  sanitizePacing,
+  sanitizeRecipient,
+  sanitizeRoute,
+  type AlertId,
+  type AlertRecipient,
+  type AlertRoute,
+  type AlertRoutes,
+  type LegacyAlertRoute,
+  type WhatsAppLedger,
+  type WhatsAppPacing,
+} from './alerts';
 import type { Cred } from './auth';
 
 const log = makeLog('store');
+
+/**
+ * How many recipients an admin may add.
+ *
+ * Not a technical limit — the list is a small JSON blob and could hold hundreds. It is a WhatsApp
+ * one: every individual number on this list is a separate outbound message per alert, and messaging
+ * many individuals is, in the platform's own words, "the riskiest thing this number can do". A
+ * masjid that needs to reach thirty people should reach them through one GROUP, which is a single
+ * send. Twenty-four rows is comfortably more than any masjid needs for the former and leaves plenty
+ * of room for the latter.
+ */
+export const MAX_ALERT_RECIPIENTS = 24;
 
 /** Drop undefined values so a partial update never overwrites a field with nothing. */
 function clean<T extends object>(obj: T): Partial<T> {
@@ -288,6 +320,9 @@ export interface WhatsAppSendRecord {
   reason: string;
   /** How many alerts of this kind our own pacing gate held back before this one. */
   suppressed: number;
+  /** Which alert this message was for. Recorded because these are now keyed by RECIPIENT, so the
+   *  row on the settings screen has to be able to say what the last message was about. */
+  alertId: string;
 }
 
 export interface TuitionOutboxRow {
@@ -853,7 +888,7 @@ export class Store {
 
   // ── Where each admin alert goes (see alerts.ts) ─────────────────────────────
   /** Stored per alert, merged over the defaults on read — so an alert added in a later release
-   *  arrives at its default (OS on, WhatsApp off) rather than missing from a saved blob. */
+   *  arrives at its default (relay on) rather than missing from a saved blob. */
   getAlertRoutes(): AlertRoutes {
     const saved = this.getJson<Partial<Record<string, Partial<AlertRoute>>>>('alert_routes', {});
     const out = defaultRoutes();
@@ -872,6 +907,145 @@ export class Store {
   }
 
   /**
+   * The recipient list: one row per person or group, each carrying the alerts they hear about.
+   *
+   * THE MIGRATION IS THE INTERESTING PART. Before 0.12.0-dev.10 each alert held a single email and
+   * a single phone number, so an upgrade has to turn "these six alerts each had an address in a
+   * box" into "these addresses are subscribed to these alerts" without losing a single one. It runs
+   * exactly once, marked by `alert_recipients_migrated`, and is driven by [migrateLegacyRoutes] so
+   * the grouping rule is unit-tested rather than buried in a method.
+   *
+   * The marker is separate from the list being empty: an admin who deliberately removes every
+   * recipient must not have the old ones resurrected on the next read.
+   */
+  getAlertRecipients(): AlertRecipient[] {
+    if (!this.getRaw('alert_recipients_migrated')) this.migrateAlertRecipients();
+    const saved = this.getJson<{ list?: unknown[] }>('alert_recipients', {});
+    const list = Array.isArray(saved.list) ? saved.list : [];
+    const out: AlertRecipient[] = [];
+    for (const raw of list) {
+      if (!raw || typeof raw !== 'object') continue;
+      const r = raw as Partial<AlertRecipient>;
+      if (typeof r.id !== 'string' || !r.id) continue;
+      if (!isRecipientKind(r.kind)) continue;
+      const address = canonicalAddress(r.kind, typeof r.address === 'string' ? r.address : '');
+      if (!address) continue;
+      const base: AlertRecipient = {
+        id: r.id.slice(0, 40),
+        kind: r.kind,
+        address,
+        label: '',
+        alerts: [],
+        // An older row written before this field existed behaves as it did then: names included.
+        includeNames: r.includeNames !== false,
+      };
+      out.push(sanitizeRecipient({ label: r.label, alerts: r.alerts, includeNames: base.includeNames }, base));
+    }
+    return out;
+  }
+
+  private writeAlertRecipients(list: AlertRecipient[]): void {
+    this.setRaw('alert_recipients', JSON.stringify({ list: list.slice(0, MAX_ALERT_RECIPIENTS) }));
+  }
+
+  /** Carry a pre-recipient-list install's addresses across. Runs once; see [getAlertRecipients]. */
+  private migrateAlertRecipients(): void {
+    const legacy = this.getJson<Partial<Record<string, Partial<LegacyAlertRoute>>>>('alert_routes', {});
+    const { routes, recipients } = migrateLegacyRoutes(legacy);
+    // Rewrite the routes blob in the new (relay-only) shape, keeping each alert's own `os` value.
+    this.setRaw('alert_routes', JSON.stringify(routes));
+    this.writeAlertRecipients(recipients.map((r) => ({ ...r, id: rid('rcp') })));
+    this.setRaw('alert_recipients_migrated', new Date().toISOString());
+  }
+
+  /** Add one. Returns null when the address is already on the list — the same inbox or number
+   *  subscribed twice would simply double every message it gets. */
+  addAlertRecipient(draft: Omit<AlertRecipient, 'id'>): AlertRecipient | null {
+    const list = this.getAlertRecipients();
+    if (list.length >= MAX_ALERT_RECIPIENTS) return null;
+    const address = canonicalAddress(draft.kind, draft.address);
+    if (!address || !addressLooksValid(draft.kind, address)) return null;
+    if (list.some((r) => r.kind === draft.kind && r.address === address)) return null;
+    const row = sanitizeRecipient(
+      { label: draft.label, alerts: draft.alerts, includeNames: draft.includeNames },
+      { id: rid('rcp'), kind: draft.kind, address, label: '', alerts: [], includeNames: draft.includeNames },
+    );
+    this.writeAlertRecipients([...list, row]);
+    return row;
+  }
+
+  updateAlertRecipient(id: string, patch: Partial<AlertRecipient>): AlertRecipient | null {
+    const list = this.getAlertRecipients();
+    const i = list.findIndex((r) => r.id === id);
+    if (i < 0) return null;
+    const next = sanitizeRecipient(patch, list[i]);
+    // Changing an address onto one already present would create the duplicate `add` refuses.
+    if (next.address !== list[i].address && list.some((r, j) => j !== i && r.kind === next.kind && r.address === next.address)) {
+      return null;
+    }
+    const copy = [...list];
+    copy[i] = next;
+    this.writeAlertRecipients(copy);
+    return next;
+  }
+
+  removeAlertRecipient(id: string): boolean {
+    const list = this.getAlertRecipients();
+    const next = list.filter((r) => r.id !== id);
+    if (next.length === list.length) return false;
+    this.writeAlertRecipients(next);
+    // Their delivery record goes with them — it is about a row that no longer exists.
+    const outcomes = this.getWhatsAppOutcomes();
+    if (outcomes[id]) {
+      delete outcomes[id];
+      this.setRaw('whatsapp_outcomes', JSON.stringify(outcomes));
+    }
+    return true;
+  }
+
+  /** How hard we are allowed to lean on the masjid's WhatsApp number. See alerts.ts. */
+  getWhatsAppPacing(): WhatsAppPacing {
+    const s = this.getJson<Partial<WhatsAppPacing>>('whatsapp_pacing', {});
+    return sanitizePacing(s, { ...DEFAULT_PACING });
+  }
+
+  setWhatsAppPacing(patch: Partial<WhatsAppPacing>): WhatsAppPacing {
+    const next = sanitizePacing(patch, this.getWhatsAppPacing());
+    this.setRaw('whatsapp_pacing', JSON.stringify(next));
+    return next;
+  }
+
+  /**
+   * The pacing ledger — every WhatsApp handover in the last day.
+   *
+   * PERSISTED, deliberately. The first version of the gate kept this in memory and argued that a
+   * restart letting one extra message through was the right direction to fail. That holds for a
+   * burst gap measured in minutes; it does not hold for a DAILY cap, which an in-memory ledger
+   * resets on every deploy — and on the dev channel that is several times an afternoon, so the
+   * limit the admin set would have been close to fiction.
+   */
+  getWhatsAppLedger(): WhatsAppLedger {
+    const s = this.getJson<{ sends?: unknown; perAlert?: unknown }>('whatsapp_ledger', {});
+    const sends = Array.isArray(s.sends) ? s.sends.filter((n): n is number => typeof n === 'number' && n > 0) : [];
+    const perAlert: WhatsAppLedger['perAlert'] = {};
+    if (s.perAlert && typeof s.perAlert === 'object') {
+      for (const [k, v] of Object.entries(s.perAlert as Record<string, unknown>)) {
+        if (!isAlertId(k) || !v || typeof v !== 'object') continue;
+        const e = v as { lastSentAt?: unknown; suppressed?: unknown };
+        perAlert[k] = {
+          lastSentAt: Math.max(0, Math.trunc(Number(e.lastSentAt) || 0)),
+          suppressed: Math.max(0, Math.trunc(Number(e.suppressed) || 0)),
+        };
+      }
+    }
+    return pruneLedger({ sends, perAlert }, Date.now());
+  }
+
+  setWhatsAppLedger(ledger: WhatsAppLedger): void {
+    this.setRaw('whatsapp_ledger', JSON.stringify(pruneLedger(ledger, Date.now())));
+  }
+
+  /**
    * The last thing that happened to a WhatsApp message for each alert.
    *
    * WHY THIS IS PERSISTED. Before OpenMasjidOS 0.51.1 there was no way to learn the fate of a
@@ -880,39 +1054,47 @@ export class Store {
    * than us. Now the platform can tell us, and the only useful place to put that answer is in front
    * of the admin on the screen where they turned the channel on.
    *
-   * Kept in the kv table rather than its own: it is one small record per alert, overwritten each
+   * Kept in the kv table rather than its own: it is one small record per recipient, overwritten each
    * time, and nothing reads it but the settings screen.
    *
+   * KEYED BY RECIPIENT, not by alert (0.12.0-dev.10). It used to be one record per alert id, which
+   * was unambiguous only while an alert had exactly one destination. With a recipient list, "the
+   * last WhatsApp for this alert" could mean any of five rows, and the one thing an admin actually
+   * wants to know is whether the message to THIS number arrived. The alert id rides along in the
+   * record so the row can still say what the message was about.
+   *
    * NO MESSAGE TEXT AND NO PHONE NUMBER is stored here — a state, a platform-authored reason, and a
-   * timestamp. The number already lives in the route; the text is not ours to keep.
+   * timestamp. The number already lives in the recipient row; the text is not ours to keep.
    */
   getWhatsAppOutcomes(): Record<string, WhatsAppSendRecord> {
     const saved = this.getJson<Record<string, Partial<WhatsAppSendRecord>>>('whatsapp_outcomes', {});
     const out: Record<string, WhatsAppSendRecord> = {};
-    for (const id of ALERT_IDS) {
-      const r = saved?.[id];
-      if (!r || typeof r !== 'object') continue;
+    for (const [key, r] of Object.entries(saved ?? {})) {
+      if (!key || key.length > 40 || !r || typeof r !== 'object') continue;
       const state = r.state;
       if (state !== 'queued' && state !== 'sent' && state !== 'failed' && state !== 'expired' && state !== 'refused') continue;
-      out[id] = {
+      out[key] = {
         state,
         at: Number(r.at) || 0,
         messageId: typeof r.messageId === 'string' ? r.messageId.slice(0, 128) : '',
         reason: typeof r.reason === 'string' ? r.reason.slice(0, 200) : '',
         suppressed: Math.max(0, Math.trunc(Number(r.suppressed) || 0)),
+        alertId: typeof r.alertId === 'string' && isAlertId(r.alertId) ? r.alertId : '',
       };
     }
     return out;
   }
 
-  setWhatsAppOutcome(id: AlertId, rec: WhatsAppSendRecord): void {
+  /** `key` is a RECIPIENT id. */
+  setWhatsAppOutcome(key: string, rec: WhatsAppSendRecord): void {
     const all = this.getWhatsAppOutcomes();
-    all[id] = {
+    all[key] = {
       state: rec.state,
       at: rec.at || Date.now(),
       messageId: (rec.messageId || '').slice(0, 128),
       reason: (rec.reason || '').slice(0, 200),
       suppressed: Math.max(0, Math.trunc(rec.suppressed || 0)),
+      alertId: rec.alertId || '',
     };
     this.setRaw('whatsapp_outcomes', JSON.stringify(all));
   }

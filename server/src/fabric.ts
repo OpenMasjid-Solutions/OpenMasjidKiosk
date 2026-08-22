@@ -350,6 +350,115 @@ export function clearWhatsAppCache(): void {
   waCache = null;
 }
 
+/** One WhatsApp group the admin approved for apps to post into. `label` is the admin's own
+ *  nickname for it — the group's real WhatsApp subject is deliberately never sent to us, so this is
+ *  the only name there is and it should be shown as-is. */
+export interface WhatsAppGroup {
+  id: string;
+  label: string;
+}
+
+/** `ok: false` distinguishes "we could not ask" from "nothing is approved" — see below. */
+export type WhatsAppGroupList = { ok: true; groups: WhatsAppGroup[] } | { ok: false; reason: string };
+
+/**
+ * The groups this masjid's admin approved for apps to post into.
+ *
+ * The list is GLOBAL to the box, not per-app: every app with the `whatsapp` capability sees the same
+ * approved set, and there is no per-app grant. An id we did not get from here is refused `403`, so
+ * the admin panel offers this list as a picker rather than a text box.
+ *
+ * A 200 WHOSE BODY IS THE WRONG SHAPE IS A FAILURE, NOT AN EMPTY LIST. Reading a malformed answer as
+ * "no groups approved" is how an admin's still-live subscription would silently look withdrawn, and
+ * the screen would tell them to go and re-approve a group that was never un-approved. Same reason
+ * `reason` exists at all: "couldn't ask" and "none approved" need different words on the screen.
+ *
+ * Fails soft — never throws. Logs the STATUS only: the body carries the masjid's own group
+ * nicknames, which are theirs and not ours to write into a log file.
+ */
+export async function fabricWhatsAppGroups(): Promise<WhatsAppGroupList> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { ok: false, reason: 'no-fabric' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp/groups`, {
+      headers: { 'x-openmasjid-app-secret': config.omosAppSecret },
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) {
+      // 404 = a platform too old to have groups; 403 = we lack the `whatsapp` capability. Neither is
+      // an error worth alarming anyone about, so this is one line at warn with no body.
+      log.warn(`whatsapp groups unavailable (${res.status})`);
+      return { ok: false, reason: res.status === 404 ? 'not-supported' : `http_${res.status}` };
+    }
+    const j = (await res.json().catch(() => null)) as { groups?: unknown } | null;
+    if (!j || !Array.isArray(j.groups)) return { ok: false, reason: 'bad-shape' };
+    const groups = j.groups
+      .filter((g): g is Record<string, unknown> => !!g && typeof g === 'object' && typeof (g as { id?: unknown }).id === 'string')
+      .map((g) => ({
+        id: String(g.id).slice(0, 64),
+        // Fall back to the id rather than an empty row: a group with no nickname is still pickable.
+        label: typeof g.label === 'string' && g.label ? g.label.slice(0, 120) : String(g.id),
+      }));
+    return { ok: true, groups };
+  } catch (err) {
+    log.debug(`whatsapp groups lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { ok: false, reason: 'unreachable' };
+  }
+}
+
+/**
+ * Post ONE message into ONE approved group.
+ *
+ * A SEPARATE FUNCTION from [fabricWhatsApp], deliberately, and the separation is the enforcement
+ * rather than a note in a document — the same wall OpenMasjidStudents draws for the same reason.
+ * The platform's rule is that a group post is for genuine announcements and must never carry one
+ * person's own business, "because their fees are not the other 199 members'". Here that is a donor:
+ * everyone in a WhatsApp group can see every other member's phone number, so a refund notice posted
+ * to a group of forty tells forty people who asked for their money back. [fabricWhatsApp] has no
+ * parameter that could name a group, so a per-person message cannot reach one even by mistake.
+ *
+ * (Whether a group post names the donor at all is the admin's per-group choice — see
+ * `AlertRecipient.includeNames`. This function's job is only to make the two channels distinct.)
+ *
+ * The wire shape is the same endpoint with `group` in place of `to`. Sending BOTH is a 400 by
+ * design, which is another reason these are two functions and not one with an optional field.
+ */
+export async function fabricWhatsAppGroup(groupId: string, text: string): Promise<{ queued: boolean; id?: string; reason?: string }> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { queued: false, reason: 'no-fabric' };
+  if (!groupId.trim() || !text.trim()) return { queued: false, reason: 'empty' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-openmasjid-app-secret': config.omosAppSecret },
+      body: JSON.stringify({ group: groupId, text }),
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) {
+      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      // A 403 here means specifically "that group is not approved (any more)" — an authorisation
+      // answer, not a malformed request. The settings screen shows the sentence so an admin
+      // re-approves the group rather than hunting for a bug in the message.
+      log.warn(`whatsapp GROUP post REFUSED (${res.status}): ${j.error ?? '(no reason given)'}`);
+      return { queued: false, reason: j.error || `http_${res.status}` };
+    }
+    const j = (await res.json().catch(() => ({}))) as { queued?: boolean; id?: string; error?: string };
+    const id = typeof j.id === 'string' && /^[\w.:-]{1,128}$/.test(j.id) ? j.id : undefined;
+    return j.queued === true ? { queued: true, id } : { queued: false, reason: j.error || 'refused' };
+  } catch (err) {
+    log.debug(`whatsapp group post failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { queued: false, reason: 'unreachable' };
+  }
+}
+
 /**
  * Queue one WhatsApp message to one person.
  *

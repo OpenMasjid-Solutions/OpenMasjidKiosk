@@ -129,34 +129,16 @@ export const logout = () => request<{ ok: true }>('/api/logout', { method: 'POST
 
 export const sendTestNotification = () => request<NotifyTestResult>('/api/admin/notify-test', { method: 'POST' });
 
-// ── Notifications: where each alert goes ─────────────────────────────────────
-// The platform's own alerts matrix stays underneath this (that is the `os` flag) — these settings
-// add a direct email address and a WhatsApp number PER ALERT, because "the reader is offline" and
-// "a donation was refunded" are usually two different people.
+// ── Notifications: who gets told what ──────────────────────────────────
+// The platform's own alerts matrix stays underneath this (that is the `os` flag, per alert). On top
+// of it sits a RECIPIENT LIST crossed with the alert catalogue — one row per person or group, one
+// column per alert — because "the reader is offline" and "a donation was refunded" are usually two
+// different people, and before this there was nowhere to put the second one.
 
-/** Where one alert goes. All three are additive; none is a fallback for another. */
-export interface AlertRoute {
-  /** Relay via OpenMasjidOS → its alerts matrix (email/webhook/off). On by default. */
-  os: boolean;
-  /** Also email this address directly. '' = don't. */
-  email: string;
-  /** Also send a WhatsApp. Off by default. */
-  whatsapp: boolean;
-  /** Digits, international, no plus. '' = nowhere, so `whatsapp: true` alone sends nothing. */
-  phone: string;
-}
+export type RecipientKind = 'email' | 'phone' | 'group';
 
-/** What the route will ACTUALLY do once blank addresses are taken into account. */
-export interface AlertSummary {
-  os: boolean;
-  email: boolean;
-  whatsapp: boolean;
-  /** Nothing at all is switched on — worth saying out loud on the screen. */
-  silent: boolean;
-}
-
-/** What became of the last WhatsApp for one alert. `refused` is the platform rejecting the message
- *  outright with a reason; the rest are its own delivery states. Null until one has been tried. */
+/** What became of the last WhatsApp to one RECIPIENT. `refused` is the platform rejecting the
+ *  message outright with a reason; the rest are its own delivery states. Null until one was tried. */
 export interface WhatsAppSendRecord {
   state: 'queued' | 'sent' | 'failed' | 'expired' | 'refused';
   at: number;
@@ -164,15 +146,70 @@ export interface WhatsAppSendRecord {
   reason: string;
   /** How many alerts of this kind our own pacing held back before this one went. */
   suppressed: number;
+  /** Which alert the message was about. */
+  alertId: string;
+}
+
+export interface AlertRecipient {
+  id: string;
+  kind: RecipientKind;
+  /** Lowercased email, digits-only international number, or an approved WhatsApp group id. */
+  address: string;
+  label: string;
+  /** The alert ids this recipient hears about. */
+  alerts: string[];
+  /** Include the donor's name and email in the body? Groups start with this OFF — see the tooltip
+   *  on the screen, and `AlertRecipient.includeNames` on the server for the reasoning. */
+  includeNames: boolean;
+  lastWhatsApp: WhatsAppSendRecord | null;
+}
+
+/** What one alert will ACTUALLY do, once unusable addresses are discounted. */
+export interface AlertDelivery {
+  os: boolean;
+  emails: number;
+  phones: number;
+  groups: number;
+  /** Relay off and nobody subscribed — worth saying out loud on the screen. */
+  silent: boolean;
 }
 
 export interface AlertSetting {
   id: string;
   label: string;
   description: string;
-  route: AlertRoute;
-  summary: AlertSummary;
-  lastWhatsApp: WhatsAppSendRecord | null;
+  /** This alert's body names a donor, so the per-group "include names" switch is relevant to it. */
+  carriesDonorIdentity: boolean;
+  os: boolean;
+  delivery: AlertDelivery;
+}
+
+/** A WhatsApp group the admin approved in OpenMasjidOS. `label` is their own nickname for it and is
+ *  the only name we are given — show it as-is. */
+export interface WhatsAppGroup {
+  id: string;
+  label: string;
+}
+
+/** How hard we may lean on the masjid's WhatsApp number. Theirs to set. */
+export interface WhatsAppPacing {
+  /** Minimum minutes between two WhatsApps for the SAME alert. 0 = no burst gap. */
+  minGapMinutes: number;
+  maxPerHour: number;
+  maxPerDay: number;
+}
+
+export interface PacingLimits {
+  minGapMinutes: { min: number; max: number };
+  maxPerHour: { min: number; max: number };
+  maxPerDay: { min: number; max: number };
+}
+
+export interface PacingUsage {
+  lastHour: number;
+  lastDay: number;
+  maxPerHour: number;
+  maxPerDay: number;
 }
 
 export interface WhatsAppAvailability {
@@ -185,26 +222,50 @@ export interface WhatsAppAvailability {
 
 export interface AlertsView {
   alerts: AlertSetting[];
+  recipients: AlertRecipient[];
+  maxRecipients: number;
+  groups: WhatsAppGroup[];
+  /** Why the group list is empty, when it is. '' means we asked and none are approved — which is a
+   *  different thing from not having been able to ask, and the screen says so. */
+  groupsProblem: string;
+  pacing: WhatsAppPacing;
+  pacingLimits: PacingLimits;
+  usage: PacingUsage;
   whatsapp: WhatsAppAvailability;
   embedded: boolean;
   emailStatus: string;
 }
 
 export const getAlerts = () => request<AlertsView>('/api/admin/alerts');
-export const setAlertRoute = (id: string, patch: Partial<AlertRoute>) =>
-  request<AlertsView>(`/api/admin/alerts/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(patch) });
-export const refreshWhatsApp = () =>
-  request<{ whatsapp: WhatsAppAvailability }>('/api/admin/alerts/whatsapp/refresh', { method: 'POST' });
+
+/** The platform relay for one alert — the only setting still held per alert. */
+export const setAlertRelay = (id: string, os: boolean) =>
+  request<AlertsView>(`/api/admin/alerts/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ os }) });
+
+export const addAlertRecipient = (kind: RecipientKind, address: string, label: string) =>
+  request<AlertsView>('/api/admin/alerts/recipients', { method: 'POST', body: JSON.stringify({ kind, address, label }) });
+
+export const updateAlertRecipient = (id: string, patch: { label?: string; alerts?: string[]; includeNames?: boolean }) =>
+  request<AlertsView>(`/api/admin/alerts/recipients/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+
+export const removeAlertRecipient = (id: string) =>
+  request<AlertsView>(`/api/admin/alerts/recipients/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+export const setWhatsAppPacing = (patch: Partial<WhatsAppPacing>) =>
+  request<AlertsView>('/api/admin/alerts/pacing', { method: 'PUT', body: JSON.stringify(patch) });
+
+export const refreshWhatsApp = () => request<AlertsView>('/api/admin/alerts/whatsapp/refresh', { method: 'POST' });
 
 export interface AlertTestResult {
   os: boolean;
-  email: boolean;
-  whatsapp: boolean;
+  /** How many emails actually went. */
+  email: number;
+  /** How many WhatsApps were accepted for delivery. */
+  whatsapp: number;
   reasons: string[];
   delivered: boolean;
 }
 export const sendTestAlert = () => request<AlertTestResult>('/api/admin/test-alert', { method: 'POST' });
-
 // ── Payments (in-app Stripe setup) ────────────────────────────────────────────
 // The Stripe SECRET key never reaches the browser: the server holds it in memory (fetched
 // from the OpenMasjidOS Fabric per process start) and only ever tells us *about* it

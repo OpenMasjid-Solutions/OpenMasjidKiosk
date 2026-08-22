@@ -559,29 +559,43 @@ re-authorised every turn, so a permission removed mid-conversation takes effect 
 A stray or unrecognized token must read as a **fresh turn**, never as an answer to a question we did
 not ask — the route blanks anything that is not one of ours, and a test covers it.
 
-### Sending: per-alert routing lives in OUR settings (`whatsapp: true`)
+### Sending: the recipient list is OURS (`whatsapp: true`)
 
 The platform's alerts matrix has **no WhatsApp column for apps**, on purpose — it routes to the
 admin's single number and the platform cannot know which person a given app's alert is about. So
 recipient choice is ours, and lives in **Settings → Notifications** (`server/src/alerts.ts`,
-`web/src/alerts.tsx`). Each declared alert carries an `AlertRoute`:
+`web/src/alerts.tsx`).
 
-| Field | Default | What it does |
-|---|---|---|
-| `os` | **true** | Relay via `POST /api/fabric/alert` → the platform's own matrix (email/webhook/off) |
-| `email` | `''` | **Also** email this address directly, via the Fabric email provider |
-| `whatsapp` | **false** | **Also** send a WhatsApp |
-| `phone` | `''` | Where to. Digits, international, no plus |
+**The model is a RECIPIENT LIST crossed with the alert catalogue** (0.12.0-dev.10) — one row per
+person or group, one column per alert, a checkbox at each intersection. This is the shape
+OpenMasjidStudents uses for the same job (`alert_recipients` there), and it replaced a per-alert
+`AlertRoute` that held exactly **one** email and **one** phone: a masjid with a treasurer *and* a
+caretaker had to choose, and the same address had to be retyped into every alert it wanted.
 
-**The three are ADDITIVE and each fails soft independently.** An alert exists to tell someone
-something is wrong, so one channel being broken must never suppress another, and none may disturb
-the donation, refund or reader event that raised it.
+| Recipient field | Notes |
+|---|---|
+| `kind` | `email` · `phone` (one WhatsApp number) · `group` (an approved WhatsApp group) |
+| `address` | lowercased email · digits-only international number · group JID from the platform |
+| `label` | optional display name. **The address is the identity** — a row is an address, not an account, and adding one grants no access to anything |
+| `alerts` | which alert ids this recipient hears about |
+| `includeNames` | carry the donor's name/email? **`false` by default for a group** — see below |
 
-**The defaults are the load-bearing part.** `os: true` everywhere means an upgrade changes nothing —
-nobody has to visit the new screen to keep the alerts they rely on. `whatsapp: false` means the new
-channel is opt-in per alert, which is right for a channel that spends the masjid's own number's
-reputation. Both are pinned by tests, as is "an alert added in a later release arrives at its
-default rather than missing from the saved blob".
+**Only `os` is still per alert** (`AlertRoute { os }`), because the relay has no address of its own.
+`os: true` everywhere remains the load-bearing default: an upgrade changes nothing and nobody has to
+visit the screen to keep the alerts they rely on. `ALERT_META[].defaultOn` decides what a *new*
+recipient starts ticked — the alerts that cost money or hide a problem, and deliberately **not**
+`payment-failed`, which fires per refused PaymentIntent and would teach a new recipient to filter
+the lot to a folder.
+
+**Every channel is ADDITIVE and fails soft independently.** An alert exists to tell someone something
+is wrong, so one channel being broken must never suppress another, and none may disturb the donation,
+refund or reader event that raised it.
+
+**The migration must not lose an address.** `migrateLegacyRoutes` groups the old per-alert boxes by
+address into one recipient per distinct address, subscribed to exactly the alerts it was on. A phone
+whose `whatsapp` toggle was **off** is not migrated on — turning it on would be a change nobody
+asked for, on the one channel that can cost a masjid its number. Runs once, marked by
+`alert_recipients_migrated`, so an admin who deliberately empties the list does not get it back.
 
 **Every alert goes through `raiseAlert`/`alert()` in `index.ts` — never `fabricAlert` directly**, or
 the admin's choices are bypassed. Including the in-app **Send test**, which follows the same routing
@@ -590,10 +604,36 @@ on purpose: a test that took a different path would prove nothing about their co
 **A phone number with no country code is REFUSED, not guessed at.** The platform refuses one rather
 than guessing, and so must we — a UK admin typing `07700 900123` means +44, but assuming that would
 one day message a stranger in another country. A refused number does not wipe the saved one (a box
-that empties itself reads as the app losing it, and they retype the same number).
+that empties itself reads as the app losing it, and they retype the same number). The admin panel now
+supplies the country code **structurally**, from a dropdown (`web/src/phone.ts`, whose as-you-type
+mask is ported from Students), so the strict rule never fires in ordinary use — and its rules did
+not soften to achieve that.
 
-`routeSummary()` reports what a route will *actually* do, so "WhatsApp on" with no number shows as
-sending nothing rather than looking covered.
+`alertDelivery()` reports what an alert will *actually* do, so an alert with the relay off and nobody
+subscribed reads as **"nowhere"** rather than looking covered.
+
+### Groups: one send, many readers — and a privacy rule that is not ours to relax
+
+`GET /api/fabric/whatsapp/groups` → `{groups:[{id,label}]}`, then send with **`group` in place of
+`to`** (both, or neither, is a `400`). `label` is the admin's own nickname and the only name we are
+given — show it as-is. The list is **global to the box**, not per-app, and an id not from it is
+refused `403`, so our admin panel offers a **picker, never a text box**. An empty list means "none
+approved"; a *failed* read means "we could not ask", and the screen must say those differently.
+
+**`fabricWhatsAppGroup` is a SEPARATE function from `fabricWhatsApp`, and that separation is the
+enforcement** — the same wall Students draws. `fabricWhatsApp` has no parameter that could name a
+group, so a per-person message cannot reach one by mistake.
+
+**Why `includeNames` defaults to `false` for a group.** The platform's rule is blunt: *"A group post
+is for genuine announcements. Never use one to tell a family about their own fees: their business is
+not the other 199 members'."* And **everyone in a WhatsApp group can see every other member's phone
+number**. Two of our alerts name a human (`donation-refunded`, `monthly-cancelled`), so a refund
+notice in a parents' group tells the whole group who asked for their money back. A three-person
+trustees group is a different case, which is why this is the admin's switch rather than a hard rule.
+
+**The redacted body is built by the CALL SITE**, passed as `raiseAlert`'s fifth argument, never
+derived by regexing a name back out of finished prose — that is the version that works on the
+examples you tried and leaks on the one you did not. `bodyForRecipient` just picks.
 
 ### The platform stopped pacing WhatsApp (OpenMasjidOS 0.51.1) — so we do
 
@@ -620,17 +660,43 @@ alert that made it matter**: it fires on every PaymentIntent Stripe refuses and 
 so expired keys on a Friday meant one message per person who tried to give, for the whole of jummah.
 The 60-second cooldown used to absorb exactly that.
 
-So pacing is ours: **`whatsappGate` in `alerts.ts`** — one WhatsApp per alert id per 30 minutes, with
-the number held back carried on the next message so suppression is never silent. `test` is exempt
-(an admin is watching the screen). State is in memory, so a restart lets one extra through — the
-right direction to fail, since a duplicate alert costs nothing and a swallowed one costs the thing
-the alert was about.
+So pacing is ours — but **it is the masjid's to set, not ours to impose** (`WhatsAppPacing` in
+`alerts.ts`, editable in Settings → Notifications). Three knobs, each doing a different job:
+
+| Setting | Default | What it bounds |
+|---|---|---|
+| `maxPerHour` | **20** | the budget that actually protects the number. Counts **messages**, not alerts |
+| `maxPerDay` | **100** | same, over a day |
+| `minGapMinutes` | **2** | a burst of ONE repeating alert, per alert id, so a Stripe outage cannot spend the whole hour in ten seconds while a reader-offline waits behind it |
+
+**The first version of this gate was one message per alert per THIRTY minutes, and that was wrong.**
+Two an hour is below the platform's own retired caps (12/hour, 60/day), and low enough that a
+caretaker watching a reader flap simply would not be told. The platform's contract also says plainly
+that an app is the wrong place for a hard ceiling: *"an app-level limiter cannot see the number's
+total traffic, which is the only number WhatsApp cares about."* So this is a backstop with generous
+defaults, and the numbers are the admin's (maintainer, 2026-08-21). Anything held back is counted and
+carried on the next message that gets through, so suppression is never silent. `test` is exempt from
+all three — an admin pressed a button and is watching the screen.
+
+**The ledger is PERSISTED** (`store.getWhatsAppLedger`), unlike the first version. In-memory was
+defensible for a 30-minute gap — a restart lets one extra through, which is the safe direction to
+fail. It is not defensible for a **daily** cap, which an in-memory ledger resets on every deploy, and
+on the dev channel that is several times an afternoon.
 
 **Ban risk attaches to the NUMBER**, that number is shared by every app on the box, and a blocked
 number cannot be recovered — the masjid loses the number their community reaches them on. It is the
-one failure in this app nobody can undo. Hence also: one message per call (never a loop over a
-roster), no retry around a `202` (it is already queued; retrying just duplicates), and the admin
-chooses recipients because we know who ours are and the platform does not.
+one failure in this app nobody can undo. Hence: no retry around a `202` (it is already queued;
+retrying just duplicates), and the admin chooses recipients because we know who ours are and the
+platform does not.
+
+**On "one message per call, never a loop over a roster"** — which this section used to state flatly.
+The *platform API* still takes exactly one recipient per call, and that has not changed. What did
+change is that we now fan one alert out to several of them, which is what a recipient list is for. The
+protection moved rather than disappearing: the budget is checked **before** the loop and charged only
+for what actually went out, individual recipients are capped (`MAX_ALERT_RECIPIENTS`), and the UI
+pushes an admin toward a **group** past a couple of numbers — one group send reaching thirty people is
+strictly safer for the number than thirty sends. When the budget cannot cover everyone, groups go
+first for that reason, and the shortfall is reported rather than truncated in silence.
 
 **Refusals are surfaced, not swallowed.** `POST /api/fabric/whatsapp` answers `400`/`403` with a
 plain sentence — an unapproved group, a number with no country code, an empty message, too many

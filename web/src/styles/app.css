@@ -857,23 +857,67 @@ button.status-pill:hover { filter: brightness(1.08); }
 }
 .color-hex[aria-invalid="true"] { box-shadow: inset 0 0 0 1px var(--color-danger); }
 
-/* ── Settings → Notifications (per-alert routing) ─────────────────────────── */
-/* One block per alert: the name and what it means, then the channels it can go to. The channels
-   wrap on a narrow screen rather than scrolling sideways, since this is often opened on a phone
-   while standing next to the kiosk that has just gone quiet. */
-.alert-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.9rem; }
-.alert-row { border: 1px solid var(--color-border); border-radius: 12px; padding: 0.85rem 0.9rem; background: var(--glass-bg-inset); }
-.alert-row__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
-.alert-row__desc { margin: 0.15rem 0 0; font-size: 0.85rem; }
-.alert-row__hint { margin: 0.55rem 0 0; font-size: 0.82rem; display: flex; align-items: center; gap: 0.35rem; }
-.alert-row__channels {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin-top: 0.7rem;
+/* ── Settings → Notifications (the recipient × alert matrix) ───────────── */
+/* A row is a destination, a column is an alert, and the checkbox at the intersection is the whole
+   setting. Same shape as OpenMasjidStudents' staff-alerts table, for the same reason: "who hears
+   about a refund?" should be one column to read down.
+
+   IT SCROLLS SIDEWAYS RATHER THAN WRAPPING, which is the opposite of what the per-alert blocks
+   here used to do, and the change is deliberate. A matrix that reflows loses the thing that makes
+   it readable — the alignment between a row and a column. On a phone the first column stays put
+   (`position: sticky`) so you can always see whose row you are ticking. */
+.mx-wrap { margin-top: 0.9rem; overflow-x: auto; border: 1px solid var(--color-border); border-radius: 12px; background: var(--glass-bg-inset); }
+.mx { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.mx th, .mx td { padding: 0.6rem 0.7rem; text-align: left; vertical-align: top; }
+.mx thead th { font-size: 0.72rem; letter-spacing: 0.03em; text-transform: uppercase; color: var(--color-ink-muted); font-weight: 600; border-block-end: 1px solid var(--color-border); }
+.mx tbody tr + tr th, .mx tbody tr + tr td { border-block-start: 1px solid var(--color-border); }
+
+/* Narrow enough that ten alerts fit without the table becoming absurd, wide enough that a label
+   wraps to two lines instead of one word per line. */
+.mx-head { min-width: 6.5rem; white-space: normal; }
+.mx-head__flag { display: block; margin-block-start: 0.2rem; font-size: 0.62rem; text-transform: none; letter-spacing: 0; color: var(--color-gold); font-weight: 500; }
+
+/* The identity column. Sticky so it survives a sideways scroll — a checkbox with no visible row
+   label is a coin flip. It needs its own background for that: a transparent sticky cell shows the
+   cells sliding under it. */
+.mx-who {
+  position: sticky; inset-inline-start: 0; z-index: 1;
+  min-width: 13rem; max-width: 20rem;
+  background: var(--color-surface-raised);
+  font-weight: 400;
 }
-.alert-ch { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
-.alert-ch span { display: inline-flex; align-items: center; gap: 0.3rem; }
-.alert-ch--wide { flex: 1 1 15rem; min-width: 0; }
-.alert-ch--wide .input { flex: 1 1 auto; min-width: 0; }
-.alert-ch__label { font-size: 0.82rem; color: var(--color-ink-muted); white-space: nowrap; }
-/* A disabled channel (no WhatsApp gateway on this server) should read as "not available here",
-   not as something the admin failed to fill in. */
-.alert-ch input:disabled, .alert-ch input:disabled + span { opacity: 0.5; cursor: not-allowed; }
+.mx thead .mx-who { z-index: 2; }
+.mx-who__name { display: flex; align-items: center; gap: 0.35rem; font-weight: 600; color: var(--color-ink); }
+.mx-who__sub { display: block; margin-block-start: 0.1rem; font-size: 0.78rem; color: var(--color-ink-faint); overflow-wrap: anywhere; }
+.mx-cell { text-align: center; }
+.mx-cell input[type="checkbox"] { cursor: pointer; }
+.mx-cell input[type="checkbox"]:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* The platform relay reads as a destination like any other, but it is not one the admin typed, so
+   it is tinted rather than listed among their own rows. */
+.mx-relay .mx-who { background: color-mix(in srgb, var(--color-primary) 7%, var(--color-surface-raised)); }
+/* The tally row: what each column actually adds up to. */
+.mx-foot .mx-who { background: var(--color-surface-raised); }
+.mx-foot td { padding-block: 0.5rem; }
+.mx-tally { font-size: 0.78rem; white-space: nowrap; }
+
+/* Per-group "include donor names". Indented under the row it belongs to so it reads as a property
+   of that group rather than another alert column. */
+.mx-names { display: flex; align-items: flex-start; gap: 0.35rem; margin-block-start: 0.4rem; font-size: 0.78rem; color: var(--color-ink-muted); }
+.mx-names small { display: block; }
+.mx-last { display: flex; align-items: center; gap: 0.3rem; margin-block-start: 0.4rem; font-size: 0.74rem; color: var(--color-ink-faint); overflow-wrap: anywhere; }
+
+/* Adding one. Wraps freely — unlike the matrix, there is no alignment here worth preserving. */
+.mx-add { margin-top: 0.85rem; padding: 0.85rem 0.9rem; border: 1px solid var(--color-border); border-radius: 12px; background: var(--glass-bg-inset); }
+.mx-add__kinds { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-block-end: 0.7rem; }
+.mx-add__row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.6rem; }
+.mx-add__row .field { margin: 0; }
+.mx-add__grow { flex: 1 1 14rem; min-width: 0; }
+.mx-add__grow .input { width: 100%; }
+.mx-add__hint { margin: 0.6rem 0 0; font-size: 0.8rem; line-height: 1.5; }
+
+/* WhatsApp limits. Three numbers and what they have been used for so far. */
+.mx-pacing { margin-top: 0.85rem; padding: 0.85rem 0.9rem; border: 1px solid var(--color-border); border-radius: 12px; background: var(--glass-bg-inset); }
+.mx-pacing__row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; }
+.mx-pacing__row .field { margin: 0; flex: 1 1 9rem; min-width: 0; }
+.mx-pacing__row .input { width: 100%; }
