@@ -350,6 +350,65 @@ export function clearWhatsAppCache(): void {
   waCache = null;
 }
 
+/** A period during which the masjid's WhatsApp link was dead but the platform had not yet noticed,
+ *  so messages were reported `sent` and never delivered. Epoch ms. */
+export interface WhatsAppSuspectWindow {
+  from: number;
+  to: number;
+  /** How many of OUR messages the platform reported sent inside it (scoped to this app). */
+  count: number;
+}
+
+/**
+ * Periods where a message we were told was `sent` may never have arrived (OpenMasjidOS 0.51.1-dev.12+).
+ *
+ * A masjid's WhatsApp session can expire on its own, the way WhatsApp Desktop signs itself out. The
+ * gateway kept accepting messages and reporting them sent for over a day. The platform now spots
+ * that within about ten minutes and holds messages instead — but the gap between the link dying and
+ * the platform noticing is unrecoverable, and the platform cannot resend from it because it deletes
+ * message contents the moment it hands them over. So it tells each app WHEN it was blind.
+ *
+ * READ THIS BEFORE CHANGING THE POLL INTERVAL. The platform returns a window only while its
+ * incident is still open — `clearWhatsAppIncident()` fires the moment an admin re-links the phone
+ * or releases the queue, and from then on this endpoint answers `{windows: []}` for ever. The
+ * window is therefore visible during the outage and gone the instant somebody fixes it, which is
+ * exactly when they would go looking. Anything we see must be PERSISTED on sight; there is no
+ * re-reading it later.
+ *
+ * Fails soft. A 404 is a platform too old to have the route — "no information", never an incident.
+ */
+export async function fabricWhatsAppSuspect(): Promise<{ ok: true; windows: WhatsAppSuspectWindow[] } | { ok: false; reason: string }> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { ok: false, reason: 'no-fabric' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp/suspect`, {
+      headers: { 'x-openmasjid-app-secret': config.omosAppSecret },
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) return { ok: false, reason: res.status === 404 ? 'not-supported' : `http_${res.status}` };
+    const j = (await res.json().catch(() => null)) as { windows?: unknown } | null;
+    // A 200 of the wrong shape is a failure, not "all clear". Reading a malformed answer as "no
+    // problem" is precisely the silence this endpoint exists to break.
+    if (!j || !Array.isArray(j.windows)) return { ok: false, reason: 'bad-shape' };
+    const windows = j.windows
+      .filter((w): w is Record<string, unknown> => !!w && typeof w === 'object')
+      .map((w) => ({
+        from: Math.trunc(Number(w.from) || 0),
+        to: Math.trunc(Number(w.to) || 0),
+        count: Math.max(0, Math.trunc(Number(w.count) || 0)),
+      }))
+      .filter((w) => w.from > 0 && w.to >= w.from);
+    return { ok: true, windows };
+  } catch (err) {
+    log.debug(`whatsapp suspect lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { ok: false, reason: 'unreachable' };
+  }
+}
+
 /** One WhatsApp group the admin approved for apps to post into. `label` is the admin's own
  *  nickname for it — the group's real WhatsApp subject is deliberately never sent to us, so this is
  *  the only name there is and it should be shown as-is. */

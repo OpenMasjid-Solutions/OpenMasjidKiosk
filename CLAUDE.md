@@ -735,6 +735,40 @@ app shares — and every app would set it, so within a week it would mean nothin
 **Unchanged:** `202` means *accepted*, never delivered. There is no delivery receipt from WhatsApp.
 Nothing auth-critical may ever ride on it — no codes, no resets. Email has a real provider; use that.
 
+### A message reported `sent` may never have arrived (OS 0.51.1-dev.12+)
+
+A masjid's WhatsApp session can expire on its own, the way WhatsApp Desktop signs itself out. The
+gateway kept accepting messages and reporting them `sent` for over a day. The platform now spots it
+within ~10 minutes and **holds** messages instead — but the gap before it notices is unrecoverable,
+and the platform cannot resend from it because it deletes message contents on handover.
+
+`GET /api/fabric/whatsapp/suspect` → `{"windows":[{"from","to","count"}]}` (epoch ms, scoped to our
+app id, on the 600/min READ budget so polling never costs a send). `fabricWhatsAppSuspect()`.
+
+**THE WINDOW VANISHES WHEN THE ADMIN FIXES IT.** The platform returns a window only while its
+incident is open; `clearWhatsAppIncident()` fires the moment an admin re-links the phone or releases
+the queue, and thereafter the answer is `{"windows":[]}` for ever — i.e. it goes quiet exactly when
+someone would go looking. So: we poll on the **existing 15-minute reconcile sweep** (hourly, as the
+brief suggested, would be a coin flip) and **persist anything we see on sight**
+(`store.addWhatsAppSuspectWindow`, deduped by `from` because one open outage is re-reported with a
+growing `to`/`count` on every poll).
+
+**WE DO NOT RESEND, and that is a domain decision.** Every WhatsApp this app sends is an alert about
+a *moment* — a reader went offline, a payment was refused. Re-sending "the card reader is offline" a
+day late is worse than silence: the reader is probably fine and it sends someone to check working
+hardware. We also store no message body, so a faithful resend is impossible by construction. What we
+do instead is surface the period in Settings → Notifications and point the admin at the Donations and
+Devices pages. Records inside a window are flagged `suspect` so a row stops showing a reassuring
+tick that is known to be unreliable — but only `sent`/`queued` ones: a `refused` was never handed
+over and was reported honestly at the time.
+
+**A `404` from `/status/:id` is still "unknown", never failure.** That has not changed, and the
+temptation to read it as a delivery failure while writing reconciliation logic is the easy mistake.
+
+**A queued message can now sit queued far longer**, because held messages wait for an admin to
+release them. Our reconcile still stops at 24h, which remains right: the platform's per-app history
+is 24h, so past that the lookup 404s and `unknown` correctly changes nothing.
+
 ### What we deliberately do NOT do
 
 - **No donor phone numbers, and no phone field on the kiosk** (maintainer, 2026-08-16). A donor at a

@@ -154,6 +154,9 @@ export interface WhatsAppSendRecord {
   suppressed: number;
   /** Which alert the message was about. */
   alertId: string;
+  /** The platform later reported the masjid's WhatsApp link was dead when this went, so "sent"
+   *  cannot be believed for it. */
+  suspect?: boolean;
 }
 
 export interface AlertRecipient {
@@ -226,6 +229,15 @@ export interface WhatsAppAvailability {
   outcomes?: boolean;
 }
 
+/** A period when the masjid's WhatsApp link was dead but messages were still reported as sent. */
+export interface SuspectWindow {
+  from: number;
+  to: number;
+  /** How many of this app's messages the platform reported sent inside it. */
+  count: number;
+  seenAt: number;
+}
+
 export interface AlertsView {
   alerts: AlertSetting[];
   recipients: AlertRecipient[];
@@ -236,6 +248,7 @@ export interface AlertsView {
   groupsProblem: string;
   pacing: WhatsAppPacing;
   pacingLimits: PacingLimits;
+  suspectWindows: SuspectWindow[];
   usage: PacingUsage;
   whatsapp: WhatsAppAvailability;
   embedded: boolean;
@@ -261,6 +274,9 @@ export const setWhatsAppPacing = (patch: Partial<WhatsAppPacing>) =>
   request<AlertsView>('/api/admin/alerts/pacing', { method: 'PUT', body: JSON.stringify(patch) });
 
 export const refreshWhatsApp = () => request<AlertsView>('/api/admin/alerts/whatsapp/refresh', { method: 'POST' });
+
+export const dismissSuspectWindow = (from: number) =>
+  request<AlertsView>(`/api/admin/alerts/suspect/${from}`, { method: 'DELETE' });
 
 export interface AlertTestResult {
   os: boolean;

@@ -50,6 +50,18 @@ detail of every change — it is distilled into a major-changes-only entry when 
   - **It is now on your setup page.** Open **/new** on a phone, choose **Mobile donations**, and
     install it. Both apps ship inside this build, so the version always matches your server, and
     there is a short guide at `docs/MOBILE_DONATIONS.md`.
+- **The kiosk now tells you when a WhatsApp alert may not have arrived.** A masjid's WhatsApp
+  connection can quietly sign itself out — the way WhatsApp Desktop does — and until recently
+  everything carried on reporting messages as sent while nothing was being delivered. OpenMasjidOS
+  now spots that (needs 0.51.1-dev.12) and tells each app which period was affected.
+  - **Settings → Notifications** shows the period plainly: when the connection was down and how many
+    of this app's messages fell inside it. The alerts involved are marked, so a row no longer shows a
+    reassuring tick for a message that may never have arrived.
+  - **Nothing is resent, deliberately.** These alerts describe a moment that has passed — a
+    card-reader warning arriving a day late would send someone to check hardware that is working
+    perfectly. The useful thing is knowing which period to check, and the Donations and Devices
+    pages cover it. **Email alerts were never affected.**
+  - Dismiss the notice once you've had a look.
 
 - **Notifications is now one table: who you want to tell, and what each of them hears about.** It
   used to be a block per alert, each with room for exactly one email address and one phone number —

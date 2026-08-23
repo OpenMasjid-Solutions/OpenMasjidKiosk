@@ -936,3 +936,9 @@ button.status-pill:hover { filter: brightness(1.08); }
 .mx-pacing__row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; }
 .mx-pacing__row .field { margin: 0; flex: 1 1 9rem; min-width: 0; }
 .mx-pacing__row .input { width: 100%; }
+
+/* A period when the masjid's WhatsApp link was dead while messages were still being reported as
+   sent. Warning-toned rather than error-toned: nothing is broken now, but something in the past
+   is in doubt and only the admin can decide whether it mattered. */
+.suspect { border-color: color-mix(in srgb, var(--color-warning) 45%, var(--color-border)); margin-block-end: 0.9rem; }
+.suspect .note { margin-block: 0.5rem 0.7rem; }

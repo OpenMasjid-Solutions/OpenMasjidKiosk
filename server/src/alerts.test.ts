@@ -527,3 +527,81 @@ test('sanitizeRoute still ignores anything but the relay flag', () => {
   assert.deepEqual(sanitizeRoute({ os: false }, before), { os: false });
   assert.deepEqual(sanitizeRoute({ nope: 1 } as never, before), { os: true });
 });
+
+// ── "Sent" that may never have arrived ───────────────────────────────
+
+test('a suspect window is kept, because the platform stops reporting it once the link is fixed', () => {
+  // THE REASON THIS IS PERSISTED AT ALL. OpenMasjidOS answers /suspect with a window only while its
+  // incident is open; `clearWhatsAppIncident()` runs the moment an admin re-links the phone, and
+  // after that the endpoint says "nothing wrong" for ever — which is exactly when the admin would
+  // go looking for what they missed. Whatever we see has to survive on our side.
+  const s = mem();
+  assert.deepEqual(s.getWhatsAppSuspectWindows(), []);
+  assert.equal(s.addWhatsAppSuspectWindow(1_000, 2_000, 9), true, 'a new outage is news');
+  const [w] = s.getWhatsAppSuspectWindows();
+  assert.equal(w.from, 1_000);
+  assert.equal(w.count, 9);
+});
+
+test('one ongoing outage polled twenty times is still one outage', () => {
+  // The platform reports the SAME open incident on every poll, with `to` and `count` growing. At a
+  // poll every 15 minutes a long outage would otherwise become a wall of identical banners.
+  const s = mem();
+  assert.equal(s.addWhatsAppSuspectWindow(1_000, 2_000, 3), true)
+  assert.equal(s.addWhatsAppSuspectWindow(1_000, 5_000, 9), false, 'same incident, widened — not news')
+  const list = s.getWhatsAppSuspectWindows();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].to, 5_000, 'widened to the latest end');
+  assert.equal(list[0].count, 9, 'and the latest count');
+  // A genuinely separate outage IS news.
+  assert.equal(s.addWhatsAppSuspectWindow(9_000, 9_500, 2), true);
+  assert.equal(s.getWhatsAppSuspectWindows().length, 2);
+});
+
+test('an admin can dismiss a window once they have checked it', () => {
+  const s = mem();
+  s.addWhatsAppSuspectWindow(1_000, 2_000, 1);
+  assert.equal(s.dismissWhatsAppSuspectWindow(1_000), true);
+  assert.deepEqual(s.getWhatsAppSuspectWindows(), []);
+  assert.equal(s.dismissWhatsAppSuspectWindow(1_000), false, 'dismissing twice is not an error');
+});
+
+test('only messages we were TOLD went out are cast into doubt', () => {
+  const s = mem();
+  const rec = (state: 'sent' | 'refused' | 'failed', at: number) => ({
+    state, at, messageId: 'm', reason: '', suppressed: 0, alertId: 'reader-offline' as const,
+  });
+  s.setWhatsAppOutcome('in-window-sent', rec('sent', 1_500));
+  // A refusal was never handed to WhatsApp and was reported honestly at the time — it is not in
+  // doubt, and flagging it would tell an admin to re-check something already known to have failed.
+  s.setWhatsAppOutcome('in-window-refused', rec('refused', 1_500));
+  s.setWhatsAppOutcome('in-window-failed', rec('failed', 1_500));
+  s.setWhatsAppOutcome('outside-window', rec('sent', 9_999));
+
+  assert.equal(s.markWhatsAppSuspect(1_000, 2_000), 1);
+  const all = s.getWhatsAppOutcomes();
+  assert.equal(all['in-window-sent'].suspect, true);
+  // `false`, not `undefined`: both the read and write paths normalise this to a real boolean, so a
+  // record written by an older build reads as "not in doubt" rather than as a missing field the UI
+  // would have to guess about.
+  assert.equal(all['in-window-refused'].suspect, false);
+  assert.equal(all['in-window-failed'].suspect, false);
+  assert.equal(all['outside-window'].suspect, false);
+});
+
+test('marking twice does not re-flag, so a 15-minute poll is idempotent', () => {
+  const s = mem();
+  s.setWhatsAppOutcome('r', { state: 'sent', at: 1_500, messageId: 'm', reason: '', suppressed: 0, alertId: 'reader-offline' });
+  assert.equal(s.markWhatsAppSuspect(1_000, 2_000), 1);
+  assert.equal(s.markWhatsAppSuspect(1_000, 2_000), 0, 'already flagged');
+});
+
+test('a NEW message to a recipient is not in doubt just because an older one was', () => {
+  const s = mem();
+  s.setWhatsAppOutcome('r', { state: 'sent', at: 1_500, messageId: 'old', reason: '', suppressed: 0, alertId: 'reader-offline' });
+  s.markWhatsAppSuspect(1_000, 2_000);
+  assert.equal(s.getWhatsAppOutcomes()['r'].suspect, true);
+  // The link is back; this one went fine. The flag must not be carried over onto it.
+  s.setWhatsAppOutcome('r', { state: 'sent', at: 50_000, messageId: 'new', reason: '', suppressed: 0, alertId: 'reader-offline' });
+  assert.equal(s.getWhatsAppOutcomes()['r'].suspect, false);
+});

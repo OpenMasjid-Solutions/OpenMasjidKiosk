@@ -323,6 +323,9 @@ export interface WhatsAppSendRecord {
   /** Which alert this message was for. Recorded because these are now keyed by RECIPIENT, so the
    *  row on the settings screen has to be able to say what the last message was about. */
   alertId: string;
+  /** The platform later reported that the masjid's WhatsApp link was dead when this was sent, so
+   *  `sent` cannot be believed for it. See [Store.markWhatsAppSuspect]. */
+  suspect?: boolean;
 }
 
 export interface TuitionOutboxRow {
@@ -1080,9 +1083,93 @@ export class Store {
         reason: typeof r.reason === 'string' ? r.reason.slice(0, 200) : '',
         suppressed: Math.max(0, Math.trunc(Number(r.suppressed) || 0)),
         alertId: typeof r.alertId === 'string' && isAlertId(r.alertId) ? r.alertId : '',
+        suspect: r.suspect === true,
       };
     }
     return out;
+  }
+
+  /**
+   * Periods when a WhatsApp we were told was `sent` may never have arrived.
+   *
+   * PERSISTED THE MOMENT WE SEE ONE, because the platform stops reporting it the instant an admin
+   * re-links the phone — which is the same moment they would start looking for what they missed.
+   * There is no fetching it again later.
+   *
+   * Kept for 30 days and capped, so a masjid with a flaky link cannot grow this without bound. The
+   * admin can dismiss a window once they have dealt with it.
+   */
+  getWhatsAppSuspectWindows(): { from: number; to: number; count: number; seenAt: number }[] {
+    const saved = this.getJson<{ list?: unknown[] }>('whatsapp_suspect', {});
+    const list = Array.isArray(saved.list) ? saved.list : [];
+    const cutoff = Date.now() - 30 * 24 * 60 * 60_000;
+    return list
+      .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
+      .map((r) => ({
+        from: Math.trunc(Number(r.from) || 0),
+        to: Math.trunc(Number(r.to) || 0),
+        count: Math.max(0, Math.trunc(Number(r.count) || 0)),
+        seenAt: Math.trunc(Number(r.seenAt) || 0),
+      }))
+      .filter((r) => r.from > 0 && r.seenAt > cutoff)
+      .sort((a, b) => b.from - a.from)
+      .slice(0, 20);
+  }
+
+  /**
+   * Record a window, or widen one we already hold.
+   *
+   * Deduped by `from`, because the platform reports the SAME open incident on every poll with a
+   * growing `to` and `count` while it stays down. Twenty polls of one outage must read as one
+   * outage, not twenty. Returns true only when this is news, so the caller logs once rather than
+   * every fifteen minutes.
+   */
+  addWhatsAppSuspectWindow(from: number, to: number, count: number): boolean {
+    const list = this.getWhatsAppSuspectWindows();
+    const existing = list.find((w) => w.from === from);
+    if (existing) {
+      if (to <= existing.to && count <= existing.count) return false;
+      existing.to = Math.max(existing.to, to);
+      existing.count = Math.max(existing.count, count);
+      this.setRaw('whatsapp_suspect', JSON.stringify({ list }));
+      return false; // the same incident, still open — not news
+    }
+    const next = [{ from, to, count, seenAt: Date.now() }, ...list].slice(0, 20);
+    this.setRaw('whatsapp_suspect', JSON.stringify({ list: next }));
+    return true;
+  }
+
+  /** The admin has dealt with a window (or decided it does not matter). */
+  dismissWhatsAppSuspectWindow(from: number): boolean {
+    const list = this.getWhatsAppSuspectWindows();
+    const next = list.filter((w) => w.from !== from);
+    if (next.length === list.length) return false;
+    this.setRaw('whatsapp_suspect', JSON.stringify({ list: next }));
+    return true;
+  }
+
+  /**
+   * Flag every delivery record that fell inside a suspect window.
+   *
+   * Only ones we were told reached WhatsApp — a `refused` was never handed over and was honestly
+   * reported at the time, so it is not in doubt. Returns how many were flagged.
+   *
+   * A CAVEAT WORTH KNOWING: we keep only the LAST outcome per recipient, so this can flag at most
+   * one message per recipient even when the platform counted nine. The window itself is the
+   * reliable artefact; these flags are a convenience on top of it.
+   */
+  markWhatsAppSuspect(from: number, to: number): number {
+    const all = this.getWhatsAppOutcomes();
+    let n = 0;
+    for (const [key, rec] of Object.entries(all)) {
+      if (rec.suspect) continue;
+      if (rec.at < from || rec.at > to) continue;
+      if (rec.state !== 'sent' && rec.state !== 'queued') continue;
+      all[key] = { ...rec, suspect: true };
+      n += 1;
+    }
+    if (n > 0) this.setRaw('whatsapp_outcomes', JSON.stringify(all));
+    return n;
   }
 
   /** `key` is a RECIPIENT id. */
@@ -1095,6 +1182,9 @@ export class Store {
       reason: (rec.reason || '').slice(0, 200),
       suppressed: Math.max(0, Math.trunc(rec.suppressed || 0)),
       alertId: rec.alertId || '',
+      // A NEW message to this recipient is not in doubt just because an older one was, so this is
+      // taken from the incoming record (normally absent = false) rather than carried over.
+      suspect: rec.suspect === true,
     };
     this.setRaw('whatsapp_outcomes', JSON.stringify(all));
   }

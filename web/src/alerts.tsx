@@ -23,12 +23,14 @@ import {
   MessageCircle,
   RefreshCw,
   Send,
+  ShieldAlert,
   Trash2,
   TriangleAlert,
   Users,
 } from 'lucide-react';
 import {
   addAlertRecipient,
+  dismissSuspectWindow,
   getAlerts,
   refreshWhatsApp,
   removeAlertRecipient,
@@ -39,6 +41,7 @@ import {
   type AlertRecipient,
   type AlertsView,
   type RecipientKind,
+  type SuspectWindow,
   type WhatsAppAvailability,
   type WhatsAppSendRecord,
 } from './api';
@@ -89,12 +92,60 @@ function LastWhatsApp({ rec }: { rec: WhatsAppSendRecord | null }) {
           : rec.state === 'expired'
             ? 'expired without sending'
             : 'failed';
+  // "sent" is not believable for a message that went while the link was down. Say so on the row
+  // rather than leaving a reassuring tick that is known to be wrong.
+  const doubted = rec.suspect === true && (rec.state === 'sent' || rec.state === 'queued');
   return (
-    <span className={`mx-last${bad ? ' text-warn' : ''}`} title={new Date(rec.at).toLocaleString()}>
-      {bad ? <TriangleAlert size={12} aria-hidden="true" /> : <Check size={12} aria-hidden="true" />} Last message {label}
-      {rec.reason ? `: ${rec.reason}` : ''}
+    <span className={`mx-last${bad || doubted ? ' text-warn' : ''}`} title={new Date(rec.at).toLocaleString()}>
+      {bad || doubted ? <TriangleAlert size={12} aria-hidden="true" /> : <Check size={12} aria-hidden="true" />}{' '}
+      {doubted ? 'Last message may not have arrived — the WhatsApp link was down' : `Last message ${label}`}
+      {!doubted && rec.reason ? `: ${rec.reason}` : ''}
       {rec.suppressed > 0 ? ` (${rec.suppressed} held back before it)` : ''}
     </span>
+  );
+}
+
+/**
+ * "The masjid's WhatsApp link was dead during this period."
+ *
+ * OpenMasjidOS reports a window in which it was still telling apps their messages were sent while
+ * the gateway had quietly signed itself out. It cannot resend them — it deletes message contents
+ * the moment it hands them over — and neither can this app, which stores no message bodies either.
+ *
+ * SO THIS IS DELIBERATELY NOT A "RESEND" BUTTON. Every WhatsApp the kiosk sends is an alert about a
+ * moment: a reader went offline, a payment was refused. Re-sending "the card reader is offline" a
+ * day late is worse than silence — the reader is probably fine now, and it would send someone to
+ * check working hardware. What an admin can actually use is the period, so they can look at the
+ * Donations and Devices pages for anything they missed.
+ */
+function SuspectBanner({ w, busy, onDismiss }: { w: SuspectWindow; busy: boolean; onDismiss: () => void }) {
+  const from = new Date(w.from);
+  const to = new Date(w.to);
+  const sameDay = from.toDateString() === to.toDateString();
+  return (
+    <div className="glass panel suspect">
+      <div className="card-head">
+        <ShieldAlert size={18} className="panel-ico text-warn" aria-hidden="true" />
+        <div className="card-head__main">
+          <h3 className="section-title-inline">Some WhatsApp alerts may not have arrived</h3>
+          <p className="muted">
+            Your masjid’s WhatsApp connection had dropped between <b>{from.toLocaleString()}</b> and{' '}
+            <b>{sameDay ? to.toLocaleTimeString() : to.toLocaleString()}</b>, and OpenMasjidOS didn’t
+            notice straight away. <b>{w.count}</b> message{w.count === 1 ? '' : 's'} sent in that time
+            {w.count === 1 ? ' was' : ' were'} recorded as sent but may never have been delivered.
+          </p>
+        </div>
+      </div>
+      <p className="muted note">
+        Nothing was resent automatically, on purpose — these alerts describe a moment that has passed,
+        and a card-reader warning arriving a day late would send someone to check hardware that is
+        working. If you want to check what you missed, the <b>Donations</b> and <b>Devices</b> pages
+        cover that period. Email alerts were unaffected.
+      </p>
+      <button type="button" className="btn btn--ghost btn--sm" onClick={onDismiss} disabled={busy}>
+        I’ve checked — dismiss
+      </button>
+    </div>
   );
 }
 
@@ -560,6 +611,15 @@ export function NotificationsSection() {
               WhatsApp all go through the platform.
             </p>
           )}
+
+          {view.suspectWindows.map((w) => (
+            <SuspectBanner
+              key={w.from}
+              w={w}
+              busy={busy}
+              onDismiss={() => void run(() => dismissSuspectWindow(w.from))}
+            />
+          ))}
 
           {waNote && (
             <p className="muted note">
