@@ -229,13 +229,21 @@ export interface WhatsAppAvailability {
   outcomes?: boolean;
 }
 
+/** Why the link was down. Each needs a different thing done about it, so the admin wording is
+ *  driven from this rather than guessed. An unrecognised value reads as `unknown` — the platform
+ *  says more may be added. */
+export type LinkFailureCause = 'session-expired' | 'needs-relink' | 'key-rejected' | 'unknown';
+
 /** A period when the masjid's WhatsApp link was dead but messages were still reported as sent. */
 export interface SuspectWindow {
   from: number;
   to: number;
+  cause: LinkFailureCause;
   /** How many of this app's messages the platform reported sent inside it. */
   count: number;
-  seenAt: number;
+  ids: string[];
+  /** The platform's 500-id cap bit, so `ids` is incomplete and `count` is the real number. */
+  truncated: boolean;
 }
 
 export interface AlertsView {

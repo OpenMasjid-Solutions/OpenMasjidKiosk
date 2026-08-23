@@ -22,7 +22,7 @@ import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
 import { MAX_ALERT_RECIPIENTS, Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppGroup, fabricWhatsAppGroups, fabricWhatsAppSuspect, fabricWhatsAppStatus, fabricWhatsAppOutcome, clearWhatsAppCache, emailStatus, emailCanSend } from './fabric';
+import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppGroup, fabricWhatsAppGroups, fabricWhatsAppSuspect, fabricWhatsAppStatus, fabricWhatsAppOutcome, clearWhatsAppCache, emailStatus, emailCanSend, type WhatsAppSuspectWindow } from './fabric';
 import {
   ALERT_IDS,
   ALERT_META,
@@ -663,7 +663,11 @@ async function main(): Promise<void> {
    * window are left alone: it no longer has them, the lookup would 404, and `unknown` correctly
    * changes nothing.
    */
-  const WA_HISTORY_MS = 24 * 60 * 60_000;
+  // SEVEN DAYS, not 24 hours. Until 0.51.1-dev.13 the platform's retention ran from QUEUEING, so a
+  // message held through a long outage lost its record before it was ever sent and there was no
+  // point asking past a day. A still-queued message now keeps its record for as long as it waits,
+  // so a 24h cutoff would abandon messages that still exist and can still resolve.
+  const WA_HISTORY_MS = 7 * 24 * 60 * 60_000;
   const reconcileWhatsApp = async (): Promise<void> => {
     const now = Date.now();
     for (const [recipientId, rec] of Object.entries(store.getWhatsAppOutcomes())) {
@@ -710,16 +714,14 @@ async function main(): Promise<void> {
   /**
    * Ask whether any WhatsApp we were told was `sent` may never have arrived.
    *
-   * WHY THIS IS NOT AN HOURLY POLL, which is what the platform brief suggested. The endpoint
-   * reports a window only while the platform's incident is still OPEN: `clearWhatsAppIncident()`
-   * runs the moment an admin re-links the phone or releases the held queue, and from then on the
-   * answer is `{windows: []}` for ever. So the window is visible during the outage and gone the
-   * instant somebody fixes it — which is exactly when they would go looking for what they missed.
-   * Polling hourly would be a coin flip on whether we ever see it. This rides the existing
-   * 15-minute reconcile sweep, and whatever it sees is PERSISTED on sight, because there is no
-   * asking again.
+   * HOURLY, and held in memory rather than hoarded. The first version polled every 15 minutes and
+   * persisted every window on sight, because the platform then reported one only while the outage
+   * was OPEN — re-linking the phone erased it, so the evidence disappeared at the exact moment an
+   * admin went looking. We reported that; OpenMasjidOS 0.51.1-dev.13 retains windows for seven days
+   * after recovery, so the platform is the source of truth again and this app keeps only the
+   * DISMISSALS, which are a fact about our own UI that the platform cannot know.
    *
-   * WE DO NOT RESEND, and that is a domain decision rather than laziness. Every WhatsApp this app
+   * WE DO NOT RESEND, and that is a domain decision rather than caution. Every WhatsApp this app
    * sends is an ALERT about a moment: a reader went offline, a payment was refused, a donation was
    * refunded. Re-sending "the card reader is offline" a day late is worse than not sending it — the
    * reader is probably fine now, and the message would send someone to check hardware that works.
@@ -730,17 +732,26 @@ async function main(): Promise<void> {
    * Free of the send budget: this is on the platform's separate 600/min READ budget, so polling it
    * can never cost a masjid an actual alert.
    */
+  let suspectWindows: WhatsAppSuspectWindow[] = [];
+  let suspectSeen = new Set<number>();
   const pollWhatsAppSuspect = async (): Promise<void> => {
     const r = await fabricWhatsAppSuspect().catch(() => ({ ok: false as const, reason: 'threw' }));
-    if (!r.ok) return; // 404 = a platform too old to know; anything else is transient. Never an incident.
+    // 404 = a platform too old to know; anything else transient. Never an incident, and never a
+    // reason to drop windows we already have on screen.
+    if (!r.ok) return;
+    suspectWindows = r.windows;
     for (const w of r.windows) {
-      const isNew = store.addWhatsAppSuspectWindow(w.from, w.to, w.count);
-      const flagged = store.markWhatsAppSuspect(w.from, w.to);
-      if (isNew) {
+      // Prefer the ids the platform names. Exact beats matching a record's single timestamp
+      // against an interval, which is ambiguous for anything queued one side of a boundary and
+      // sent the other. Fall back to the window when ids are absent (older platform) or truncated.
+      const flagged = w.ids.length > 0 ? store.markWhatsAppSuspectByIds(w.ids) : 0;
+      const extra = w.ids.length === 0 || w.truncated ? store.markWhatsAppSuspect(w.from, w.to) : 0;
+      if (!suspectSeen.has(w.from)) {
+        suspectSeen.add(w.from);
         log.warn(
-          `WhatsApp: the masjid's link was down from ${new Date(w.from).toISOString()} to ` +
+          `WhatsApp: the masjid's link was down (${w.cause}) from ${new Date(w.from).toISOString()} to ` +
             `${new Date(w.to).toISOString()} — ${w.count} message(s) reported sent may not have arrived ` +
-            `(${flagged} of our records flagged). Shown in Settings -> Notifications.`,
+            `(${flagged + extra} of our records flagged). Shown in Settings -> Notifications.`,
         );
       }
     }
@@ -883,9 +894,9 @@ async function main(): Promise<void> {
       pacing,
       pacingLimits: PACING_LIMITS,
       // Periods when the masjid's WhatsApp link was dead but messages were still being reported
-      // sent. Persisted on sight because the platform stops reporting a window the moment the admin
-      // re-links — see pollWhatsAppSuspect.
-      suspectWindows: store.getWhatsAppSuspectWindows(),
+      // sent. Straight from the platform (it retains them for a week after recovery), minus the
+      // ones a human has already ticked off — which is the only part of this we store.
+      suspectWindows: suspectWindows.filter((w) => !new Set(store.getDismissedSuspectWindows()).has(w.from)),
       usage: pacingUsage(store.getWhatsAppLedger(), pacing, Date.now()),
       whatsapp: wa,
       embedded: ssoConfigured(),
@@ -997,9 +1008,10 @@ async function main(): Promise<void> {
   /** The admin has looked into a suspect window and is done with it. */
   app.delete('/api/admin/alerts/suspect/:from', { preHandler: requireAdmin }, async (req, reply) => {
     const from = Number((req.params as { from: string }).from);
-    if (!Number.isFinite(from) || !store.dismissWhatsAppSuspectWindow(Math.trunc(from))) {
+    if (!Number.isFinite(from) || !suspectWindows.some((w) => w.from === Math.trunc(from))) {
       return reply.code(404).send({ error: 'That period is no longer listed.' });
     }
+    store.dismissSuspectWindow(Math.trunc(from));
     await audit(req, 'whatsapp-suspect-dismissed', String(Math.trunc(from)), '');
     return { data: await alertsView() };
   });
@@ -3300,7 +3312,9 @@ ${body}
     // Same sweep, same cadence: ask whether the masjid's WhatsApp link was dead while we were being
     // told messages went out. Once at startup too — a restart is a common moment to have missed one.
     void pollWhatsAppSuspect().catch(() => {});
-    setInterval(() => { void pollWhatsAppSuspect().catch(() => {}); }, 15 * 60_000).unref();
+    // Hourly is enough now that windows survive recovery for a week; the 15-minute cadence only
+    // existed to race an admin re-linking the phone.
+    setInterval(() => { void pollWhatsAppSuspect().catch(() => {}); }, 60 * 60_000).unref();
   }
 
   // Tuition (students/billing): keep availability warm so the tile shows/hides correctly, and drain the

@@ -122,6 +122,16 @@ function SuspectBanner({ w, busy, onDismiss }: { w: SuspectWindow; busy: boolean
   const from = new Date(w.from);
   const to = new Date(w.to);
   const sameDay = from.toDateString() === to.toDateString();
+  // Worded from the platform's `cause` rather than guessed, because each one needs a different
+  // thing done about it — and two of them need the admin to go and DO something, not just read.
+  const because =
+    w.cause === 'session-expired'
+      ? 'Your masjid’s WhatsApp signed itself out, the way WhatsApp Desktop does after a while.'
+      : w.cause === 'needs-relink'
+        ? 'Your masjid’s WhatsApp needs linking again — scan the code in OpenMasjidOS → Settings → WhatsApp.'
+        : w.cause === 'key-rejected'
+          ? 'Your masjid’s WhatsApp gateway rejected its credentials, so an admin will need to look at its setup.'
+          : 'Your masjid’s WhatsApp connection had dropped.';
   return (
     <div className="glass panel suspect">
       <div className="card-head">
@@ -129,7 +139,7 @@ function SuspectBanner({ w, busy, onDismiss }: { w: SuspectWindow; busy: boolean
         <div className="card-head__main">
           <h3 className="section-title-inline">Some WhatsApp alerts may not have arrived</h3>
           <p className="muted">
-            Your masjid’s WhatsApp connection had dropped between <b>{from.toLocaleString()}</b> and{' '}
+            {because} It was down between <b>{from.toLocaleString()}</b> and{' '}
             <b>{sameDay ? to.toLocaleTimeString() : to.toLocaleString()}</b>, and OpenMasjidOS didn’t
             notice straight away. <b>{w.count}</b> message{w.count === 1 ? '' : 's'} sent in that time
             {w.count === 1 ? ' was' : ' were'} recorded as sent but may never have been delivered.

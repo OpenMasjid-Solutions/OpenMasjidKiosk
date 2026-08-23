@@ -1090,69 +1090,65 @@ export class Store {
   }
 
   /**
-   * Periods when a WhatsApp we were told was `sent` may never have arrived.
+   * Suspect windows the admin has already dealt with.
    *
-   * PERSISTED THE MOMENT WE SEE ONE, because the platform stops reporting it the instant an admin
-   * re-links the phone — which is the same moment they would start looking for what they missed.
-   * There is no fetching it again later.
+   * ONLY THE DISMISSALS ARE OURS NOW. The first version of this hoarded the windows themselves,
+   * because the platform reported one only while the outage was open and forgot it the instant an
+   * admin re-linked — so the evidence vanished exactly when someone went looking. We reported that
+   * and OpenMasjidOS 0.51.1-dev.13 fixed it: windows are retained for seven days after recovery. The
+   * platform is the source of truth again, and all this app needs to remember is which ones a human
+   * has ticked off, because that is a fact about our UI that the platform has no idea about.
    *
-   * Kept for 30 days and capped, so a masjid with a flaky link cannot grow this without bound. The
-   * admin can dismiss a window once they have dealt with it.
+   * Keyed by `from`, which identifies an incident. Pruned at 30 days — comfortably past the
+   * platform's 7-day retention, so a dismissal can never expire before the thing it dismissed and
+   * resurrect a banner someone already dealt with.
    */
-  getWhatsAppSuspectWindows(): { from: number; to: number; count: number; seenAt: number }[] {
-    const saved = this.getJson<{ list?: unknown[] }>('whatsapp_suspect', {});
+  getDismissedSuspectWindows(): number[] {
+    const saved = this.getJson<{ list?: unknown[] }>('whatsapp_suspect_dismissed', {});
     const list = Array.isArray(saved.list) ? saved.list : [];
     const cutoff = Date.now() - 30 * 24 * 60 * 60_000;
     return list
-      .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
-      .map((r) => ({
-        from: Math.trunc(Number(r.from) || 0),
-        to: Math.trunc(Number(r.to) || 0),
-        count: Math.max(0, Math.trunc(Number(r.count) || 0)),
-        seenAt: Math.trunc(Number(r.seenAt) || 0),
-      }))
-      .filter((r) => r.from > 0 && r.seenAt > cutoff)
-      .sort((a, b) => b.from - a.from)
-      .slice(0, 20);
+      .map((v) => Math.trunc(Number(v) || 0))
+      .filter((v) => v > cutoff)
+      .slice(0, 100);
+  }
+
+  dismissSuspectWindow(from: number): boolean {
+    const list = this.getDismissedSuspectWindows();
+    if (list.includes(from)) return false;
+    this.setRaw('whatsapp_suspect_dismissed', JSON.stringify({ list: [from, ...list].slice(0, 100) }));
+    return true;
   }
 
   /**
-   * Record a window, or widen one we already hold.
+   * Flag delivery records the platform named by message id.
    *
-   * Deduped by `from`, because the platform reports the SAME open incident on every poll with a
-   * growing `to` and `count` while it stays down. Twenty polls of one outage must read as one
-   * outage, not twenty. Returns true only when this is news, so the caller logs once rather than
-   * every fifteen minutes.
+   * PREFERRED OVER MATCHING BY TIMESTAMP. The platform now hands back the actual ids of our
+   * messages that fell in a window, so there is no need to reason about whether a record's single
+   * timestamp lands inside an interval — a comparison that is ambiguous for anything queued on one
+   * side of the boundary and sent on the other. Exact is better than close.
    */
-  addWhatsAppSuspectWindow(from: number, to: number, count: number): boolean {
-    const list = this.getWhatsAppSuspectWindows();
-    const existing = list.find((w) => w.from === from);
-    if (existing) {
-      if (to <= existing.to && count <= existing.count) return false;
-      existing.to = Math.max(existing.to, to);
-      existing.count = Math.max(existing.count, count);
-      this.setRaw('whatsapp_suspect', JSON.stringify({ list }));
-      return false; // the same incident, still open — not news
+  markWhatsAppSuspectByIds(ids: string[]): number {
+    if (ids.length === 0) return 0;
+    const wanted = new Set(ids);
+    const all = this.getWhatsAppOutcomes();
+    let n = 0;
+    for (const [key, rec] of Object.entries(all)) {
+      if (rec.suspect || !rec.messageId || !wanted.has(rec.messageId)) continue;
+      all[key] = { ...rec, suspect: true };
+      n += 1;
     }
-    const next = [{ from, to, count, seenAt: Date.now() }, ...list].slice(0, 20);
-    this.setRaw('whatsapp_suspect', JSON.stringify({ list: next }));
-    return true;
-  }
-
-  /** The admin has dealt with a window (or decided it does not matter). */
-  dismissWhatsAppSuspectWindow(from: number): boolean {
-    const list = this.getWhatsAppSuspectWindows();
-    const next = list.filter((w) => w.from !== from);
-    if (next.length === list.length) return false;
-    this.setRaw('whatsapp_suspect', JSON.stringify({ list: next }));
-    return true;
+    if (n > 0) this.setRaw('whatsapp_outcomes', JSON.stringify(all));
+    return n;
   }
 
   /**
-   * Flag every delivery record that fell inside a suspect window.
+   * Flag by time window — the fallback for a platform too old to send ids, and for a window whose
+   * id list was truncated at the platform's 500 cap.
    *
-   * Only ones we were told reached WhatsApp — a `refused` was never handed over and was honestly
-   * reported at the time, so it is not in doubt. Returns how many were flagged.
+   * Only records we were told reached WhatsApp: a `refused` was never handed over and was honestly
+   * reported at the time, so it is not in doubt and flagging it would send someone to re-check a
+   * known failure.
    *
    * A CAVEAT WORTH KNOWING: we keep only the LAST outcome per recipient, so this can flag at most
    * one message per recipient even when the platform counted nine. The window itself is the

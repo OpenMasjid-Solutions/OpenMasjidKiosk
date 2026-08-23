@@ -530,50 +530,61 @@ test('sanitizeRoute still ignores anything but the relay flag', () => {
 
 // ── "Sent" that may never have arrived ───────────────────────────────
 
-test('a suspect window is kept, because the platform stops reporting it once the link is fixed', () => {
-  // THE REASON THIS IS PERSISTED AT ALL. OpenMasjidOS answers /suspect with a window only while its
-  // incident is open; `clearWhatsAppIncident()` runs the moment an admin re-links the phone, and
-  // after that the endpoint says "nothing wrong" for ever — which is exactly when the admin would
-  // go looking for what they missed. Whatever we see has to survive on our side.
+test('only the dismissals are ours to remember', () => {
+  // The first cut of this hoarded the windows themselves, because the platform reported one only
+  // while the outage was open and forgot it the moment an admin re-linked — the evidence vanished
+  // exactly when someone went looking. OpenMasjidOS 0.51.1-dev.13 retains them for seven days after
+  // recovery, so the platform is the source of truth and this is all that is left on our side.
   const s = mem();
-  assert.deepEqual(s.getWhatsAppSuspectWindows(), []);
-  assert.equal(s.addWhatsAppSuspectWindow(1_000, 2_000, 9), true, 'a new outage is news');
-  const [w] = s.getWhatsAppSuspectWindows();
-  assert.equal(w.from, 1_000);
-  assert.equal(w.count, 9);
+  // A REAL epoch, not a small synthetic one: these are pruned by age, so `1000` would be read as
+  // 1970 and dropped on the way back out. (The same shape of trap `whatsappGate` documents, from
+  // the other direction — there a small clock breaks a subtraction, here it breaks a cutoff.)
+  const from = Date.now() - 60_000;
+  assert.deepEqual(s.getDismissedSuspectWindows(), []);
+  assert.equal(s.dismissSuspectWindow(from), true);
+  assert.deepEqual(s.getDismissedSuspectWindows(), [from]);
+  assert.equal(s.dismissSuspectWindow(from), false, 'dismissing twice is not an error');
 });
 
-test('one ongoing outage polled twenty times is still one outage', () => {
-  // The platform reports the SAME open incident on every poll, with `to` and `count` growing. At a
-  // poll every 15 minutes a long outage would otherwise become a wall of identical banners.
+test('a dismissal outlives the window it dismisses', () => {
+  // Pruned at 30 days against the platform's 7-day retention. If a dismissal expired FIRST, a
+  // banner someone already dealt with would rise from the dead.
   const s = mem();
-  assert.equal(s.addWhatsAppSuspectWindow(1_000, 2_000, 3), true)
-  assert.equal(s.addWhatsAppSuspectWindow(1_000, 5_000, 9), false, 'same incident, widened — not news')
-  const list = s.getWhatsAppSuspectWindows();
-  assert.equal(list.length, 1);
-  assert.equal(list[0].to, 5_000, 'widened to the latest end');
-  assert.equal(list[0].count, 9, 'and the latest count');
-  // A genuinely separate outage IS news.
-  assert.equal(s.addWhatsAppSuspectWindow(9_000, 9_500, 2), true);
-  assert.equal(s.getWhatsAppSuspectWindows().length, 2);
+  const now = Date.now();
+  s.dismissSuspectWindow(now - 8 * 24 * 60 * 60_000); // older than the platform keeps
+  assert.equal(s.getDismissedSuspectWindows().length, 1, 'still remembered well past 7 days');
+  (s as unknown as { setRaw(k: string, v: string): void }).setRaw(
+    'whatsapp_suspect_dismissed',
+    JSON.stringify({ list: [now - 40 * 24 * 60 * 60_000] }),
+  );
+  assert.deepEqual(s.getDismissedSuspectWindows(), [], 'but not for ever');
 });
 
-test('an admin can dismiss a window once they have checked it', () => {
+test('records are flagged by message id, which is exact', () => {
+  // Preferred over matching one timestamp against an interval, which is ambiguous for anything
+  // queued on one side of a boundary and sent on the other.
   const s = mem();
-  s.addWhatsAppSuspectWindow(1_000, 2_000, 1);
-  assert.equal(s.dismissWhatsAppSuspectWindow(1_000), true);
-  assert.deepEqual(s.getWhatsAppSuspectWindows(), []);
-  assert.equal(s.dismissWhatsAppSuspectWindow(1_000), false, 'dismissing twice is not an error');
+  const rec = (id: string, at: number) => ({
+    state: 'sent' as const, at, messageId: id, reason: '', suppressed: 0, alertId: 'reader-offline' as const,
+  });
+  s.setWhatsAppOutcome('a', rec('msg-1', 1_500));
+  s.setWhatsAppOutcome('b', rec('msg-2', 1_500));
+  assert.equal(s.markWhatsAppSuspectByIds(['msg-1']), 1);
+  const all = s.getWhatsAppOutcomes();
+  assert.equal(all['a'].suspect, true);
+  assert.equal(all['b'].suspect, false, 'a message the platform did NOT name is not in doubt');
+  assert.equal(s.markWhatsAppSuspectByIds(['msg-1']), 0, 'idempotent across polls');
+  assert.equal(s.markWhatsAppSuspectByIds([]), 0, 'an empty id list flags nothing');
 });
 
-test('only messages we were TOLD went out are cast into doubt', () => {
+test('the time-window fallback still exists, for an older platform or a truncated id list', () => {
   const s = mem();
   const rec = (state: 'sent' | 'refused' | 'failed', at: number) => ({
-    state, at, messageId: 'm', reason: '', suppressed: 0, alertId: 'reader-offline' as const,
+    state, at, messageId: '', reason: '', suppressed: 0, alertId: 'reader-offline' as const,
   });
   s.setWhatsAppOutcome('in-window-sent', rec('sent', 1_500));
   // A refusal was never handed to WhatsApp and was reported honestly at the time — it is not in
-  // doubt, and flagging it would tell an admin to re-check something already known to have failed.
+  // doubt, and flagging it would send an admin to re-check a known failure.
   s.setWhatsAppOutcome('in-window-refused', rec('refused', 1_500));
   s.setWhatsAppOutcome('in-window-failed', rec('failed', 1_500));
   s.setWhatsAppOutcome('outside-window', rec('sent', 9_999));
@@ -582,18 +593,11 @@ test('only messages we were TOLD went out are cast into doubt', () => {
   const all = s.getWhatsAppOutcomes();
   assert.equal(all['in-window-sent'].suspect, true);
   // `false`, not `undefined`: both the read and write paths normalise this to a real boolean, so a
-  // record written by an older build reads as "not in doubt" rather than as a missing field the UI
+  // record written by an older build reads as "not in doubt" rather than a missing field the UI
   // would have to guess about.
   assert.equal(all['in-window-refused'].suspect, false);
   assert.equal(all['in-window-failed'].suspect, false);
   assert.equal(all['outside-window'].suspect, false);
-});
-
-test('marking twice does not re-flag, so a 15-minute poll is idempotent', () => {
-  const s = mem();
-  s.setWhatsAppOutcome('r', { state: 'sent', at: 1_500, messageId: 'm', reason: '', suppressed: 0, alertId: 'reader-offline' });
-  assert.equal(s.markWhatsAppSuspect(1_000, 2_000), 1);
-  assert.equal(s.markWhatsAppSuspect(1_000, 2_000), 0, 'already flagged');
 });
 
 test('a NEW message to a recipient is not in doubt just because an older one was', () => {

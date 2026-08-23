@@ -350,17 +350,30 @@ export function clearWhatsAppCache(): void {
   waCache = null;
 }
 
+/** Why the masjid's WhatsApp link was down. Drives the admin wording, because each one needs a
+ *  different thing done about it. An unrecognised value reads as `unknown` — the platform says more
+ *  may be added, and a new cause must never crash a screen. */
+export type LinkFailureCause = 'session-expired' | 'needs-relink' | 'key-rejected' | 'unknown';
+
+const CAUSES: readonly string[] = ['session-expired', 'needs-relink', 'key-rejected', 'unknown'];
+
 /** A period during which the masjid's WhatsApp link was dead but the platform had not yet noticed,
  *  so messages were reported `sent` and never delivered. Epoch ms. */
 export interface WhatsAppSuspectWindow {
   from: number;
   to: number;
+  cause: LinkFailureCause;
   /** How many of OUR messages the platform reported sent inside it (scoped to this app). */
   count: number;
+  /** Those messages' ids, so we can reconcile exactly rather than by timestamp. Capped at 500. */
+  ids: string[];
+  /** The cap bit — `ids` is incomplete and `count` is the real number. */
+  truncated: boolean;
 }
 
 /**
- * Periods where a message we were told was `sent` may never have arrived (OpenMasjidOS 0.51.1-dev.12+).
+ * Periods where a message we were told was `sent` may never have arrived (OpenMasjidOS 0.51.1-dev.12+;
+ * `cause`/`ids`/`truncated`/`ok` since dev.13).
  *
  * A masjid's WhatsApp session can expire on its own, the way WhatsApp Desktop signs itself out. The
  * gateway kept accepting messages and reporting them sent for over a day. The platform now spots
@@ -368,12 +381,14 @@ export interface WhatsAppSuspectWindow {
  * the platform noticing is unrecoverable, and the platform cannot resend from it because it deletes
  * message contents the moment it hands them over. So it tells each app WHEN it was blind.
  *
- * READ THIS BEFORE CHANGING THE POLL INTERVAL. The platform returns a window only while its
- * incident is still open — `clearWhatsAppIncident()` fires the moment an admin re-links the phone
- * or releases the queue, and from then on this endpoint answers `{windows: []}` for ever. The
- * window is therefore visible during the outage and gone the instant somebody fixes it, which is
- * exactly when they would go looking. Anything we see must be PERSISTED on sight; there is no
- * re-reading it later.
+ * WINDOWS SURVIVE RECOVERY NOW, and that is a change worth knowing. The first cut answered only
+ * while the incident was open, so re-linking the phone erased the evidence at precisely the moment
+ * an admin went looking for what they had missed — we reported that, and it is fixed: windows are
+ * retained for seven days after the outage ends. That is why this app no longer hoards them.
+ *
+ * `ok` is checked explicitly. The platform added it because a caller ignoring the status code could
+ * read a 403 or 429 body as an all-clear — the trap Students hit on `/groups`. An older platform
+ * omits the field, so absent-but-well-shaped is still accepted.
  *
  * Fails soft. A 404 is a platform too old to have the route — "no information", never an incident.
  */
@@ -390,16 +405,24 @@ export async function fabricWhatsAppSuspect(): Promise<{ ok: true; windows: What
     });
     clearTimeout(t);
     if (!res.ok) return { ok: false, reason: res.status === 404 ? 'not-supported' : `http_${res.status}` };
-    const j = (await res.json().catch(() => null)) as { windows?: unknown } | null;
+    const j = (await res.json().catch(() => null)) as { ok?: unknown; windows?: unknown } | null;
+    // An explicit `ok: false` is a refusal wearing a 200. Absent is fine — that is a platform older
+    // than dev.13, which only ever returned the field on success anyway.
+    if (!j || j.ok === false) return { ok: false, reason: 'refused' };
     // A 200 of the wrong shape is a failure, not "all clear". Reading a malformed answer as "no
     // problem" is precisely the silence this endpoint exists to break.
-    if (!j || !Array.isArray(j.windows)) return { ok: false, reason: 'bad-shape' };
+    if (!Array.isArray(j.windows)) return { ok: false, reason: 'bad-shape' };
     const windows = j.windows
       .filter((w): w is Record<string, unknown> => !!w && typeof w === 'object')
       .map((w) => ({
         from: Math.trunc(Number(w.from) || 0),
         to: Math.trunc(Number(w.to) || 0),
+        cause: (typeof w.cause === 'string' && CAUSES.includes(w.cause) ? w.cause : 'unknown') as LinkFailureCause,
         count: Math.max(0, Math.trunc(Number(w.count) || 0)),
+        ids: Array.isArray(w.ids)
+          ? w.ids.filter((i): i is string => typeof i === 'string' && /^[\w.:-]{1,128}$/.test(i)).slice(0, 500)
+          : [],
+        truncated: w.truncated === true,
       }))
       .filter((w) => w.from > 0 && w.to >= w.from);
     return { ok: true, windows };

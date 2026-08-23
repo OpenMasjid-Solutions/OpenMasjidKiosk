@@ -62,6 +62,15 @@ detail of every change — it is distilled into a major-changes-only entry when 
     perfectly. The useful thing is knowing which period to check, and the Donations and Devices
     pages cover it. **Email alerts were never affected.**
   - Dismiss the notice once you've had a look.
+  - It now says **why** the connection dropped, and what to do about it — "WhatsApp signed itself
+    out", "needs linking again", or "the gateway rejected its credentials" each need a different
+    response, and two of them need you to go and do something (needs OpenMasjidOS 0.51.1-dev.13).
+  - The exact messages affected are identified rather than guessed at from timings, so the alerts
+    marked as doubtful are the right ones.
+  - **A message that is waiting is now chased for a week rather than a day.** OpenMasjidOS can hold
+    messages while the connection is down and release them once you reconnect, so one can legitimately
+    wait far longer than it used to — and giving up after a day would have left it reading "queued"
+    for ever when it had in fact gone out.
 
 - **Notifications is now one table: who you want to tell, and what each of them hears about.** It
   used to be a block per alert, each with room for exactly one email address and one phone number —

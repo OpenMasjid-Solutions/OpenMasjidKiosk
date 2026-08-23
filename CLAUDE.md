@@ -745,13 +745,23 @@ and the platform cannot resend from it because it deletes message contents on ha
 `GET /api/fabric/whatsapp/suspect` → `{"windows":[{"from","to","count"}]}` (epoch ms, scoped to our
 app id, on the 600/min READ budget so polling never costs a send). `fabricWhatsAppSuspect()`.
 
-**THE WINDOW VANISHES WHEN THE ADMIN FIXES IT.** The platform returns a window only while its
-incident is open; `clearWhatsAppIncident()` fires the moment an admin re-links the phone or releases
-the queue, and thereafter the answer is `{"windows":[]}` for ever — i.e. it goes quiet exactly when
-someone would go looking. So: we poll on the **existing 15-minute reconcile sweep** (hourly, as the
-brief suggested, would be a coin flip) and **persist anything we see on sight**
-(`store.addWhatsAppSuspectWindow`, deduped by `from` because one open outage is re-reported with a
-growing `to`/`count` on every poll).
+**THE WINDOW USED TO VANISH WHEN THE ADMIN FIXED IT**, and that is worth keeping written down
+because it shaped this code twice. The first cut of the platform route answered only while the
+incident was open, and `clearWhatsAppIncident()` fires the moment an admin re-links the phone — so
+the evidence disappeared at precisely the moment someone went looking for what they had missed. We
+reported it; **0.51.1-dev.13 retains windows for seven days after recovery**, and added `cause`,
+`ids`, `truncated` and an explicit `ok`.
+
+So the platform is the source of truth again: we poll **hourly**, hold the answer in memory, and
+persist only the **dismissals** — which are a fact about our own UI that the platform cannot know.
+The earlier 15-minute cadence and the persist-on-sight hoard existed solely to race an admin's
+re-link and are gone.
+
+**Flag by `ids`, not by timestamp.** The platform names the actual message ids in a window, so
+`markWhatsAppSuspectByIds` is exact; matching a record's single timestamp against an interval is
+ambiguous for anything queued one side of a boundary and sent the other. `markWhatsAppSuspect(from,
+to)` remains as the fallback for a platform too old to send ids, and for a window whose id list hit
+the 500 cap (`truncated: true` — which the platform states rather than hiding).
 
 **WE DO NOT RESEND, and that is a domain decision.** Every WhatsApp this app sends is an alert about
 a *moment* — a reader went offline, a payment was refused. Re-sending "the card reader is offline" a
@@ -766,8 +776,10 @@ over and was reported honestly at the time.
 temptation to read it as a delivery failure while writing reconciliation logic is the easy mistake.
 
 **A queued message can now sit queued far longer**, because held messages wait for an admin to
-release them. Our reconcile still stops at 24h, which remains right: the platform's per-app history
-is 24h, so past that the lookup 404s and `unknown` correctly changes nothing.
+release them — and since 0.51.1-dev.13 a still-queued message **keeps its outcome record for as
+long as it waits**, rather than ageing out at 24h. Our reconcile window is therefore **7 days**, not
+24h: the old cutoff would have given up on a message whose record still existed and could still
+resolve. A `404` past that is still `unknown`, never failure.
 
 ### What we deliberately do NOT do
 
