@@ -32,3 +32,4 @@ rootProject.name = "OpenMasjidKiosk"
 //   :mobile OpenMasjid Mobile Donations — a volunteer's own phone at a fundraising event
 include(":core")
 include(":app")
+include(":mobile")

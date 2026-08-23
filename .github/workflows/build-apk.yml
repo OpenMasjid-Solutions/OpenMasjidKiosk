@@ -39,8 +39,11 @@ on:
         required: false
     outputs:
       artifact:
-        description: Name of the uploaded APK artifact
+        description: Name of the uploaded kiosk APK artifact
         value: kiosk-apk
+      mobile-artifact:
+        description: Name of the uploaded OpenMasjid Mobile Donations APK artifact
+        value: mobile-apk
   workflow_dispatch:
   push:
     tags: ['v*']
@@ -100,13 +103,13 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon :app:assembleRelease
+        run: ./gradlew --no-daemon :app:assembleRelease :mobile:assembleRelease
 
       # Kept so a run without the signing secrets still proves the Kotlin compiles. Its output is
       # NEVER published — see the collect step below, which refuses anything but a release APK.
       - name: Build debug APK (no signing secrets)
         if: steps.signing.outputs.have_keystore != 'true'
-        run: ./gradlew --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:assembleDebug :mobile:assembleDebug
 
       - name: Collect APK as openmasjidkiosk.apk
         run: |
@@ -149,9 +152,31 @@ jobs:
           fi
           cp "$apk" "$RUNNER_TEMP/openmasjidkiosk.apk"
 
+          # --- OpenMasjid Mobile Donations, same three guards ---
+          # A separate artifact, and deliberately NOT handed to the image build yet: /new only
+          # offers an app whose APK is present, so until this one can actually take a donation it
+          # must not reach the image. It is uploaded so it can be sideloaded from the Actions run
+          # for testing on a real phone before anybody is offered it.
+          mrel=mobile/build/outputs/apk/release
+          mapk=$(find "$mrel" -maxdepth 1 -name '*.apk' ! -name '*unsigned*' ! -name '*debug*' 2>/dev/null | sort | head -1 || true)
+          if [ -z "${mapk:-}" ]; then
+            echo "::error::No release-signed OpenMasjid Mobile Donations APK was produced."
+            find mobile/build/outputs/apk -name '*.apk' 2>/dev/null || echo "(no APKs at all)"
+            exit 1
+          fi
+          echo "Found $mapk"
+          cp "$mapk" "$RUNNER_TEMP/openmasjidmobile.apk"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: kiosk-apk
           path: ${{ runner.temp }}/openmasjidkiosk.apk
+          if-no-files-found: error
+
+      - name: Upload OpenMasjid Mobile Donations APK artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mobile-apk
+          path: ${{ runner.temp }}/openmasjidmobile.apk
           if-no-files-found: error

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+
+  Legacy full-backup rules (Android 11 and below). Backup is disabled at the application
+  level (android:allowBackup="false") because a kiosk holds device tokens and config that
+  must never leave the device; this file exists to satisfy the manifest reference.
+-->
+<full-backup-content>
+</full-backup-content>

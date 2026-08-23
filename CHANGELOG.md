@@ -25,6 +25,9 @@ detail of every change — it is distilled into a major-changes-only entry when 
     and the kiosk app on top of it, so the mobile app can be built on the same foundation instead of
     a copy of it. Nothing about the kiosk app changes — the split moved files between build units
     without editing a line of their source.
+  - The mobile app now exists as a real build target and is compiled and signed on every change,
+    alongside the kiosk app. **It is not offered on /new yet**, and will not be until it can
+    actually take a donation — the setup page only ever shows an app the server can hand over.
 
 - **Notifications is now one table: who you want to tell, and what each of them hears about.** It
   used to be a block per alert, each with room for exactly one email address and one phone number —
