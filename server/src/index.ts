@@ -87,9 +87,10 @@ const LOOPBACK_RE = /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[?::1)/i;
  *  the Devices page and the WhatsApp `kiosks` command can never disagree about who is online. */
 const ONLINE_MS = 35_000;
 
-/** The download filename we hand the tablet — versioned so a stale cached copy is obvious.
- *  The URL path stays stable at /download/openmasjidkiosk.apk. */
+/** The download filenames we hand the device — versioned so a stale cached copy is obvious.
+ *  The URL paths stay stable at /download/openmasjidkiosk.apk and /download/openmasjidmobile.apk. */
 const apkFilename = `openmasjidkiosk-${config.version}.apk`;
+const mobileApkFilename = `openmasjid-mobile-donations-${config.version}.apk`;
 
 async function main(): Promise<void> {
   const store = new Store();
@@ -320,6 +321,11 @@ async function main(): Promise<void> {
       apkAvailable: fs.existsSync(config.apkPath),
       apkDownloadPath: '/download/openmasjidkiosk.apk',
       apkFilename,
+      // The handheld app, offered beside the kiosk on /new. Checked separately: a build that
+      // bundles one and not the other must offer exactly the one it has, never a dead button.
+      mobileApkAvailable: fs.existsSync(config.mobileApkPath),
+      mobileApkDownloadPath: '/download/openmasjidmobile.apk',
+      mobileApkFilename,
     },
   }));
 
@@ -3156,6 +3162,23 @@ ${body}
       .header('content-length', String(stat.size))
       .header('cache-control', 'no-cache');
     return reply.send(fs.createReadStream(config.apkPath));
+  });
+
+  // ── Download the bundled OpenMasjid Mobile Donations APK (served by /new) ───
+  // The handheld app for fundraising events. Reachable over the Cloudflare tunnel like the kiosk
+  // APK is, and deliberately so: a volunteer standing at an event opens this server's public
+  // address on their own phone, downloads, installs and pairs — without ever being on the LAN.
+  app.get('/download/openmasjidmobile.apk', async (_req, reply) => {
+    if (!fs.existsSync(config.mobileApkPath)) {
+      return reply.code(404).send({ error: 'The mobile donations app isn’t available yet on this server.' });
+    }
+    const stat = fs.statSync(config.mobileApkPath);
+    reply
+      .header('content-type', 'application/vnd.android.package-archive')
+      .header('content-disposition', `attachment; filename="${mobileApkFilename}"`)
+      .header('content-length', String(stat.size))
+      .header('cache-control', 'no-cache');
+    return reply.send(fs.createReadStream(config.mobileApkPath));
   });
 
   // ── Static web app (built by Vite into ./public) ────────────────────────────

@@ -18,6 +18,12 @@ export interface AppInfo {
   apkDownloadPath: string;
   /** Suggested download filename (versioned). */
   apkFilename: string;
+  /** Whether the handheld "OpenMasjid Mobile Donations" app is bundled in this image. Checked
+   *  separately from the kiosk APK, so a build carrying one and not the other offers exactly the
+   *  one it can hand over instead of showing a dead button. */
+  mobileApkAvailable: boolean;
+  mobileApkDownloadPath: string;
+  mobileApkFilename: string;
 }
 
 export interface Session {

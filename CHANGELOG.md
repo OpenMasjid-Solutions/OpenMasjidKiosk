@@ -7,6 +7,21 @@
 _Development builds ahead of 0.11.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.12.0 is released._
 
+- **Groundwork for a second app: OpenMasjid Mobile Donations.** A handheld app for a volunteer's own
+  phone, for taking donations at a fundraising event — an ordinary unlocked phone, not a
+  wall-mounted kiosk locked to the giving screen. This build carries the plumbing to hand it out;
+  the app itself follows in the next dev builds.
+  - The setup page at **/new** now covers both apps and asks which one you are installing, showing
+    the chooser only when the server actually has both to give. An app that isn't bundled is never
+    offered — the same rule the kiosk download already followed, so nobody is shown a button that
+    cannot do anything.
+  - It is distributed exactly like the kiosk app: bundled inside the server image and downloaded
+    from your own server. No app store, nothing to sign up for.
+  - Because /new and pairing already work over a public address, a volunteer will be able to open
+    your masjid's remote link on their own phone, install, pair with a 6-digit code and start
+    taking donations — without ever joining the masjid's Wi-Fi. That needed no change here; it is
+    what Remote access already allows.
+
 - **Notifications is now one table: who you want to tell, and what each of them hears about.** It
   used to be a block per alert, each with room for exactly one email address and one phone number —
   so a masjid with a treasurer *and* a caretaker had to choose, and the same address had to be

@@ -60,8 +60,10 @@ COPY --from=web /web/dist ./public
 # file, so the notes always describe the version actually running (no call to GitHub).
 COPY CHANGELOG.md ./CHANGELOG.md
 
-# Bundle the Android kiosk APK, served by /new. CI drops the signed APK into ./apk/
-# before this build; locally the folder holds only a .gitkeep (build still succeeds).
+# Bundle the Android APKs, served by /new: the locked-down KIOSK app and the handheld
+# "OpenMasjid Mobile Donations" app. CI drops both signed APKs into ./apk/ before this build;
+# locally the folder holds only a .gitkeep (the build still succeeds, and /new offers whichever
+# of the two is actually present rather than showing a dead button for the other).
 COPY apk/ ./public/download/
 
 # Update-channel suffix — RETIRED, and now empty on BOTH channels.
@@ -83,6 +85,7 @@ ENV PORT=8080 \
     DATA_DIR=/data \
     PUBLIC_DIR=/app/public \
     APK_PATH=/app/public/download/openmasjidkiosk.apk \
+    MOBILE_APK_PATH=/app/public/download/openmasjidmobile.apk \
     APP_VERSION_SUFFIX=${APP_VERSION_SUFFIX}
 EXPOSE 8080
 VOLUME ["/data"]
