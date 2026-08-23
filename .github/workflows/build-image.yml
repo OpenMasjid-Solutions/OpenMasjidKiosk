@@ -250,15 +250,27 @@ jobs:
               esac ;;
           esac
 
-      # Pull the freshly built APK into the build context so the Dockerfile bundles it.
-      - name: Fetch built APK
+      # Pull the freshly built APKs into the build context so the Dockerfile bundles them. BOTH land
+      # in ./apk/, which the Dockerfile copies wholesale into /app/public/download — so /new can
+      # hand out the wall KIOSK app and the handheld OpenMasjid Mobile Donations app.
+      - name: Fetch built kiosk APK
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: kiosk-apk
           path: apk
 
-      - name: Confirm APK is present
-        run: ls -la apk && test -f apk/openmasjidkiosk.apk
+      - name: Fetch built mobile APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mobile-apk
+          path: apk
+
+      # Both, by exact filename. The server checks each independently and /new offers only what is
+      # actually there, so a missing one would degrade quietly rather than fail — which is the wrong
+      # failure here: an image that silently ships without the app someone is standing there waiting
+      # to install is worse than a red build.
+      - name: Confirm both APKs are present
+        run: ls -la apk && test -f apk/openmasjidkiosk.apk && test -f apk/openmasjidmobile.apk
 
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3

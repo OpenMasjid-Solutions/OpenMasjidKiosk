@@ -33,7 +33,7 @@ services:
     # catalog installs. On `main` this line carries the release tag + @sha256 digest; a "merge to
     # main" must restore that form, and CI's "Check the compose image matches the channel" step
     # fails the build in both directions.
-    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.12.0-dev.17
+    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.12.0-dev.18
     restart: unless-stopped
     environment:
       PORT: "8080"

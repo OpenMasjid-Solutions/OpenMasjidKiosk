@@ -47,6 +47,9 @@ detail of every change — it is distilled into a major-changes-only entry when 
     plainly and tells the volunteer NOT to take the card again before checking the Donations page.
   - Monthly giving is deliberately not offered here — it needs a name and an email, and nobody
     fills in a form at a fundraising table. It stays on the kiosk.
+  - **It is now on your setup page.** Open **/new** on a phone, choose **Mobile donations**, and
+    install it. Both apps ship inside this build, so the version always matches your server, and
+    there is a short guide at `docs/MOBILE_DONATIONS.md`.
 
 - **Notifications is now one table: who you want to tell, and what each of them hears about.** It
   used to be a block per alert, each with room for exactly one email address and one phone number —

@@ -394,7 +394,23 @@ Six sections — **Dashboard · Devices · Campaigns · Donations · Recurring �
   per-session light/dark override of your own.
 - **"What's new"** in the account menu — the release notes that shipped inside the running
   build, with a gold dot until you've read them, and no call to the internet.
-- A **public `/new` setup page** that hands out the Android app matched to the server version.
+- A **public `/new` setup page** that hands out **both** Android apps, matched to the server
+  version — the wall kiosk, and **OpenMasjid Mobile Donations** for a volunteer's own phone at a
+  fundraising event. It offers only what the running image actually contains, so there is never a
+  button that cannot install anything.
+
+### OpenMasjid Mobile Donations (a phone, not a kiosk)
+
+A second Android app, for collecting at events — a dinner, a bazaar, a collection round. Same
+server, same Stripe Reader M2 over Bluetooth or USB, and the same rule that **only the server can
+record a donation**. What it does *not* do is lock the phone down: no launcher takeover, no Lock
+Task, no exit PIN. It is somebody's own phone, and Home, Back and Recents all keep working.
+
+A volunteer opens `/new` on their phone, downloads, pairs with a 6-digit code and starts taking
+cards. With Remote access on they can do all of that **from anywhere**, without ever joining the
+masjid's Wi-Fi. Monthly giving is deliberately left on the kiosk — it needs a name and an email,
+and nobody fills in a form at a fundraising table.
+See [`docs/MOBILE_DONATIONS.md`](docs/MOBILE_DONATIONS.md).
 
 ## Security
 
@@ -474,7 +490,8 @@ tablet and a 6-digit code.
   published on host `7878` by default; the platform serves it over HTTPS.
 - **A Stripe account** with Terminal enabled — plus online card payments enabled if you want
   typed entry.
-- **An Android tablet**, Android 8.0 (API 26) or newer, with outbound internet.
+- **An Android tablet** for the kiosk, Android 8.0 (API 26) or newer, with outbound internet —
+  and/or an ordinary **Android phone** for Mobile Donations.
 - **A Stripe Reader M2** (optional — typed entry works without one).
 - **OpenMasjid Students 0.43.0+** for tuition, and an OpenMasjidOS email provider for branded
   receipts. Both optional.

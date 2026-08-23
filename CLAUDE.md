@@ -170,11 +170,14 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
   ├── CHANGELOG.md             # ships INSIDE the image — the panel's "What's new" (rule 7b)
   ├── server/                  # Node 22 + TypeScript + Fastify + better-sqlite3
   ├── web/                     # React + Vite + Tailwind admin panel (+ /new page)
-  ├── android/                 # Kotlin + Jetpack Compose kiosk app (Gradle)
-  ├── docs/                    # TABLET_SETUP, READER_SETUP, ARCHITECTURE, REMOTE_ADOPTION,
+  ├── android/                 # Kotlin + Jetpack Compose, THREE Gradle modules:
+  │     ├── core/              #   shared: server client, pairing, device store, Terminal, theme
+  │     ├── app/               #   the locked-down wall KIOSK (HOME launcher, Lock Task, exit PIN)
+  │     └── mobile/            #   OpenMasjid Mobile Donations — a volunteer's phone at an event
+  ├── docs/                    # TABLET_SETUP, MOBILE_DONATIONS, READER_SETUP, ARCHITECTURE, REMOTE_ADOPTION,
   │                            #   STUDENTS_INTEGRATION, FABRIC_BILLING_CONTRACT, audit/
   ├── assets/                  # README artwork (not shipped in the image)
-  ├── apk/                     # CI drops the built APK here for the Dockerfile to bundle
+  ├── apk/                     # CI drops BOTH built APKs here for the Dockerfile to bundle
   └── .github/workflows/       # build-image.yml (GHCR multi-arch) + build-apk.yml + cla.yml
   ```
   *(The building guide suggests repos named `openmasjid-<id>`; the shipped apps use the `OpenMasjidX` style. Keep `OpenMasjidKiosk` for consistency with Display/Donations — what must match is the **image name**: the compose references the lowercased repo, `ghcr.io/openmasjid-solutions/openmasjidkiosk`.)*
@@ -389,7 +392,10 @@ adoption · About (version, docs links, the AGPL **Source code** link) · **What
 
 - **server/** — Node 22 (`node:22-slim` in the image), TypeScript strict, **Fastify**, **better-sqlite3**, **stripe** SDK, **scrypt** via `node:crypto` for the fallback admin password + PIN hashes (chosen over argon2 by the maintainer, 2026-07-02: zero extra native deps and Pi-friendly — see `docs/ARCHITECTURE.md`), **zod** at every boundary. No WebSocket (heartbeat polling is enough); add SSE for the Devices page if live feel demands it.
 - **web/** — React + Vite + TypeScript + Tailwind (preflight off) + **lucide-react**, and that is the whole runtime dependency list. Tokens and recipes come from **DESIGN.md** (Sakīna Glass) as hand-written CSS in `src/styles/`; animation is CSS transitions and keyframes. (This bullet used to name **shadcn/ui** and **Motion** as well — neither was ever imported by a single file, and `motion` sat in `package.json` as an unused runtime dependency until it was removed on 2026-08-17. Prefer plain CSS here: the panel is a handful of screens and the design language is already expressed as tokens.) Inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
-- **android/** — **Kotlin + Jetpack Compose**, minSdk 26 (Terminal SDK floor), **Stripe Terminal Android SDK** (Bluetooth + USB discovery/connect for the M2), DataStore for device config, WorkManager for heartbeats. **No camera/QR** — pairing is a typed 6-digit code (kiosk tablets often have no camera). Recreate the design language natively: same palette tokens, spring motion (`animate*AsState`/`AnimatedContent`), dark default, RTL, reduced-motion.
+  ├── android/                 # Kotlin + Jetpack Compose, THREE Gradle modules:
+  │     ├── core/              #   shared: server client, pairing, device store, Terminal, theme
+  │     ├── app/               #   the locked-down wall KIOSK (HOME launcher, Lock Task, exit PIN)
+  │     └── mobile/            #   OpenMasjid Mobile Donations — a volunteer's phone at an event
 - **One container** serves API + admin + `/new` + the bundled APK. Multi-stage Dockerfile; CI: `build-apk.yml` builds + signs the APK (keystore in GH secrets, versionName from `VERSION`), `build-image.yml` builds web+server, **copies the freshly built APK into the image**, pushes multi-arch to GHCR, prints the digest to pin.
 
 ---
