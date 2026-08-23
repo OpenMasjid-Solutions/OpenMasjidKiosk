@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -75,6 +74,9 @@ fun ReadyScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        // No import for `weight` — it is a ColumnScope extension supplied by the enclosing
+        // Column's receiver. Importing androidx.compose.foundation.layout.weight instead resolves
+        // to an INTERNAL RowColumnParentData extension and fails to compile.
         Spacer(Modifier.weight(1f))
 
         TextButton(onClick = { confirming = true }, modifier = Modifier.fillMaxWidth()) {
