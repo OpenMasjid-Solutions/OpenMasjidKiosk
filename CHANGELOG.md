@@ -32,6 +32,11 @@ detail of every change — it is distilled into a major-changes-only entry when 
     the phone a name the masjid will recognise, and it appears in your Devices list like any other
     device. Pairing works over your public address as well as on the masjid's Wi-Fi, so a volunteer
     can set their phone up from anywhere.
+  - It can now **connect a Stripe Reader M2**, over Bluetooth or USB. The phone asks for Bluetooth
+    and location access when you press Find my reader — and says why first, including that location
+    is required by the card-reader software and that the app never tracks where you are. If someone
+    declines permanently, there is a button straight to the phone's permission settings rather than
+    a prompt Android will silently refuse to show again.
 
 - **Notifications is now one table: who you want to tell, and what each of them hears about.** It
   used to be a block per alert, each with room for exactly one email address and one phone number —

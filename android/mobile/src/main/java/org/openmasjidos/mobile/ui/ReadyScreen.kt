@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +27,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.openmasjidos.kiosk.local.PairingRecord
+import org.openmasjidos.kiosk.readers.ReaderTransport
+import org.openmasjidos.kiosk.readers.ReaderUiState
 
 /**
  * What a paired phone shows, until the reader and the collection flow land in the next layers.
@@ -36,6 +41,14 @@ import org.openmasjidos.kiosk.local.PairingRecord
 @Composable
 fun ReadyScreen(
     pairing: PairingRecord,
+    reader: ReaderUiState,
+    transport: ReaderTransport,
+    locationId: String,
+    onTransport: (ReaderTransport) -> Unit,
+    onDiscover: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onConnect: (String) -> Unit,
+    onDisconnectReader: () -> Unit,
     onUnpair: () -> Unit,
 ) {
     var confirming by remember { mutableStateOf(false) }
@@ -45,6 +58,7 @@ fun ReadyScreen(
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 28.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -68,16 +82,22 @@ fun ReadyScreen(
             }
         }
 
-        Text(
-            text = "Taking payments comes next — connect a Stripe Reader M2 over Bluetooth or USB.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        ReaderScreen(
+            state = reader,
+            transport = transport,
+            locationId = locationId,
+            onTransport = onTransport,
+            onDiscover = onDiscover,
+            onStopDiscovery = onStopDiscovery,
+            onConnect = onConnect,
+            onDisconnect = onDisconnectReader,
         )
 
-        // No import for `weight` — it is a ColumnScope extension supplied by the enclosing
-        // Column's receiver. Importing androidx.compose.foundation.layout.weight instead resolves
-        // to an INTERNAL RowColumnParentData extension and fails to compile.
-        Spacer(Modifier.weight(1f))
+        // A FIXED spacer, not Modifier.weight(1f). This Column scrolls now that it hosts the
+        // reader section, and `weight` inside a scrollable Column is an error — weight divides
+        // bounded space and a scrolling column is measured unbounded. Compose throws at RUNTIME
+        // for that, which no amount of CI compiling would have caught.
+        Spacer(Modifier.height(24.dp))
 
         TextButton(onClick = { confirming = true }, modifier = Modifier.fillMaxWidth()) {
             Text("Disconnect from this masjid")

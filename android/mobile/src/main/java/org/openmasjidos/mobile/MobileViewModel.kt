@@ -7,13 +7,19 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.openmasjidos.kiosk.local.DeviceStore
 import org.openmasjidos.kiosk.local.PairingRecord
 import org.openmasjidos.kiosk.net.KioskRepository
 import org.openmasjidos.kiosk.net.PairResult
+import org.openmasjidos.kiosk.readers.ReaderManager
+import org.openmasjidos.kiosk.readers.ReaderTransport
+import org.openmasjidos.kiosk.readers.ReaderUiState
 
 /**
  * The mobile app's state.
@@ -48,15 +54,64 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     private val _pair = MutableStateFlow(PairUi())
     val pair: StateFlow<PairUi> = _pair.asStateFlow()
 
+    /** The reader, straight from :core — the same state object the kiosk renders. */
+    val reader: StateFlow<ReaderUiState> = ReaderManager.state
+
+    /**
+     * The Terminal Location this masjid's readers connect to, from the synced config.
+     *
+     * Empty until the first config fetch succeeds, and empty is meaningful: it means an admin has
+     * not finished Payments setup, and the reader screen says exactly that rather than letting a
+     * connect attempt fail with something a volunteer cannot act on.
+     */
+    val locationId: StateFlow<String> = store.config
+        .map { it?.locationId.orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
     init {
         // One collector for the life of the app: pairing is the only thing that decides which
         // screen is shown, and unpairing must take effect immediately rather than on next launch.
         viewModelScope.launch {
             store.pairing.collect { rec ->
                 _screen.value = if (rec == null) Screen.Pair else Screen.Ready(rec)
+                if (rec != null) {
+                    ReaderManager.ensureInitialized(getApplication(), repo)
+                    // Fail soft: no network at the hall yet is not a reason to show an error on a
+                    // screen the volunteer has not asked anything of. The reader screen reports the
+                    // consequence (no location set) if it never lands.
+                    runCatching { repo.fetchConfig() }
+                }
             }
         }
     }
+
+    // ---- Reader ----------------------------------------------------------------------------
+
+    /**
+     * Which transport the volunteer has SELECTED — not the same thing as `reader.transport`.
+     *
+     * `ReaderUiState.transport` only changes when discovery actually starts, so driving the chips
+     * from it would mean tapping "USB" appeared to do nothing until you also pressed Find. This is
+     * the selection; that is the state of the hardware.
+     */
+    private val _transport = MutableStateFlow(ReaderTransport.Bluetooth)
+    val transport: StateFlow<ReaderTransport> = _transport.asStateFlow()
+
+    fun setTransport(t: ReaderTransport) {
+        ReaderManager.clearError()
+        _transport.value = t
+    }
+
+    fun discoverReader() {
+        ReaderManager.clearError()
+        ReaderManager.startDiscovery(_transport.value)
+    }
+
+    fun stopDiscovery() = ReaderManager.stopDiscovery()
+
+    fun connectReader(serial: String) = ReaderManager.connect(serial, locationId.value)
+
+    fun disconnectReader() = ReaderManager.disconnect()
 
     /**
      * Pair this phone with a masjid's server.

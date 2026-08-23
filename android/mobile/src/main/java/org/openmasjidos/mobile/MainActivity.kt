@@ -57,10 +57,23 @@ class MainActivity : ComponentActivity() {
                             onSubmit = vm::submitPairing,
                         )
 
-                        is Screen.Ready -> ReadyScreen(
-                            pairing = s.pairing,
-                            onUnpair = vm::unpair,
-                        )
+                        is Screen.Ready -> {
+                            val reader by vm.reader.collectAsStateWithLifecycle()
+                            val transport by vm.transport.collectAsStateWithLifecycle()
+                            val locationId by vm.locationId.collectAsStateWithLifecycle()
+                            ReadyScreen(
+                                pairing = s.pairing,
+                                reader = reader,
+                                transport = transport,
+                                locationId = locationId,
+                                onTransport = vm::setTransport,
+                                onDiscover = vm::discoverReader,
+                                onStopDiscovery = vm::stopDiscovery,
+                                onConnect = vm::connectReader,
+                                onDisconnectReader = vm::disconnectReader,
+                                onUnpair = vm::unpair,
+                            )
+                        }
                     }
                 }
             }
