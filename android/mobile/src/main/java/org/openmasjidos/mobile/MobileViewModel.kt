@@ -17,9 +17,13 @@ import org.openmasjidos.kiosk.local.DeviceStore
 import org.openmasjidos.kiosk.local.PairingRecord
 import org.openmasjidos.kiosk.net.KioskRepository
 import org.openmasjidos.kiosk.net.PairResult
+import org.openmasjidos.kiosk.local.Campaign
+import org.openmasjidos.kiosk.readers.PaymentController
+import org.openmasjidos.kiosk.readers.ReaderConn
 import org.openmasjidos.kiosk.readers.ReaderManager
 import org.openmasjidos.kiosk.readers.ReaderTransport
 import org.openmasjidos.kiosk.readers.ReaderUiState
+import java.util.UUID
 
 /**
  * The mobile app's state.
@@ -35,6 +39,28 @@ sealed interface Screen {
     data object Loading : Screen
     data object Pair : Screen
     data class Ready(val pairing: PairingRecord) : Screen
+}
+
+/**
+ * Where one collection has got to.
+ *
+ * Deliberately short. At an event the volunteer takes a donation, hands the phone back, and takes
+ * another — so there is no attract screen, no details step and no long thank-you. The kiosk's flow
+ * is built for a stranger walking up to a wall unaided; this one is built for someone doing it
+ * fifty times an hour with a queue.
+ */
+sealed interface Collect {
+    /** Entering an amount. */
+    data object Idle : Collect
+    /** Server is minting the PaymentIntent. */
+    data object Preparing : Collect
+    /** Reader is armed; the donor taps. [prompt] is the reader's own instruction, if it gave one. */
+    data class Tap(val amountMinor: Long, val prompt: String?) : Collect
+    /** Card read; the SERVER is verifying with Stripe. Nothing is recorded until it answers. */
+    data object Verifying : Collect
+    data class Done(val amountMinor: Long, val currency: String) : Collect
+    /** A finished sentence, never an exception. */
+    data class Failed(val message: String) : Collect
 }
 
 /** What the pairing form is doing right now. */
@@ -112,6 +138,105 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     fun connectReader(serial: String) = ReaderManager.connect(serial, locationId.value)
 
     fun disconnectReader() = ReaderManager.disconnect()
+
+    // ---- Collecting --------------------------------------------------------------------------
+
+    /** The campaigns this masjid is running, from the synced config. */
+    val campaigns: StateFlow<List<Campaign>> = store.config
+        .map { it?.campaigns.orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val currency: StateFlow<String> = store.config
+        .map { it?.currency.orEmpty().ifBlank { "USD" } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "USD")
+
+    private val _chosenCampaign = MutableStateFlow("")
+    val chosenCampaign: StateFlow<String> = _chosenCampaign.asStateFlow()
+    fun chooseCampaign(id: String) { _chosenCampaign.value = id }
+
+    private val _collect = MutableStateFlow<Collect>(Collect.Idle)
+    val collect: StateFlow<Collect> = _collect.asStateFlow()
+
+    /**
+     * Take one donation.
+     *
+     * Server mints the intent, the reader collects and confirms, then the SERVER verifies with
+     * Stripe and records it. The phone never decides that money moved — it reports an id and is
+     * told the outcome. That is the same invariant the kiosk holds and it is not negotiable: a
+     * device in a volunteer's hand is the last thing that should be trusted about a payment.
+     *
+     * `monthly = false` throughout. A standing order needs a name and an email, which is a form
+     * nobody fills in at a fundraising table; monthly giving belongs on the kiosk or the website.
+     */
+    fun takePayment(amountMinor: Long) {
+        if (_collect.value !is Collect.Idle && _collect.value !is Collect.Failed) return
+        if (amountMinor <= 0) return
+        if (reader.value.conn != ReaderConn.Connected) {
+            _collect.value = Collect.Failed("Connect a card reader first.")
+            return
+        }
+        _collect.value = Collect.Preparing
+        viewModelScope.launch {
+            // A fresh key per ATTEMPT. If the network drops after the server created the intent,
+            // retrying with the same key would return the same intent rather than double-charging.
+            val key = UUID.randomUUID().toString()
+            val created = runCatching {
+                repo.createPaymentIntent(
+                    amountMinor = amountMinor,
+                    campaignId = _chosenCampaign.value.ifBlank { null },
+                    donorName = null,
+                    donorEmail = null,
+                    monthly = false,
+                    manual = false,
+                    coverFees = false,
+                    idempotencyKey = key,
+                )
+            }.getOrElse {
+                _collect.value = Collect.Failed("Couldn’t start the payment. Check this phone still has internet, then try again.")
+                return@launch
+            }
+
+            _collect.value = Collect.Tap(created.chargeMinor.takeIf { it > 0 } ?: amountMinor, null)
+
+            val confirmed = runCatching {
+                PaymentController.collectAndConfirm(created.clientSecret, savingCard = false)
+            }.getOrElse {
+                // Includes the donor or volunteer cancelling, which is ordinary and not an error
+                // worth alarming language over.
+                _collect.value = Collect.Failed("That card didn’t go through. No money was taken — try again.")
+                return@launch
+            }
+
+            _collect.value = Collect.Verifying
+            val outcome = runCatching { repo.completePaymentIntent(confirmed) }.getOrElse {
+                // The dangerous case, and it is stated honestly rather than guessed at: the card may
+                // well have been charged, and this phone simply cannot know. It must not say
+                // "failed" and it must not say "thank you".
+                _collect.value = Collect.Failed(
+                    "The card was read, but we couldn’t confirm it with the masjid’s server. " +
+                        "Do NOT take it again — check the Donations page before retrying.",
+                )
+                return@launch
+            }
+
+            _collect.value = if (outcome.succeeded) {
+                Collect.Done(outcome.amountMinor, outcome.currency)
+            } else {
+                Collect.Failed("That payment was declined. No money was taken.")
+            }
+        }
+    }
+
+    /** Back to the amount screen, ready for the next donor. */
+    fun resetCollect() {
+        _collect.value = Collect.Idle
+    }
+
+    /** Volunteer cancelled while the reader was waiting for a card. */
+    fun cancelCollect() {
+        PaymentController.cancelCollect()
+        _collect.value = Collect.Idle
+    }
 
     /**
      * Pair this phone with a masjid's server.

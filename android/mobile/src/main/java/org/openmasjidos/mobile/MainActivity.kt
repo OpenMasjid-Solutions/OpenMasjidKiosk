@@ -61,11 +61,23 @@ class MainActivity : ComponentActivity() {
                             val reader by vm.reader.collectAsStateWithLifecycle()
                             val transport by vm.transport.collectAsStateWithLifecycle()
                             val locationId by vm.locationId.collectAsStateWithLifecycle()
+                            val campaigns by vm.campaigns.collectAsStateWithLifecycle()
+                            val chosen by vm.chosenCampaign.collectAsStateWithLifecycle()
+                            val currency by vm.currency.collectAsStateWithLifecycle()
+                            val collect by vm.collect.collectAsStateWithLifecycle()
                             ReadyScreen(
                                 pairing = s.pairing,
                                 reader = reader,
                                 transport = transport,
                                 locationId = locationId,
+                                campaigns = campaigns,
+                                chosenCampaignId = chosen,
+                                currency = currency,
+                                collect = collect,
+                                onChooseCampaign = vm::chooseCampaign,
+                                onTake = vm::takePayment,
+                                onCancelCollect = vm::cancelCollect,
+                                onResetCollect = vm::resetCollect,
                                 onTransport = vm::setTransport,
                                 onDiscover = vm::discoverReader,
                                 onStopDiscovery = vm::stopDiscovery,

@@ -70,7 +70,6 @@ import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.ui.theme.DangerDark
 import org.openmasjidos.kiosk.ui.theme.SuccessDark
-import java.util.Locale
 
 /**
  * Resolved per-campaign appearance for the giving screen (computed in [GivingHome]). Lets one bright
@@ -1565,50 +1564,13 @@ private fun feeExtra(baseMinor: Long, config: KioskConfig?): Long {
     return maxOf(0L, total - baseMinor)
 }
 
-// ── Money formatting ─────────────────────────────────────────────────────────
-private val ZERO_DECIMAL = setOf(
-    "JPY", "KRW", "VND", "CLP", "XAF", "XOF", "BIF", "DJF", "GNF", "KMF", "MGA", "PYG", "RWF", "UGX", "VUV", "XPF",
-)
-private val THREE_DECIMAL = setOf("BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND")
-
-private fun isZeroDecimal(currency: String) = currency.uppercase() in ZERO_DECIMAL
-private fun decimals(currency: String): Int = when {
-    isZeroDecimal(currency) -> 0
-    currency.uppercase() in THREE_DECIMAL -> 3
-    else -> 2
-}
-private fun factorFor(currency: String): Long = when (decimals(currency)) {
-    0 -> 1L
-    3 -> 1000L
-    else -> 100L
-}
-
-private fun symbolFor(currency: String) = when (currency.uppercase()) {
-    "USD", "CAD", "AUD", "NZD" -> "$"
-    "GBP" -> "£"
-    "EUR" -> "€"
-    "PKR" -> "₨"
-    "INR" -> "₹"
-    "MYR" -> "RM"
-    "AED" -> "AED "
-    "SAR" -> "SAR "
-    else -> ""
-}
+// ── Money formatting ───────────────────────────────────────────
+// formatMoney / symbolFor / decimals / factorFor MOVED to :core (ui/Money.kt), so the kiosk and
+// OpenMasjid Mobile Donations cannot render the same masjid's amounts two different ways. They kept
+// this exact package, so nothing here needed an import.
 
 /** A SIGNED amount, for the one place a negative can appear: a credit line on a bill (a bursary, a
- *  correction). The minus belongs in front of the symbol — "−$30", not "$-30". */
+ *  correction). The minus belongs in front of the symbol — "−$30", not "$-30". Stays here: it is
+ *  used by the tuition bill list only, which is a kiosk screen. */
 private fun formatSignedMoney(minor: Long, currency: String): String =
     if (minor < 0) "−${formatMoney(-minor, currency)}" else formatMoney(minor, currency)
-
-/** Format integer minor units as a human amount (e.g. 2500 USD → "$25"). */
-fun formatMoney(minor: Long, currency: String): String {
-    val sym = symbolFor(currency)
-    val d = decimals(currency)
-    val f = factorFor(currency)
-    val body = when {
-        d == 0 -> minor.toString()
-        minor % f == 0L -> (minor / f).toString()
-        else -> String.format(Locale.US, "%.${d}f", minor.toDouble() / f)
-    }
-    return if (sym.isNotEmpty()) "$sym$body" else "$body ${currency.uppercase()}"
-}

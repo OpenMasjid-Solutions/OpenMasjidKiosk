@@ -37,6 +37,16 @@ detail of every change — it is distilled into a major-changes-only entry when 
     is required by the card-reader software and that the app never tracks where you are. If someone
     declines permanently, there is a button straight to the phone's permission settings rather than
     a prompt Android will silently refuse to show again.
+  - **It can take donations.** Pick the fund, tap a preset or type any amount, hand over the reader,
+    done — then straight on to the next person. It is built for repetition rather than for a
+    stranger walking up to a wall: no attract screen, no details step, and the result clears when
+    the volunteer says so rather than on a timer that could move mid-sentence.
+  - As on the kiosk, **a donation is only ever recorded after the masjid's own server has confirmed
+    it with Stripe**. The phone reports what the reader did and is told the outcome; it never
+    decides that money moved. If the server can't be reached at that exact moment, the app says so
+    plainly and tells the volunteer NOT to take the card again before checking the Donations page.
+  - Monthly giving is deliberately not offered here — it needs a name and an email, and nobody
+    fills in a form at a fundraising table. It stays on the kiosk.
 
 - **Notifications is now one table: who you want to tell, and what each of them hears about.** It
   used to be a block per alert, each with room for exactly one email address and one phone number —

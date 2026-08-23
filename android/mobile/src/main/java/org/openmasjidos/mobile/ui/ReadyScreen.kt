@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -26,9 +27,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.local.PairingRecord
+import org.openmasjidos.kiosk.readers.ReaderConn
 import org.openmasjidos.kiosk.readers.ReaderTransport
 import org.openmasjidos.kiosk.readers.ReaderUiState
+import org.openmasjidos.mobile.Collect
 
 /**
  * What a paired phone shows, until the reader and the collection flow land in the next layers.
@@ -44,6 +48,14 @@ fun ReadyScreen(
     reader: ReaderUiState,
     transport: ReaderTransport,
     locationId: String,
+    campaigns: List<Campaign>,
+    chosenCampaignId: String,
+    currency: String,
+    collect: Collect,
+    onChooseCampaign: (String) -> Unit,
+    onTake: (Long) -> Unit,
+    onCancelCollect: () -> Unit,
+    onResetCollect: () -> Unit,
     onTransport: (ReaderTransport) -> Unit,
     onDiscover: () -> Unit,
     onStopDiscovery: () -> Unit,
@@ -62,25 +74,21 @@ fun ReadyScreen(
             .padding(horizontal = 24.dp, vertical = 28.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Connected", style = MaterialTheme.typography.headlineSmall)
-        Text(
-            text = "This phone is paired and appears in your masjid’s Devices list.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // COLLECTING IS THE TOP OF THE SCREEN. It is what the volunteer touches all evening;
+        // the reader and the server details are setup they touch once.
+        CollectScreen(
+            campaigns = campaigns,
+            chosenCampaignId = chosenCampaignId,
+            currency = currency,
+            state = collect,
+            readerReady = reader.conn == ReaderConn.Connected,
+            onChooseCampaign = onChooseCampaign,
+            onTake = onTake,
+            onCancel = onCancelCollect,
+            onReset = onResetCollect,
         )
 
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text("Server", style = MaterialTheme.typography.labelMedium)
-                // The address only. The device TOKEN is never rendered — it is the credential that
-                // can create charges against the masjid's Stripe account, and a screen someone can
-                // photograph over your shoulder is no place for it.
-                Text(pairing.serverUrl, style = MaterialTheme.typography.bodyMedium)
-            }
-        }
+        HorizontalDivider()
 
         ReaderScreen(
             state = reader,
@@ -98,6 +106,19 @@ fun ReadyScreen(
         // bounded space and a scrolling column is measured unbounded. Compose throws at RUNTIME
         // for that, which no amount of CI compiling would have caught.
         Spacer(Modifier.height(24.dp))
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("Connected to", style = MaterialTheme.typography.labelMedium)
+                // The address only. The device TOKEN is never rendered — it is the credential that
+                // can create charges against the masjid's Stripe account, and a screen someone can
+                // photograph over your shoulder is no place for it.
+                Text(pairing.serverUrl, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
 
         TextButton(onClick = { confirming = true }, modifier = Modifier.fillMaxWidth()) {
             Text("Disconnect from this masjid")
