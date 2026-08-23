@@ -55,5 +55,7 @@ stripe-terminal = { group = "com.stripe", name = "stripeterminal", version.ref =
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+# `:core` — the shared library both apps (the kiosk and OpenMasjid Mobile Donations) are built on.
+android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

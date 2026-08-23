@@ -25,4 +25,10 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "OpenMasjidKiosk"
+
+// Two apps on one shared core:
+//   :core   everything they share — server client, pairing, device store, Stripe Terminal, theme
+//   :app    the locked-down wall KIOSK (HOME launcher, Lock Task, exit PIN)
+//   :mobile OpenMasjid Mobile Donations — a volunteer's own phone at a fundraising event
+include(":core")
 include(":app")

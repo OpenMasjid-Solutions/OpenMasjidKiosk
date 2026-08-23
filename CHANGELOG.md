@@ -21,6 +21,10 @@ detail of every change — it is distilled into a major-changes-only entry when 
     your masjid's remote link on their own phone, install, pair with a 6-digit code and start
     taking donations — without ever joining the masjid's Wi-Fi. That needed no change here; it is
     what Remote access already allows.
+  - **Internal, no behaviour change:** the tablet app has been split into a shared `:core` library
+    and the kiosk app on top of it, so the mobile app can be built on the same foundation instead of
+    a copy of it. Nothing about the kiosk app changes — the split moved files between build units
+    without editing a line of their source.
 
 - **Notifications is now one table: who you want to tell, and what each of them hears about.** It
   used to be a block per alert, each with room for exactly one email address and one phone number —

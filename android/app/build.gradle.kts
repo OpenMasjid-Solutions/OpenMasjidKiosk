@@ -128,6 +128,11 @@ kotlin {
 }
 
 dependencies {
+    // Everything shared with OpenMasjid Mobile Donations: the server client, pairing, the device
+    // store, the Stripe Terminal reader and the design tokens. Exposed as `api` from :core, so the
+    // types those used to provide directly are still on this module's compile classpath.
+    implementation(project(":core"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
