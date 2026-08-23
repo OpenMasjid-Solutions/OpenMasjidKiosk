@@ -28,6 +28,10 @@ detail of every change — it is distilled into a major-changes-only entry when 
   - The mobile app now exists as a real build target and is compiled and signed on every change,
     alongside the kiosk app. **It is not offered on /new yet**, and will not be until it can
     actually take a donation — the setup page only ever shows an app the server can hand over.
+  - It can now **pair with your masjid**: type the address and a 6-digit code from Devices, give
+    the phone a name the masjid will recognise, and it appears in your Devices list like any other
+    device. Pairing works over your public address as well as on the masjid's Wi-Fi, so a volunteer
+    can set their phone up from anywhere.
 
 - **Notifications is now one table: who you want to tell, and what each of them hears about.** It
   used to be a block per alert, each with room for exactly one email address and one phone number —
