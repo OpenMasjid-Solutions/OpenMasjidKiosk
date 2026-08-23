@@ -758,10 +758,23 @@ The earlier 15-minute cadence and the persist-on-sight hoard existed solely to r
 re-link and are gone.
 
 **Flag by `ids`, not by timestamp.** The platform names the actual message ids in a window, so
-`markWhatsAppSuspectByIds` is exact; matching a record's single timestamp against an interval is
-ambiguous for anything queued one side of a boundary and sent the other. `markWhatsAppSuspect(from,
-to)` remains as the fallback for a platform too old to send ids, and for a window whose id list hit
-the 500 cap (`truncated: true` — which the platform states rather than hiding).
+`markWhatsAppSuspectByIds` is exact. **A complete id list is authoritative in both directions: a
+message not named is a message not lost, whatever the timing looks like.** `markWhatsAppSuspect(from,
+to)` remains only as the fallback for a platform too old to send ids, for a window whose id list hit
+the 500 cap (`truncated: true`, which the platform states rather than hides), and for our own records
+with no stored id.
+
+**That fallback flags `sent` ONLY.** It briefly included `queued` and that was wrong twice over: the
+claim being doubted is *"reported sent but may never have arrived"*, and a `queued` record was never
+claimed delivered — plus it is the platform's own documented false positive, because a message queued
+DURING an outage is held, released on re-link, and delivered fine while its record still carries the
+queue-time stamp that lands inside the window.
+
+**A window's `count` never grows.** Everything — `from`, `to`, `cause`, counts and ids — is snapshotted
+once at detection and never revised, because the send queue pauses at that moment. An earlier version
+of this app accumulated windows and widened them on each poll under the opposite assumption; the
+7-day retention made the whole hoard unnecessary and it went, which happens to have removed the wrong
+reasoning with it.
 
 **WE DO NOT RESEND, and that is a domain decision.** Every WhatsApp this app sends is an alert about
 a *moment* — a reader went offline, a payment was refused. Re-sending "the card reader is offline" a

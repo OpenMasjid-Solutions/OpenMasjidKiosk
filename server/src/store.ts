@@ -1160,7 +1160,16 @@ export class Store {
     for (const [key, rec] of Object.entries(all)) {
       if (rec.suspect) continue;
       if (rec.at < from || rec.at > to) continue;
-      if (rec.state !== 'sent' && rec.state !== 'queued') continue;
+      // `sent` ONLY — not `queued`, which this used to include and which was wrong twice over.
+      //
+      // The claim being doubted is "reported SENT but may never have arrived". A record still
+      // reading `queued` was never claimed delivered, so there is nothing about it to disbelieve.
+      // Worse, it is exactly the false positive the platform warned about: a message queued DURING
+      // an outage is held, released when the admin re-links, and delivered perfectly well — its
+      // record carries the queue-time timestamp, lands inside the window, and would be flagged for
+      // a delivery that succeeded. `refused` is excluded for the opposite reason: it never reached
+      // WhatsApp at all and was reported honestly at the time.
+      if (rec.state !== 'sent') continue;
       all[key] = { ...rec, suspect: true };
       n += 1;
     }

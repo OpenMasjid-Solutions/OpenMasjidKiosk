@@ -579,10 +579,15 @@ test('records are flagged by message id, which is exact', () => {
 
 test('the time-window fallback still exists, for an older platform or a truncated id list', () => {
   const s = mem();
-  const rec = (state: 'sent' | 'refused' | 'failed', at: number) => ({
+  const rec = (state: 'sent' | 'queued' | 'refused' | 'failed', at: number) => ({
     state, at, messageId: '', reason: '', suppressed: 0, alertId: 'reader-offline' as const,
   });
   s.setWhatsAppOutcome('in-window-sent', rec('sent', 1_500));
+  // STILL QUEUED is not in doubt, and this is the platform's own false-positive warning: a message
+  // queued during an outage is HELD, released when the admin re-links, and delivered fine. Its
+  // record carries the queue-time stamp so it lands inside the window — flagging it would cast
+  // doubt on a delivery that succeeded. Nothing has claimed it was sent, so nothing is disbelieved.
+  s.setWhatsAppOutcome('in-window-queued', rec('queued', 1_500));
   // A refusal was never handed to WhatsApp and was reported honestly at the time — it is not in
   // doubt, and flagging it would send an admin to re-check a known failure.
   s.setWhatsAppOutcome('in-window-refused', rec('refused', 1_500));
@@ -595,6 +600,7 @@ test('the time-window fallback still exists, for an older platform or a truncate
   // `false`, not `undefined`: both the read and write paths normalise this to a real boolean, so a
   // record written by an older build reads as "not in doubt" rather than a missing field the UI
   // would have to guess about.
+  assert.equal(all['in-window-queued'].suspect, false);
   assert.equal(all['in-window-refused'].suspect, false);
   assert.equal(all['in-window-failed'].suspect, false);
   assert.equal(all['outside-window'].suspect, false);

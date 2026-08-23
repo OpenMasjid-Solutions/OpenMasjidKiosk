@@ -67,6 +67,10 @@ detail of every change — it is distilled into a major-changes-only entry when 
     response, and two of them need you to go and do something (needs OpenMasjidOS 0.51.1-dev.13).
   - The exact messages affected are identified rather than guessed at from timings, so the alerts
     marked as doubtful are the right ones.
+  - Fixed before anyone saw it: a message still *waiting* to go was being marked as doubtful along
+    with the ones already sent. Those are the opposite case — OpenMasjidOS holds a message while the
+    connection is down and delivers it once you reconnect, so it arrives perfectly well. Only
+    messages actually reported as sent are questioned now.
   - **A message that is waiting is now chased for a week rather than a day.** OpenMasjidOS can hold
     messages while the connection is down and release them once you reconnect, so one can legitimately
     wait far longer than it used to — and giving up after a day would have left it reading "queued"
