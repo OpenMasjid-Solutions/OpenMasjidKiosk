@@ -518,6 +518,12 @@ async function main(): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: 'Please choose an account.' });
     store.setFabricStripeChoice(parsed.data.accountId.trim());
     clearFabricStripeCache(); // apply immediately — next fetch re-reads the OS vault
+    // The primary Terminal Location belonged to the OLD account and cannot exist on the new one:
+    // a `tml_…` is scoped to one account and one mode. Leaving it meant every reader connect failed
+    // with `No such location` until somebody re-created it by hand, with nothing on screen saying
+    // why. Cleared here so the next connection token makes a fresh one on the account now in use.
+    store.setLocation(null);
+    verifiedLocations.clear();
     return { data: await paymentsStatus() };
   });
 
@@ -528,6 +534,13 @@ async function main(): Promise<void> {
     const p = parsed.data;
     if (p.publishableKey && !looksLikePublishable(p.publishableKey)) return reply.code(400).send({ error: 'The publishable key should start with pk_.' });
     if (p.secretKey && !looksLikeSecret(p.secretKey)) return reply.code(400).send({ error: 'The secret key should start with sk_.' });
+    // A NEW SECRET KEY MAY BE A DIFFERENT ACCOUNT OR A DIFFERENT MODE, and switching test->live is
+    // precisely the common case. The stored Location cannot survive either, so drop it for the same
+    // reason the account picker does.
+    if (p.secretKey) {
+      store.setLocation(null);
+      verifiedLocations.clear();
+    }
     store.setLocalStripe(p);
     const verify = p.secretKey ? await verifySecretKey(p.secretKey) : undefined;
     return { data: { ...(await paymentsStatus()), verify } };
@@ -2206,7 +2219,31 @@ ${body}
   const locationForAccount = async (acct: ResolvedAccount): Promise<string> => {
     const key = acct.id === '' ? '' : acct.id;
     const existing = store.getLocation(key);
-    if (existing) return existing.id;
+    if (existing) {
+      // VERIFY IT STILL EXISTS BEFORE HANDING IT OUT. A `tml_…` is scoped to one Stripe account AND
+      // one mode, but this app stored it as though it were permanent — so switching accounts, or
+      // flipping test keys to live, left a stale id that every reader connect then failed on with
+      // Stripe's `No such location: 'tml_…'`. The tablet has no way to recover from that: the
+      // location arrives in its synced config and it will keep retrying the same dead id for ever.
+      // Deleting one in the Stripe dashboard does the same thing.
+      //
+      // Cached per process so this is one extra Stripe call per account per restart, not one per
+      // connection token. A verified location does not stop existing while we are looking at it,
+      // and if it does the next restart re-checks.
+      if (verifiedLocations.has(`${key}:${existing.id}`)) return existing.id;
+      const live = await retrieveLocation(acct.keys.secretKey, existing.id).catch(() => null);
+      if (live) {
+        verifiedLocations.add(`${key}:${existing.id}`);
+        return existing.id;
+      }
+      // Gone. Fall through and make a new one on the account actually in use. Dropping the dead
+      // reference first means a failure below leaves no stale id behind to be handed out again.
+      log.warn(
+        `Terminal location ${existing.id} no longer exists on this Stripe account (account changed, ` +
+          `test/live switched, or it was deleted in Stripe) — creating a replacement.`,
+      );
+      store.setLocation(null, key);
+    }
     // Reuse the masjid address the admin already gave for the primary account's Location — the same
     // building, just registered on a second Stripe account. Without a usable address we throw, and the
     // caller falls back to whatever Location is stored rather than blocking the donation here.
@@ -2224,6 +2261,10 @@ ${body}
     store.setLocation({ id: created.id, name: created.displayName }, key);
     return created.id;
   };
+
+  /** Locations confirmed to exist on their account this process. Keyed `accountId:locationId`, so
+   *  re-pointing at a different account can never reuse the previous one's verdict. */
+  const verifiedLocations = new Set<string>();
 
   /**
    * Mint a Terminal connection token — for a SPECIFIC Stripe account when the tablet names one.

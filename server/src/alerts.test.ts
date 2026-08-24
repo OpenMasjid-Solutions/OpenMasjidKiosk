@@ -615,3 +615,39 @@ test('a NEW message to a recipient is not in doubt just because an older one was
   s.setWhatsAppOutcome('r', { state: 'sent', at: 50_000, messageId: 'new', reason: '', suppressed: 0, alertId: 'reader-offline' });
   assert.equal(s.getWhatsAppOutcomes()['r'].suspect, false);
 });
+
+// ── The Terminal Location outliving its credentials ──────────────────────────
+// A `tml_…` is scoped to ONE Stripe account and ONE mode, but this app stored it as though it were
+// permanent. Switching the account, or flipping test keys to live, left a stale id in the synced
+// kiosk config — and every reader connect then failed with Stripe's `No such location: 'tml_…'`,
+// with nothing on any screen saying why. Reported from a real tablet, 2026-08-24.
+
+test('changing the Stripe account drops the Location that belonged to the old one', () => {
+  const s = mem();
+  s.setLocation({ id: 'tml_old', name: 'Masjid' });
+  assert.equal(s.getLocation()?.id, 'tml_old');
+  // What PUT /api/admin/payments/account now does alongside the choice itself.
+  s.setLocation(null);
+  assert.equal(s.getLocation(), null, 'a location from another account must not be handed out');
+});
+
+test('clearing the primary Location bumps the config version, so tablets refetch', () => {
+  // Without this a kiosk keeps the dead id until something else happens to bump the version, and
+  // goes on failing to connect against a location the server has already given up on.
+  const s = mem();
+  s.setLocation({ id: 'tml_a', name: 'A' });
+  const before = s.getConfigVersion();
+  s.setLocation(null);
+  assert.ok(s.getConfigVersion() > before, 'config version must move when the location does');
+});
+
+test('a per-account Location is kept separately from the primary one', () => {
+  // A campaign paying into its own Stripe account gets its own location; clearing the primary must
+  // not take a secondary account's with it, and vice versa.
+  const s = mem();
+  s.setLocation({ id: 'tml_primary', name: 'P' });
+  s.setLocation({ id: 'tml_second', name: 'S' }, 'acct_123');
+  s.setLocation(null);
+  assert.equal(s.getLocation(), null);
+  assert.equal(s.getLocation('acct_123')?.id, 'tml_second', 'a second account keeps its own');
+});

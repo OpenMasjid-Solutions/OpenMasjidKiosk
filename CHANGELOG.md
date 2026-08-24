@@ -7,6 +7,20 @@
 _Development builds ahead of 0.11.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.12.0 is released._
 
+- **Fixed: the card reader could stop connecting after you changed your Stripe account.** The reader
+  would find itself, get as far as connecting, and then fail with a message about a "location" that
+  no longer existed — with nothing on the tablet or in the admin panel explaining why, and no way to
+  clear it from any screen.
+  - A card-reader **location** belongs to one Stripe account and one mode (test or live). This app
+    stored yours as though it were permanent, so switching accounts — or moving from test keys to
+    live ones — left it pointing at something that had ceased to exist for you.
+  - It now notices and quietly makes a new one on the account you are actually using, so **an
+    affected kiosk fixes itself on the next update, without anyone doing anything**. Changing your
+    Stripe account or your keys also clears the old one immediately, and your tablets pick that up
+    on their next check-in.
+  - Reported from a real tablet, where the log read
+    `NETWORK_ERROR.STRIPE_API_ERROR · No such location`.
+
 - **Groundwork for a second app: OpenMasjid Mobile Donations.** A handheld app for a volunteer's own
   phone, for taking donations at a fundraising event — an ordinary unlocked phone, not a
   wall-mounted kiosk locked to the giving screen. This build carries the plumbing to hand it out;
