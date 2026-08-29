@@ -2596,7 +2596,8 @@ ${body}
         alert(
           'monthly-failed',
           'Monthly donations are not being set up',
-          `Stripe refused to set up a repeat payment at ${d.name || 'the kiosk'}, so this gift was taken as a ONE-OFF instead. Donors choosing "Monthly" are being charged once and no standing order is created. Reason: ${why}`,
+          `Stripe refused to set up a repeat payment at ${d.name || 'the kiosk'} · ${campaign.title}, so this gift was taken as a ONE-OFF instead. ` +
+            `Donors choosing "Monthly" are being charged once and no standing order is created. Reason: ${why}`,
           'warning',
         );
         // A DIFFERENT idempotency key: same key + different body is itself a Stripe error, and this
@@ -2618,7 +2619,16 @@ ${body}
       store.addLogs(d.id, [{ level: 'warn', event: 'payment_create_failed', detail: `${manual ? 'manual' : 'reader'} · ${why}` }]);
       // Alert the admin donations are broken (bad/expired keys, Stripe down). Fire-and-forget; the
       // .catch() is REQUIRED — an unhandled async rejection would crash the process.
-      alert('payment-failed', 'A donation payment failed to start', 'Stripe rejected a payment setup — donors can’t give until it’s fixed. Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.', 'error');
+      // Names the appeal and the kiosk. A masjid with several appeals may have one broken and the
+      // rest fine — an appeal paying into its own Stripe account fails on its own keys — so "donors
+      // can't give" without saying WHERE sends someone to check working kiosks.
+      alert(
+        'payment-failed',
+        'A donation payment failed to start',
+        `Stripe rejected a payment setup at ${d.name || 'the kiosk'} · ${campaign.title} — donors can’t give to it until it’s fixed. ` +
+          `Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.`,
+        'error',
+      );
       return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
     }
   });
@@ -2753,7 +2763,9 @@ ${body}
         alert(
           'monthly-failed',
           'A monthly donation could not be set up',
-          `${formatMoney(result.amountMinor, result.currency)} was taken once at ${d.name || 'the kiosk'}, but the donor's monthly plan could NOT be created, so nothing will be collected again and there is nothing to cancel. ${monthlyProblem} If the donor expected a standing order, please contact them.`,
+          `${formatMoney(result.amountMinor, result.currency)} was taken once at ${d.name || 'the kiosk'}` +
+            `${(meta.campaign || '').trim() ? ` · ${(meta.campaign || '').trim()}` : ''}, but the donor's monthly plan could NOT be created, ` +
+            `so nothing will be collected again and there is nothing to cancel. ${monthlyProblem} If the donor expected a standing order, please contact them.`,
           'warning',
         );
       }
@@ -2785,8 +2797,16 @@ ${body}
       });
       if (result.succeeded) {
         const label = monthly.created ? 'monthly donation set up' : 'donation received';
+        // NAME THE APPEAL. A masjid running several at once ("Roof", "Zakat", "Winter Appeal") got
+        // notifications that said only the amount and the kiosk, which is the one thing a treasurer
+        // cannot work out for themselves — two kiosks in a foyer may be showing different campaigns,
+        // and one kiosk shows several as tabs. The ` · ` separator matches the refund alert, which
+        // has always named it.
+        const appeal = (meta.campaign || '').trim();
         void notify({
-          text: `${formatMoney(result.amountMinor, result.currency)} ${label} at ${d.name || 'the kiosk'}.`,
+          text:
+            `${formatMoney(result.amountMinor, result.currency)} ${label} at ${d.name || 'the kiosk'}` +
+            `${appeal ? ` · ${appeal}` : ''}.`,
           level: 'success',
         });
         // "Your monthly donation is set up", carrying the donor's own cancel link. Sent ONCE, on the
@@ -3200,7 +3220,13 @@ ${body}
       log.warn(`tuition payment-intent create failed: ${why}`);
       store.addLogs(d.id, [{ level: 'warn', event: 'tuition_pi_failed', detail: why.slice(0, 200) }]);
       // Same admin alert as a failed donation — parents can't pay tuition until it's fixed. Fail-soft.
-      alert('payment-failed', 'A tuition payment failed to start', 'Stripe rejected a payment setup — parents can’t pay tuition until it’s fixed. Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.', 'error');
+      alert(
+        'payment-failed',
+        'A tuition payment failed to start',
+        `Stripe rejected a payment setup at ${d.name || 'the kiosk'} · ${campaign.title} — parents can’t pay tuition until it’s fixed. ` +
+          `Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.`,
+        'error',
+      );
       return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
     }
   });
@@ -3228,14 +3254,21 @@ ${body}
       const feeMinor = row?.feeMinor ?? 0;
       const tuitionMinor = row?.amountMinor ?? result.amountMinor;
       if (result.succeeded) {
+        // Which tuition appeal, for a school running more than one (e.g. a hifz class and a weekend
+        // school billed separately). Taken from the outbox row's campaign id — this path has no
+        // PaymentIntent metadata in scope, unlike the donation one. Blank if the campaign has since
+        // been deleted, which is fine: a missing name is better than a stale one.
+        const tuitionAppealTitle = (row?.campaignId ? store.getCampaign(row.campaignId)?.title : '') || '';
+        const tuitionAppeal = tuitionAppealTitle.trim() ? ` · ${tuitionAppealTitle.trim()}` : '';
         await tryRecordTuition(id); // best-effort now; the outbox retries if Students is unreachable
         void notify({
           // Say what the SCHOOL is owed and what the processor took, separately. A single grossed-up
           // figure in a dashboard notification reads as tuition and quietly overstates every payment.
           text:
             feeMinor > 0
-              ? `${formatMoney(tuitionMinor, result.currency)} tuition at ${d.name || 'the kiosk'} (${formatMoney(result.amountMinor, result.currency)} charged — the payer covered the ${formatMoney(feeMinor, result.currency)} processing fee).`
-              : `${formatMoney(result.amountMinor, result.currency)} tuition payment at ${d.name || 'the kiosk'}.`,
+              ? `${formatMoney(tuitionMinor, result.currency)} tuition at ${d.name || 'the kiosk'}${tuitionAppeal} ` +
+                `(${formatMoney(result.amountMinor, result.currency)} charged — the payer covered the ${formatMoney(feeMinor, result.currency)} processing fee).`
+              : `${formatMoney(result.amountMinor, result.currency)} tuition payment at ${d.name || 'the kiosk'}${tuitionAppeal}.`,
           level: 'success',
         });
       }

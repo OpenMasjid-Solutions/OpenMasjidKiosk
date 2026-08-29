@@ -7,6 +7,19 @@
 _Development builds ahead of 0.11.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.12.0 is released._
 
+- **Notifications now say which appeal a donation was for.** If you run more than one — a roof
+  appeal, Zakat, a winter fund — a message saying only "$20 donation received at the foyer kiosk"
+  left you to guess which one, and one kiosk can show several as tabs. Every donation notification
+  now names it: *"$20 donation received at Foyer kiosk · Roof Appeal."*
+  - The same for the ones that report a problem: a payment that couldn't be started, and a monthly
+    gift that was taken but whose standing order couldn't be set up, both now say which appeal and
+    which kiosk. That matters when an appeal pays into its own Stripe account — one can be broken
+    while the rest are fine, and "donors can't give" without saying where sends you to check kiosks
+    that are working perfectly.
+  - Tuition payments name their appeal too, for a school running more than one.
+  - A masjid with a single appeal sees no change: with nothing to disambiguate, the wording stays
+    exactly as it was.
+
 - **Fixed: the card reader could stop connecting after you changed your Stripe account.** The reader
   would find itself, get as far as connecting, and then fail with a message about a "location" that
   no longer existed — with nothing on the tablet or in the admin panel explaining why, and no way to
