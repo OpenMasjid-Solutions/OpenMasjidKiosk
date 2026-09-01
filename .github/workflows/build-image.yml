@@ -236,15 +236,29 @@ jobs:
                 *:dev|*:dev@*) echo "::error file=docker-compose.yml::stable must never reference the moving :dev image — that would point every stable install at a development build. Re-pin to <version>@sha256:<digest>."; exit 1 ;;
                 *-dev.*|*-dev@sha256:*) echo "::error file=docker-compose.yml::stable must not reference a development prerelease image ('$img')."; exit 1 ;;
               esac
+              # THE VERSION IN THE TAG MUST MATCH THE MANIFEST, and until now nothing on the stable
+              # side checked it — only "not a prerelease", "not :dev", and (on tags) "is pinned". So a
+              # main compose left on the PREVIOUS release's digest passed green, and the vX.Y.Z tag
+              # then shipped the previous release's code under the new version number to anyone
+              # pinning by tag. That is exactly the trap rule 7c exists to prevent, and it had no
+              # enforcement. CLAUDE.md records it happening twice.
+              #
+              # Graded the same way the digest check is, and for the same reason: on a TAG both the
+              # version and the digest must be exact, because the tagged commit is what the catalog
+              # pins. On a main BRANCH push it can only be a warning — the runbook's order is bump ->
+              # build -> pin the digest CI just printed, so the first main build necessarily still
+              # carries the old reference. Erroring there would make the release impossible to start.
               case "$GITHUB_REF" in
                 refs/tags/v*)
                   case "$img" in
-                    *@sha256:*) echo "ok — release is digest-pinned" ;;
+                    *:"$ver"@sha256:*) echo "ok — release is $ver and digest-pinned" ;;
+                    *@sha256:*) echo "::error file=docker-compose.yml::this tag builds manifest version '$ver' but the compose pins '$img'. The tag would ship a DIFFERENT release's code under $ver. Tag the digest-pin commit for THIS version, not the version-bump commit before it."; exit 1 ;;
                     *) echo "::error file=docker-compose.yml::a release compose must digest-pin the image (@sha256:…), got '$img'. Did a dev merge land without re-pinning?"; exit 1 ;;
                   esac ;;
                 *)
                   case "$img" in
-                    *@sha256:*) echo "ok — main is digest-pinned" ;;
+                    *:"$ver"@sha256:*) echo "ok — main is $ver and digest-pinned" ;;
+                    *@sha256:*) echo "::warning file=docker-compose.yml::main's compose is digest-pinned but names '$img' while the manifest says '$ver' — expected during a release, between the version bump and the digest re-pin. It MUST be re-pinned before tagging; the tag build will refuse it." ;;
                     *) echo "::warning file=docker-compose.yml::main's compose is not digest-pinned yet — pin the digest before tagging the release" ;;
                   esac ;;
               esac ;;

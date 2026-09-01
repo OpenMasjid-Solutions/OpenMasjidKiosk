@@ -8,6 +8,42 @@ is outside what I should decide or do on my own.
 
 ---
 
+## From the 2026-09-01 pre-release sweep — one thing needs a tablet
+
+### 13. A monthly gift can still be downgraded to a one-off silently, on ONE remaining path — HIGH
+
+Found in the 0.12.0 pre-flight. **Half of it is fixed in this release; the other half needs hardware.**
+
+Keyed entry always creates a ONE-OFF charge (`startManualCollect` passes `monthly = false`) but never
+cleared `giving.monthly` — so the thank-you screen still rendered `"$X / month"`
+(`GivingScreen.kt:1497`) and `monthlyOutcome` stayed `None`, so the honest "we couldn't set up monthly
+giving" note did not appear either. The donor leaves believing a standing order exists. It does not.
+That is the failure v0.11.0 headlined, reached through a different door, and it is **pre-existing —
+`v0.11.0` has the identical shape**, so it is not a regression in this release.
+
+**Fixed here:** the donor-initiated route. The "enter card by hand" button is no longer offered for a
+monthly gift (`manualOnCard && !isTuition && !giving.monthly`). That makes the card step agree with a
+guard the flow already had — `startGiving` refuses a monthly gift with no reader, saying "Monthly
+giving needs the card reader" — and its failure mode is benign: the donor uses the reader, which is
+what monthly requires anyway.
+
+**NOT fixed, and this is the bit for you.** The automatic fallback at `KioskViewModel.kt:788` still
+calls `startManualCollect()` when `ReaderManager.registerFor` fails to move the reader onto a
+campaign's own Stripe account. For a MONTHLY gift that silently downgrades and still says "/ month".
+
+**Why I left it.** The fix touches the donation state machine — clearing `monthly` and setting
+`monthlyOutcome = NotSupported` at the top of `startManualCollect`, and stopping the success path at
+`KioskViewModel.kt:931` clobbering it back to `None`. There is no Android SDK on this machine, so CI
+compiling is the only check that code gets, and an unverified edit to the flow every donation runs
+through is a far worse risk than a rare pre-existing edge case. It needs a tablet, a campaign on a
+second Stripe account, and a forced `registerFor` failure.
+
+**What I would do:** make that branch route to the SAME error the existing guard uses rather than
+downgrading at all — a monthly gift genuinely needs the reader, so falling back to keyed is wrong
+regardless of what the screen then says.
+
+---
+
 ## From the 2026-08-17 sweep — four decisions, in the order I would take them
 
 Fixed and shipped in that sweep (listed so you know what is *not* waiting on you): the partial-refund

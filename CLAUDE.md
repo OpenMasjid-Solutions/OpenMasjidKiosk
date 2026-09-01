@@ -467,16 +467,21 @@ Builds via the commands above and `docker compose up -d`; **`tsc` clean on the s
 
 ---
 
-## 18. WhatsApp: admin commands (and why we do not send)
+## 18. WhatsApp: admin commands, and the alerts we send
 
 OpenMasjidOS can send WhatsApp on a masjid's behalf through **OpenWA**, a self-hosted gateway the
 masjid installs and links to their own phone, and it can now take **admin commands** back over it.
 We never see the gateway, its credentials, or the number: we POST to the platform, which owns a
 **single serialised queue** shared by every app and by its own alerts.
 
-**Ban risk attaches to the NUMBER**, so the platform paces everything — randomised gaps, typing
-indicators, per-recipient cooldowns, hourly/daily caps, a 7-day warm-up, and quiet hours that queue
-rather than drop. Hence `202 { queued: true }` and never "sent": delivery is seconds to hours away.
+**Ban risk attaches to the NUMBER**, and the platform no longer manages it for us. It serialises
+sends (one message in flight, ever) and shows a typing indicator; the caps, cooldowns, inter-message
+gap, quiet hours and warm-up ramp it once imposed are **all gone** (0.51.1). PACING IS OURS —
+`WhatsAppPacing` in `alerts.ts`, and the masjid's to set. Do not write "the platform paces it" here
+again: believing that is what left this app with no backstop at all, and `payment-failed` firing per
+refused PaymentIntent turned one Stripe outage into a message per attempted donation.
+`202 { queued: true }` still means accepted, never delivered — and delivery can now take far longer
+than it used to, because a message is HELD while the link is down until an admin releases it.
 **Nothing auth-critical may ever depend on it.** It is an unofficial client and the number can be
 restricted. Email stays the fallback.
 
@@ -800,8 +805,10 @@ resolve. A `404` past that is still `unknown`, never failure.
   kiosk gave their details for a receipt, not for announcements. WhatsApp here reaches **only the
   numbers an admin typed into Settings → Notifications**. If that ever changes: receipts one-to-one
   only, nothing else without a separate explicit opt-in.
-- **Never depend on a WhatsApp send.** `202 { queued: true }` means accepted for later — the
-  platform paces everything (randomised gaps, cooldowns, caps, quiet hours), so delivery is seconds
-  to hours away. Email stays the fallback and nothing auth-critical may ride on it.
+- **Never depend on a WhatsApp send.** `202 { queued: true }` means accepted for later, never
+  delivered, and there is no delivery receipt from WhatsApp. The delay is no longer the platform
+  pacing (it does not, any more — see above); it is the shared serialised queue, and a message may
+  be HELD for as long as the masjid's link is down. Email stays the fallback and nothing
+  auth-critical may ride on it.
 
 Full contract: OpenMasjidOS `docs/WHATSAPP.md` and `docs/APP_MANIFEST_SPEC.md`, **dev** branch.

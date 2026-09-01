@@ -155,7 +155,15 @@ fun GivingScreen(
         else -> CenteredScene(modifier) {
             when (giving.step) {
                 GivingStep.LargeAmount -> LargeAmountStep(giving, config, currency, style, loadImage, onProceedLarge, onCancel)
-                GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard && !isTuition, giving.preparingManual, onEnterManually, onCancel)
+                // `!giving.monthly` is load-bearing, not tidiness. Keyed entry ALWAYS creates a
+                // one-off charge (`startManualCollect` passes monthly = false), but it never cleared
+                // `giving.monthly` — so a donor who chose Monthly and then tapped "enter card by
+                // hand" was charged once, told "$X / month" on the thank-you screen, and given no
+                // standing order. Exactly the failure 0.11.0 headlined, reached by a different door.
+                // The flow already holds that a monthly gift NEEDS the reader (see the guard in
+                // KioskViewModel.startGiving: "Monthly giving needs the card reader"); this makes the
+                // card step agree with it instead of offering a way around it.
+                GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard && !isTuition && !giving.monthly, giving.preparingManual, onEnterManually, onCancel)
                 GivingStep.Processing -> ProcessingStep(chargeMinor, currency, style)
                 GivingStep.Thanks -> ThanksStep(giving, campaign, currency, chargeMinor, style, onCancel)
                 GivingStep.Error -> ErrorStep(giving.error, style, onRetry, onCancel)

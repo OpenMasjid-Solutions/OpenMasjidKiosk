@@ -4,360 +4,107 @@
 # Changelog
 
 ## Unreleased
-_Development builds ahead of 0.11.0. This section is on the `dev` branch only and carries the full
-detail of every change — it is distilled into a major-changes-only entry when 0.12.0 is released._
+_Development builds ahead of 0.12.0. This section is on the `dev` branch only and carries the full
+detail of every change — it is distilled into a major-changes-only entry when 0.13.0 is released._
 
-- **Notifications now say which appeal a donation was for.** If you run more than one — a roof
-  appeal, Zakat, a winter fund — a message saying only "$20 donation received at the foyer kiosk"
-  left you to guess which one, and one kiosk can show several as tabs. Every donation notification
-  now names it: *"$20 donation received at Foyer kiosk · Roof Appeal."*
-  - The same for the ones that report a problem: a payment that couldn't be started, and a monthly
-    gift that was taken but whose standing order couldn't be set up, both now say which appeal and
-    which kiosk. That matters when an appeal pays into its own Stripe account — one can be broken
-    while the rest are fine, and "donors can't give" without saying where sends you to check kiosks
-    that are working perfectly.
-  - Tuition payments name their appeal too, for a school running more than one.
-  - A masjid with a single appeal sees no change: with nothing to disambiguate, the wording stays
-    exactly as it was.
+## 0.12.0
+**Two big things: you can now choose exactly who hears about what, and there is a second app for
+taking donations on a phone at events. Also a serious refund fix — please read that one.
+Update your tablets after installing.**
+
+- **Fixed: refunding part of a donation gave back a hundredth of what you typed.** On a $100
+  donation, choosing "Refund only part of it" and typing `50` refunded **50 cents**, not $50 — and
+  the box underneath told you to type `10000` instead. The confirmation line did show the real
+  figure, so a careful admin would have caught it, but nothing else would: Stripe accepted the tiny
+  refund and the totals were right about the wrong number. **Full refunds were never affected, and
+  neither were donations themselves.** Currencies with three decimal places (Kuwaiti, Bahraini and
+  Omani) were out by a thousand, the same way.
+  - Also fixed: a refund could stop working once a donation was a week old, but only for an appeal
+    pointed at its own Stripe account. Someone asking for their money back a month later is
+    completely ordinary, and now it works.
+  - Refunds are now recorded in the audit trail. Every other admin action that reaches outside the
+    app already was; giving money back — the only one that moves money *out* — was not.
+
+- **Decide exactly who gets told what.** Settings → Notifications is now one table: add the people
+  who should hear from your kiosks, and tick what each of them gets. Add as many as you need.
+  - An **email address**, a **WhatsApp number**, or a **WhatsApp group** — one message to a group
+    reaches everyone in it, which is both faster and far safer for your number than messaging people
+    one at a time.
+  - **Your existing settings carry over exactly.** Every address you had saved becomes a recipient
+    subscribed to precisely the alerts it was already on, and an address you had used for three
+    alerts becomes one row with those three ticked. Nothing to do after updating.
+  - Adding someone grants them **no access to the app** — they only receive what you tick.
+  - Phone numbers are entered properly: pick the country, type the number, and it formats itself as
+    you go.
+  - **You choose, per group, whether donor names are included.** Two alerts name a person. Off — the
+    default for a new group — they still say the amount, the kiosk and the fund, just not who. That
+    matters because everyone in a WhatsApp group can see every other member's phone number.
+  - **You set the WhatsApp limits**, per hour and per day, with a wait between repeats. Sensible
+    defaults are in place. There is a ceiling on purpose: WhatsApp goes through the masjid's own
+    number, a ban attaches to that number, and it cannot be undone. Email and OpenMasjidOS alerts
+    are never limited.
+  - You can see **what happened to each recipient's last WhatsApp** — sent, queued, or refused with
+    the reason in plain words. Until now a refused message and a lost one looked identical.
+
+- **Notifications say which appeal a donation was for.** If you run several — a roof appeal, Zakat,
+  a winter fund — "$20 donation received at the foyer kiosk" left you guessing, and one kiosk can
+  show several as tabs. Now: *"$20 donation received at Foyer kiosk · Roof Appeal."* The messages
+  that report a problem name it too, which matters when one appeal pays into its own Stripe account
+  and can break while the rest are fine.
+
+- **A new app: OpenMasjid Mobile Donations.** For a volunteer's own phone at a fundraising event — a
+  dinner, a bazaar, a collection round. Download it from your own setup page at **/new**, the same
+  way as the kiosk app; there is no app store involved.
+  - It does **not** lock the phone down. No launcher takeover, no PIN, no kiosk mode — Home, Back and
+    Recents all keep working, because it is somebody's own phone.
+  - Pick the fund, tap a preset or type any amount, hand over the card reader, next person. It takes
+    cards on a **Stripe Reader M2** over Bluetooth or USB.
+  - With Remote access on, a volunteer can install and pair it **from anywhere** — they never need to
+    be on the masjid's Wi-Fi.
+  - Monthly giving stays on the kiosk: it needs a name and an email, and nobody fills in a form at a
+    fundraising table.
+  - See `docs/MOBILE_DONATIONS.md`.
 
 - **Fixed: the card reader could stop connecting after you changed your Stripe account.** The reader
-  would find itself, get as far as connecting, and then fail with a message about a "location" that
-  no longer existed — with nothing on the tablet or in the admin panel explaining why, and no way to
-  clear it from any screen.
-  - A card-reader **location** belongs to one Stripe account and one mode (test or live). This app
-    stored yours as though it were permanent, so switching accounts — or moving from test keys to
-    live ones — left it pointing at something that had ceased to exist for you.
-  - It now notices and quietly makes a new one on the account you are actually using, so **an
-    affected kiosk fixes itself on the next update, without anyone doing anything**. Changing your
-    Stripe account or your keys also clears the old one immediately, and your tablets pick that up
-    on their next check-in.
-  - Reported from a real tablet, where the log read
-    `NETWORK_ERROR.STRIPE_API_ERROR · No such location`.
+  would find itself, get as far as connecting, then fail over a "location" that no longer existed —
+  with nothing on the tablet or in the admin panel explaining why, and no way to clear it from any
+  screen. A card-reader location belongs to one Stripe account and one mode, and this app treated
+  yours as permanent. **An affected kiosk now fixes itself.**
 
-- **Groundwork for a second app: OpenMasjid Mobile Donations.** A handheld app for a volunteer's own
-  phone, for taking donations at a fundraising event — an ordinary unlocked phone, not a
-  wall-mounted kiosk locked to the giving screen. This build carries the plumbing to hand it out;
-  the app itself follows in the next dev builds.
-  - The setup page at **/new** now covers both apps and asks which one you are installing, showing
-    the chooser only when the server actually has both to give. An app that isn't bundled is never
-    offered — the same rule the kiosk download already followed, so nobody is shown a button that
-    cannot do anything.
-  - It is distributed exactly like the kiosk app: bundled inside the server image and downloaded
-    from your own server. No app store, nothing to sign up for.
-  - Because /new and pairing already work over a public address, a volunteer will be able to open
-    your masjid's remote link on their own phone, install, pair with a 6-digit code and start
-    taking donations — without ever joining the masjid's Wi-Fi. That needed no change here; it is
-    what Remote access already allows.
-  - **Internal, no behaviour change:** the tablet app has been split into a shared `:core` library
-    and the kiosk app on top of it, so the mobile app can be built on the same foundation instead of
-    a copy of it. Nothing about the kiosk app changes — the split moved files between build units
-    without editing a line of their source.
-  - The mobile app now exists as a real build target and is compiled and signed on every change,
-    alongside the kiosk app. **It is not offered on /new yet**, and will not be until it can
-    actually take a donation — the setup page only ever shows an app the server can hand over.
-  - It can now **pair with your masjid**: type the address and a 6-digit code from Devices, give
-    the phone a name the masjid will recognise, and it appears in your Devices list like any other
-    device. Pairing works over your public address as well as on the masjid's Wi-Fi, so a volunteer
-    can set their phone up from anywhere.
-  - It can now **connect a Stripe Reader M2**, over Bluetooth or USB. The phone asks for Bluetooth
-    and location access when you press Find my reader — and says why first, including that location
-    is required by the card-reader software and that the app never tracks where you are. If someone
-    declines permanently, there is a button straight to the phone's permission settings rather than
-    a prompt Android will silently refuse to show again.
-  - **It can take donations.** Pick the fund, tap a preset or type any amount, hand over the reader,
-    done — then straight on to the next person. It is built for repetition rather than for a
-    stranger walking up to a wall: no attract screen, no details step, and the result clears when
-    the volunteer says so rather than on a timer that could move mid-sentence.
-  - As on the kiosk, **a donation is only ever recorded after the masjid's own server has confirmed
-    it with Stripe**. The phone reports what the reader did and is told the outcome; it never
-    decides that money moved. If the server can't be reached at that exact moment, the app says so
-    plainly and tells the volunteer NOT to take the card again before checking the Donations page.
-  - Monthly giving is deliberately not offered here — it needs a name and an email, and nobody
-    fills in a form at a fundraising table. It stays on the kiosk.
-  - **It is now on your setup page.** Open **/new** on a phone, choose **Mobile donations**, and
-    install it. Both apps ship inside this build, so the version always matches your server, and
-    there is a short guide at `docs/MOBILE_DONATIONS.md`.
-- **The kiosk now tells you when a WhatsApp alert may not have arrived.** A masjid's WhatsApp
-  connection can quietly sign itself out — the way WhatsApp Desktop does — and until recently
-  everything carried on reporting messages as sent while nothing was being delivered. OpenMasjidOS
-  now spots that (needs 0.51.1-dev.12) and tells each app which period was affected.
-  - **Settings → Notifications** shows the period plainly: when the connection was down and how many
-    of this app's messages fell inside it. The alerts involved are marked, so a row no longer shows a
-    reassuring tick for a message that may never have arrived.
-  - **Nothing is resent, deliberately.** These alerts describe a moment that has passed — a
-    card-reader warning arriving a day late would send someone to check hardware that is working
-    perfectly. The useful thing is knowing which period to check, and the Donations and Devices
-    pages cover it. **Email alerts were never affected.**
-  - Dismiss the notice once you've had a look.
-  - It now says **why** the connection dropped, and what to do about it — "WhatsApp signed itself
-    out", "needs linking again", or "the gateway rejected its credentials" each need a different
-    response, and two of them need you to go and do something (needs OpenMasjidOS 0.51.1-dev.13).
-  - The exact messages affected are identified rather than guessed at from timings, so the alerts
-    marked as doubtful are the right ones.
-  - Fixed before anyone saw it: a message still *waiting* to go was being marked as doubtful along
-    with the ones already sent. Those are the opposite case — OpenMasjidOS holds a message while the
-    connection is down and delivers it once you reconnect, so it arrives perfectly well. Only
-    messages actually reported as sent are questioned now.
-  - **A message that is waiting is now chased for a week rather than a day.** OpenMasjidOS can hold
-    messages while the connection is down and release them once you reconnect, so one can legitimately
-    wait far longer than it used to — and giving up after a day would have left it reading "queued"
-    for ever when it had in fact gone out.
-
-- **Notifications is now one table: who you want to tell, and what each of them hears about.** It
-  used to be a block per alert, each with room for exactly one email address and one phone number —
-  so a masjid with a treasurer *and* a caretaker had to choose, and the same address had to be
-  retyped into every alert it wanted. Now you add a person once and tick the alerts they should get.
-  - **Add as many as you need** — email addresses, WhatsApp numbers, or both. Adding someone grants
-    them no access to the app whatsoever; they only receive the alerts you tick.
-  - **Give each one a name** ("Treasurer", "Ustādh Bilāl") so the table reads like your team rather
-    than a list of addresses.
-  - **New recipients start on the alerts that cost money or hide a problem**, and not on the chatty
-    one. "A payment couldn't be started" fires every time a card is refused, so on a bad afternoon
-    it is dozens of messages — it is there to tick, not to be opted into by surprise.
-  - **Your existing settings are carried over exactly.** Every address you had saved becomes a
-    recipient, subscribed to precisely the alerts it was already on. An address you had used for
-    three alerts becomes **one** row with those three ticked, not three copies. A phone number that
-    was sitting in a box with WhatsApp switched *off* stays off — turning it on for you would be a
-    change you didn't ask for. Nothing to do after updating.
-  - The bottom row shows where each alert actually ends up, and says **"nowhere"** in plain words for
-    any alert nothing is ticked for.
-- **Send to a WhatsApp group, not just to numbers.** Pick from the groups you approved in
-  OpenMasjidOS → Settings → WhatsApp → Groups. One message reaches everyone in the group, which is
-  both faster and far safer for your number than messaging ten people one at a time — so if you
-  want a handful of people told, a group is the better way to do it.
-  - **You choose, per group, whether donor names are included.** Two alerts name a person — "a
-    donation was refunded" and "a donor stopped their monthly donation". Off (the default for a new
-    group) they still say the amount, the kiosk and the fund, just not who. That default is
-    deliberate: **everyone in a WhatsApp group can see every other member's phone number**, so a
-    refund notice in a parents' group tells the whole group who asked for their money back. For a
-    three-person trustees group you may well want the name — hence the switch. Individual numbers
-    and email addresses are unaffected and still include names, exactly as before.
-  - A group that you un-approve in OpenMasjidOS is refused with a clear reason rather than failing
-    quietly, and the screen distinguishes "you haven't approved any groups yet" from "we couldn't
-    read your groups just now" — one is a thing to go and do, the other is a thing to retry.
-- **Phone numbers are entered properly now: pick the country, type the number.** The number formats
-  itself as you type — `(555) 010-1234` — and examples throughout are American. Choosing the country
-  from the list means the country code is always right, which was the one thing the old single box
-  would refuse a number for, and only told you after you pressed save. Your existing numbers are
-  unchanged and are shown back to you formatted.
-- **You decide how many WhatsApp messages the kiosk may send — per hour and per day.** The old limit
-  was one message per kind of alert every **thirty minutes**, which was far too tight: a card reader
-  flapping on a Friday would tell you once and then go quiet. The new defaults are **20 an hour and
-  100 a day**, and both are yours to change in Settings → Notifications, along with how long to wait
-  before repeating the same alert (2 minutes by default, and you can turn that off).
-  - The screen shows how many have gone this hour and today, so the numbers you pick are informed.
-  - **There is still a ceiling, and it is on purpose.** WhatsApp goes through the masjid's own
-    number, a ban attaches to that number, and it cannot be undone — it is the one thing here nobody
-    can fix afterwards. Anything held back is counted and reported on the next message that goes, so
-    it is never silent. A test message is never held back.
-  - **Email and OpenMasjidOS alerts are not limited and never were.** They carry no such risk.
-  - The count now survives a restart. It was previously kept in memory, which was fine for a
-    half-hour gap and would have made a *daily* limit close to meaningless.
-- **You can see what happened to each recipient's last WhatsApp**, on their own row — sent, queued,
-  or refused with the reason in plain words. Previously there was one status for the whole alert,
-  which stopped meaning anything as soon as an alert could go to more than one place.
-  - Fixed before it reached anyone: when *every* WhatsApp for an alert was refused, the next message
-    that did get through would have claimed some had been "held back to protect your number" —
-    blaming the limit for messages the gateway had actually rejected. Refusals are reported on their
-    own rows, with the real reason, and are no longer counted as anything being held back.
-
-- **Ask the kiosk how it's doing from WhatsApp.** OpenMasjidOS can now take admin commands sent to
-  the masjid's own WhatsApp number, and the kiosk answers three of them. That matters for a kiosk
-  more than for most apps: it is unattended hardware in a lobby, and when a card reader stops
-  responding the person who can fix it is usually not in the building. Message the masjid's number
-  with `!kiosk` and pick from the menu:
-  - **What's been given** — today, this week, this month and all time, after refunds, with the
-    number of gifts and the average. If you run more than one kiosk it then offers to break it down:
-    just reply with a kiosk's name, or "all". **No need to type another command** — the reply is
-    read as your answer. Get the name wrong and it tells you the options and lets you try once more.
-  - **Are the kiosks working** — every tablet, whether it has checked in, what its card reader is
-    doing and which app version it's on, led by a count of how many need attention. This is the one
-    worth sending when someone says the reader isn't taking cards.
-  - **The last few donations** — amount, time, kiosk and fund for the five most recent, so you can
-    see at a glance whether money is still coming in.
+- **Ask your kiosks how they are doing, from WhatsApp.** Message the masjid's own number with
+  `!kiosk` and pick from the menu: what has been given (today, this week, this month, all time, after
+  refunds), whether the kiosks are working and what their card readers are doing, or the last few
+  donations. Reply to its question by just typing the answer — no second command needed.
   - **Donor details are never sent.** No name, no email, no card — a WhatsApp thread keeps a copy
     forever on at least two phones. Amounts, times, kiosks and funds only.
-  - **Nothing can be changed from WhatsApp** — every one of these only reads. Turn it on in
-    OpenMasjidOS → Settings → WhatsApp → Commands, and add the people you trust.
-  - **It is refused from the internet.** This is where your takings live, so the handler answers
-    only on the masjid's own network — even on a server that has Remote access turned on. That
-    needed a real fix rather than a review: the rule that keeps the admin panel off the internet
-    only ever examined `/api` addresses, and this new handler does not live under `/api`, so it
-    would have been reachable the day it shipped.
-  - **It cannot be run without OpenMasjidOS having issued this app its credential**, and it refuses
-    rather than assuming when it has not been — a server not linked to OpenMasjidOS answers "not
-    linked yet" instead of accepting an empty password from anyone on the network.
-  - A command that fails can never put technical detail — a payment reference, a file path — into a
-    WhatsApp message, and one that takes too long says "still working, ask again in a moment"
-    instead of leaving the sender with no reply at all.
-- **Light mode is properly light now.** Choosing the light theme lightened the panels but left the
-  background dark, so the admin panel was half one thing and half the other — and the page titles,
-  the top bar and the clock stayed pale because they had to sit on that dark backdrop. The whole
-  page is light now, taken from OpenMasjid Students where it was already right.
-  - **Your wallpaper is still your wallpaper.** Each one has a light version that keeps its color —
-    Ocean is still blue, Forest still green, Berry still pink — so the panel looks like the same
-    choice, just in daylight.
-  - **Text follows whatever is actually behind it.** If you use your own background image, the
-    kiosk still reads the image and picks the readable ink for it, in either theme. A dark photo
-    with light mode on keeps light text, which is the combination that would otherwise disappear.
-  - Every combination of theme and wallpaper was checked for contrast against the accessibility
-    standard, and one that had never met it — the Sunset wallpaper in **dark** mode, where page
-    titles sit on its brightest orange — is very slightly deeper so that it now does.
-  - Switching between light and dark also got lighter on the browser: the color fade used to be
-    attached to every element on the page, including ones that never change color.
-- **Decide who gets told what, in Settings → Notifications.** Until now every alert this app raises
-  went wherever OpenMasjidOS was set to send it — one place, one address, for all of them. Each
-  alert now has its own row, and can go to any combination of three places:
-  - **OpenMasjidOS**, exactly as before — it forwards by email or webhook as you've set it up there.
-    **This stays on for everything**, so nothing changes for you unless you want it to.
-  - **An email address of your choosing**, per alert. "The card reader is offline" can go to whoever
-    walks past the kiosk while "a donation was refunded" goes to the treasurer.
-  - **WhatsApp**, to a number you enter — **off by default, and off for every alert** until you turn
-    it on. It needs WhatsApp set up on your OpenMasjidOS; the screen tells you if it isn't and what
-    to do about it.
-  - The three are independent: turning one on never turns another off, and a channel that fails
-    never stops the others. An alert with nothing switched on is flagged **"goes nowhere"** so it
-    can't quietly stop reaching anyone.
-  - **Send test message** now follows those same settings and tells you which channels it went by,
-    so it proves your actual setup rather than just that the server is up.
-  - A phone number must include its country code (`+44 7700 900123`, `+1 555 010 1234`). Leaving it
-    off is refused rather than guessed at — guessing would eventually message a stranger abroad —
-    and a rejected number never overwrites the one you already had saved.
-- **Donors are still never messaged.** WhatsApp reaches only the numbers you type into these
-  settings. There is no phone field anywhere in the giving flow, and none is planned.
-  **A note on WhatsApp generally:** messages go through the masjid's own number and OpenMasjidOS
-  paces them deliberately to protect it, so one can take anywhere from seconds to a few minutes.
-  It's for things worth interrupting someone about; email remains the reliable channel.
-- **Refunding part of a donation gave back a hundredth of what you typed.** Choosing "Refund only
-  part of it" on a $100 donation and typing `50` refunded **50 pence**, not $50 — and the box
-  underneath suggested you type `10000` instead. The confirmation line did show the real figure, so
-  an admin reading carefully would have caught it, but nothing else would: Stripe accepted the small
-  refund, the donation showed as partly refunded, and the totals were right about the wrong number.
-  Full refunds were never affected. Neither were donations themselves — this was only ever the
-  refund box in the admin panel.
-  - It happened because the panel worked out "how many pence is $1" by looking at how a zero
-    formatted and checking for a decimal point — and amounts are written `$0`, never `$0.00`, so
-    the answer was always "one". Currencies with three decimal places (Kuwaiti dinar, Bahraini
-    dinar, Omani rial) were out by a thousand, in the same direction.
-  - The amount now comes from your currency itself, the way every other figure in the app already
-    did, and a test refunds every kind of currency to prove it.
-- **A refund could stop working once a donation was a week old** — but only for an appeal you had
-  pointed at its own Stripe account. The server forgot which account an older donation had settled
-  to, tried the main one, and Stripe correctly said it had never heard of that payment. There was
-  no way past it from the screen. It now remembers for as long as the donation exists, which is the
-  case that matters: someone asking for their money back a month later is completely ordinary.
-- **Refunds are recorded in the audit trail.** Every other admin action that reaches outside the app
-  was already logged — ending someone's monthly plan, removing a kiosk, changing the exit PIN — but
-  giving money back, the only one that moves money *out*, was not.
+  - **Nothing can be changed from WhatsApp**, and it is refused from the internet even on a server
+    with Remote access turned on.
 
-- **The setup page no longer tells volunteers that pairing isn't built yet.** The public page a
-  volunteer reads while standing at the tablet ended its "Pair it with this server" step with
-  "Pairing arrives in the next update" — a sentence left over from before pairing shipped, sitting
-  in front of every new kiosk since.
+- **The kiosk tells you when a WhatsApp alert may not have arrived.** A masjid's WhatsApp connection
+  can quietly sign itself out, and until recently everything carried on reporting messages as sent
+  while nothing was delivered. Settings → Notifications now shows the period affected and why —
+  "signed itself out", "needs linking again", "the gateway rejected its credentials" — since each
+  needs a different response. Nothing is resent: these alerts describe a moment that has passed, and
+  a card-reader warning arriving a day late would send someone to check working hardware. Needs
+  OpenMasjidOS 0.51.1-dev.13. **Email alerts were never affected.**
 
-- **Every test now runs in CI, and nothing publishes if one fails.** They never had. The build
-  checked that the code compiled and stopped there, so the tests that exist precisely because
-  something has already gone wrong once — the address trick that exposed the admin panel, the
-  WhatsApp handler refusing to work without a credential, the version rule behind a permanent false
-  "update available" — could all have gone red without stopping a release. Pull requests now get
-  checked too; before this they got nothing.
-  - The tests themselves were also never type-checked, which had quietly let four errors accumulate
-    in them. They are checked now, and that check found one the same afternoon it was added.
+- **Light mode is properly light.** Choosing the light theme used to lighten the panels but leave the
+  background dark, so the page was half one thing and half the other. The whole page is light now,
+  and each wallpaper has a light version that keeps its color — Ocean still blue, Forest still
+  green. Text follows whatever is actually behind it, so your own background image still gets
+  readable ink in either theme. Every combination was checked against the accessibility standard.
 
-- **Light mode follow-ups**, both in the half that handles *your own* background image:
-  - A background image the panel cannot read (some hosts refuse it) fell back to assuming a dark
-    picture. In light mode that meant white text on a white page — the titles simply vanished. It
-    now assumes the theme you are actually using.
-  - The veil that sits over a background image to keep text readable followed the theme while the
-    text color followed the image, so on a dark photo in light mode they worked against each other.
-    They now move together.
-- **Three things in the admin panel were styled with names that don't exist**, so they rendered as
-  nothing at all: the busy spinner on the Email receipts buttons (pressing "Send me a test" looked
-  like it had done nothing), the refunded amount in a donation's detail window, and the explanatory
-  notes on the Notifications screen.
+- **A school can ask the payer to cover the card fee** (needs OpenMasjid Students 0.51.0). **Off
+  unless the school turns it on**, and off changes nothing. When on, the kiosk shows the parent an
+  itemized total *before the reader is armed* — tuition, the fee, and what will actually be charged
+  — plus a plain sentence saying the fee is not the madrasah's. **The school's ledger is still
+  credited the tuition, never the total.**
 
-- **WhatsApp:** "the last few donations" listed a refunded gift at its full amount, as though the
-  money were still there — every other figure the app reports is already netted. It now says so.
-  And a command that failed left no trace anywhere: the reply is deliberately vague so nothing
-  technical reaches a phone, but nothing was writing the real reason to the log either.
-- **A donation that Stripe took but the server then failed to record left no trace either.** That is
-  the worst version of this class of bug, and it was silent on both ends — the donor's tablet said
-  "that didn't complete" and there was nothing in the log or the kiosk's own history to find later.
-- **Branded receipts now fall back to Stripe's when your OpenMasjidOS is unreachable.** There is a
-  safety catch that stops sending our own receipts after a run of failures, so donors get Stripe's
-  instead of none — and it counted every kind of failure except the most likely one.
+- **Branded receipts now fall back to Stripe's own when your OpenMasjidOS is unreachable**, so a
+  donor gets a receipt rather than none.
 
-- **Removed things that were doing nothing.** A second, laxer copy of the amount check sitting
-  beside the real one; an unused animation library in the admin panel; the Stripe card SDK still
-  being compiled into the tablet app months after typed entry moved to a different mechanism, along
-  with a previews-only Compose library that shipped in the release build; a scaffold string that
-  could say "this kiosk is not ready to take donations yet"; and a few constants and styles nothing
-  read.
-- **The card-reader screen stopped sending volunteers on a wild goose chase.** With no reader
-  connected it told them to switch on "Allow manual card entry" in the admin panel. There is no such
-  switch, and typed entry is always offered anyway — so the advice sent someone hunting through
-  settings, at the exact moment their reader had stopped working.
-
-- **Security housekeeping.** A build no longer hands the tablet-app job credentials it has no use
-  for, including one with write access to another repository. Stray secrets in a working copy can no
-  longer reach the image — which matters because the folder the app is served from is one of the few
-  the internet can see. And a dependency advisory in the admin panel's build tooling is cleared.
-- **Documentation sweep.** The README now covers WhatsApp — both asking the kiosk questions and
-  choosing where each alert goes. A number of statements that had drifted from the code are
-  corrected, including a few that would have misled someone building against it: how often a tablet
-  checks in, how it decides whether to pin a certificate, which addresses are reachable from the
-  internet, what the setup screen actually shows, and where the maintenance gesture is. The claim
-  that the tablet's wording is fully translatable is corrected — the setup and maintenance screens
-  are, the giving flow is not yet.
-- **A school can now ask the payer to cover the card fee** (needs OpenMasjid Students 0.51.0). It is
-  **off unless the school turns it on**, and off means nothing whatsoever changes — which is what
-  almost every school will see.
-  - When it is on, the kiosk shows the parent an itemized total **before the card reader is armed**:
-    tuition, the processing fee, and what will actually be charged — plus a plain sentence saying the
-    fee is **not the madrasah's**. It is what Visa, Mastercard and American Express charge to accept a
-    card and it goes straight to the payment processor, and paying at the office avoids it. A total
-    that first appears on the reader is what generates phone calls to the office.
-  - **The school's ledger is still credited the tuition, never the total.** Crediting the fee to the
-    family would read as an overpayment and quietly eat into their next bill, month after month.
-  - The amount comes from the school, not from any rate this app assumes — and it is worked out the
-    way Stripe actually charges, so the school ends up with the full tuition rather than a few cents
-    short. A few cents short is not a rounding curiosity: it leaves the invoice open and the family
-    showing as unpaid indefinitely.
-  - The figures on the screen come from the server, so the total a parent agrees to is by construction
-    the total their card is asked for.
-  - Cash and any manual payment never attract a fee — there is no processor taking a cut to pass on.
-  - Walking away at that screen cancels cleanly, like every other step; nothing is charged.
-- **WhatsApp alerts: you can now see what happened to them, and the kiosk paces itself.** Needs
-  OpenMasjidOS 0.51.1, which fixed a fault on the platform side that made this app look unreliable:
-  one held-up message could block every message from every app for half an hour, and the queue was
-  thrown away whenever the platform restarted. If your WhatsApp alerts have been arriving late, out
-  of order, or not at all, that is very likely why.
-  - **A refused message now says why.** Under each alert in Settings → Notifications you can see what
-    became of the last one: sent, queued, or refused with the reason in plain words — the group has
-    not been approved, the number is missing its country code, or you have entered the masjid's own
-    WhatsApp number. Until now a refused message and a lost one looked exactly the same, which is a
-    poor thing to discover when the alert you were relying on is the one that did not arrive.
-  - **At most one WhatsApp per kind of alert every half hour**, and the next one tells you how many
-    were held back. This is new, and it is deliberate: the platform used to space messages out for
-    us and has stopped. Without it, a card processor outage during a busy prayer could raise one
-    alert per attempted donation — dozens of messages in an hour, from the masjid's own number.
-    A WhatsApp ban attaches to the number itself and cannot be undone, so the kiosk now protects it.
-  - **Your email and OpenMasjidOS alerts are never paced** and never have been. They carry no such
-    risk, and nothing about them changes.
-  - **Send test message is never held back** either — you pressed it and you are waiting for it.
-  - **A message that fails late is now caught too.** The kiosk checks a minute and ten minutes after
-    sending, and then keeps checking every quarter of an hour for a day. Before, anything that failed
-    after the first ten minutes sat in the panel reading "queued" for ever — which is the same
-    "sent it and heard nothing" problem in a smaller form. (This became worth doing once OpenMasjidOS
-    started keeping each app's own history for a full day, and stopped counting these checks against
-    the same budget as actually sending.)
-  - None of this makes WhatsApp reliable enough to depend on: it is still "handed over", never
-    "delivered", and nothing that matters for signing in will ever be sent that way. Email remains
-    the channel to trust.
-- **American spelling and dollar amounts throughout.** Wording across the app, the setup pages and
-  the documentation now uses American spelling, and examples are written in dollars. Your own
-  currency setting is unaffected — a masjid collecting in pounds, rupees or dirhams still sees its
-  own symbol everywhere, exactly as before.
+- **American spelling and dollar examples throughout.** Your own currency setting is unaffected — a
+  masjid collecting in pounds, rupees or dirhams still sees its own symbol everywhere.
 
 ## 0.11.0
 **Monthly giving works properly for the first time, and a donation can now be refunded from the
@@ -518,7 +265,7 @@ admin panel. Update your tablets after installing** — several of these fixes a
   their own bills underneath.
 - **Add money for one child.** Where a family has more than one child, "pay a different amount" is now
   a button per child — **"Add money for Maryam"** — so the money lands on that child's account. Paying
-  ahead for one child while another still owes now works properly, and the smallest payment is still $1/$1.
+  ahead for one child while another still owes now works properly, and the smallest payment is still $1.
 - **Nothing due no longer opens a keypad.** A parent who owes nothing was previously dropped straight
   onto a number pad, which reads as being asked for money. The kiosk now says what the account is first
   — the credit on it, or simply "Nothing due" — and offers to take a payment only if they want to.
@@ -561,8 +308,8 @@ admin panel. Update your tablets after installing** — several of these fixes a
 - **Pay a different amount against a balance.** Alongside "Full balance" and "Choose what to pay",
   a parent can type any amount — part of what's owed, or more than it. Anything beyond the bill becomes
   credit rather than being lost.
-- **No sub-$1/$1 payments.** Every route to the reader — full balance, picked months, or a typed amount
-  — is floored at the school's own minimum and never below a pound/dollar, since a smaller charge costs
+- **No sub-$1 payments.** Every route to the reader — full balance, picked months, or a typed amount
+  — is floored at the school's own minimum and never below a dollar, since a smaller charge costs
   more in card fees than it collects. The kiosk shows the minimum on the keypad, and the server enforces
   it independently of the tablet.
 - **(Requires updating the tablet app.)**
