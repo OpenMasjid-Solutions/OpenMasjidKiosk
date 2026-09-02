@@ -23,18 +23,20 @@ import {
   Settings,
   ShieldCheck,
   Smartphone,
+  Tablet,
   TrendingUp,
 } from 'lucide-react';
 import { getAppInfo, getDevices, getDonations, getSession, login, sendTestNotification, setupAdmin, type AppInfo, type Device, type NotifyTestResult, type Session } from './api';
 import { withBase, stripBase } from './base';
 import { formatMoney } from './money';
-import { useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
+import { resolveTheme, useOmosAppearanceSync, usePrefs, useReadableTheme } from './prefs';
 import { PaymentsSection } from './payments';
 import { DevicesSection } from './devices';
 import { CampaignEditorPage, CampaignsSection } from './campaigns';
 import { DonationsSection } from './donations';
 import { PlansSection } from './plans';
 import { EmailReceiptSection } from './email';
+import { NotificationsSection } from './alerts';
 import { Brand, Clock, Crescent, ProfileMenu, Scene } from './ui';
 
 const SOURCE_URL = 'https://github.com/OpenMasjid-Solutions/OpenMasjidKiosk';
@@ -73,15 +75,29 @@ export function App() {
   // Follow the dashboard's theme/wallpaper/accent live when opened from OpenMasjidOS.
   useOmosAppearanceSync(app?.embedded);
 
-  // On-scene text colour follows the WALLPAPER, not the light/dark toggle: preset
-  // wallpapers are dark → light on-scene text in both themes; a light custom wallpaper
-  // image flips data-scene to "light" so on-scene text goes dark and stays readable.
-  const sceneTone = useReadableTheme(prefs.wallpaperImage.trim() || undefined, 'dark');
+  // On-scene text color follows whatever is ACTUALLY behind it, which is not always the theme.
+  // With a preset wallpaper the theme decides (both now have their own light/dark gradient), so
+  // `data-scene` is left off entirely and tokens.css picks the ink from data-theme.
+  //
+  // A CUSTOM wallpaper image overrides both: it is whatever the masjid uploaded, in either theme.
+  // So when one is set we state the sampled tone EXPLICITLY — "dark" as well as "light" — because
+  // the case that breaks otherwise is a dark photo under light theme: light theme would put dark
+  // ink on it, and merely removing the attribute would leave that standing. tokens.css orders the
+  // two data-scene rules after the theme rules so a stated tone always wins.
+  //
+  // The FALLBACK matters as much as the sampling. It used to be a hardcoded 'dark', which was
+  // harmless while light mode kept the dark backdrop and became a real fault the moment it didn't:
+  // an image that cannot be sampled (a decode failure, a cross-origin URL that taints the canvas)
+  // would state `data-scene="dark"` on a light page, putting light ink on light glass — the titles
+  // disappear entirely. Falling back to the CURRENT theme keeps the page self-consistent, which is
+  // exactly the state a preset wallpaper is already in.
+  const hasImage = prefs.wallpaperImage.trim().length > 0;
+  const sceneTone = useReadableTheme(prefs.wallpaperImage.trim() || undefined, resolveTheme(prefs.theme));
   useEffect(() => {
     const html = document.documentElement;
-    if (sceneTone === 'light') html.setAttribute('data-scene', 'light');
+    if (hasImage) html.setAttribute('data-scene', sceneTone);
     else html.removeAttribute('data-scene');
-  }, [sceneTone]);
+  }, [hasImage, sceneTone]);
 
   return (
     <>
@@ -391,6 +407,8 @@ function SettingsTab({ app, session, embedded }: { app: AppInfo | null; session:
         {err && <p className="form-error">{err}</p>}
       </section>
 
+      <NotificationsSection />
+
       <EmailReceiptSection />
 
       <section className="glass panel">
@@ -560,37 +578,91 @@ function LoginForm({ sso, onDone }: { sso: Session['sso'] | undefined; onDone: (
   );
 }
 
-// ── /new (public tablet setup page) ───────────────────────────────────────────
+// ── /new (public device setup page) ───────────────────────────────────────────
+/**
+ * Two apps, one page.
+ *
+ * A masjid runs a wall-mounted **kiosk** (locked down, one tablet, always there) and hands
+ * volunteers the **mobile donations** app at a fundraising event (an ordinary phone, unlocked, in
+ * a pocket). The install steps are nearly the same for both — download, allow, pair with a 6-digit
+ * code — so this is one flow with a chooser rather than two pages that would drift apart.
+ *
+ * Each app is offered only when its APK is actually bundled in this image. That is the same rule
+ * the kiosk button already followed, and it is why there is no "coming in a future update" copy
+ * anywhere here: /new is read by a volunteer standing at a device, and a page that promises
+ * something the server cannot hand over wastes the one moment they were ready to act.
+ */
+type SetupTarget = 'kiosk' | 'mobile';
+
 function NewPage({ app }: { app: AppInfo | null }) {
-  const apkReady = app?.apkAvailable ?? false;
-  const apkHref = withBase(app?.apkDownloadPath ?? '/download/openmasjidkiosk.apk');
+  const kioskReady = app?.apkAvailable ?? false;
+  const mobileReady = app?.mobileApkAvailable ?? false;
+  // Default to whichever is on offer. When both are, the kiosk leads — it is the install that has
+  // to happen once per masjid, where the mobile app is per volunteer per event.
+  const [target, setTarget] = useState<SetupTarget>(kioskReady || !mobileReady ? 'kiosk' : 'mobile');
+
+  const isKiosk = target === 'kiosk';
+  const ready = isKiosk ? kioskReady : mobileReady;
+  const href = withBase(
+    (isKiosk ? app?.apkDownloadPath : app?.mobileApkDownloadPath) ??
+      (isKiosk ? '/download/openmasjidkiosk.apk' : '/download/openmasjidmobile.apk'),
+  );
+  const filename = isKiosk ? app?.apkFilename : app?.mobileApkFilename;
+  const appName = isKiosk ? 'OpenMasjid Kiosk' : 'OpenMasjid Mobile Donations';
+  const device = isKiosk ? 'tablet' : 'phone';
 
   return (
     <div className="wrap">
       <section className="glass-raised setup enter">
         <div className="setup-head">
-          <div className="emblem">
-            <Smartphone size={28} />
-          </div>
-          <h1 className="setup-title">Set up your kiosk tablet</h1>
+          <div className="emblem">{isKiosk ? <Tablet size={28} /> : <Smartphone size={28} />}</div>
+          <h1 className="setup-title">{isKiosk ? 'Set up your kiosk tablet' : 'Set up a collector’s phone'}</h1>
           <p className="muted">Three quick steps — no technical knowledge needed.</p>
         </div>
+
+        {/* Only a chooser when there is genuinely a choice. */}
+        {kioskReady && mobileReady && (
+          <div className="app-pick" role="group" aria-label="Which app do you need?">
+            <button
+              type="button"
+              className={`app-pick__opt${isKiosk ? ' app-pick__opt--on' : ''}`}
+              aria-pressed={isKiosk}
+              onClick={() => setTarget('kiosk')}
+            >
+              <Tablet size={20} aria-hidden="true" />
+              <span className="app-pick__name">Kiosk</span>
+              <span className="app-pick__sub">A tablet on the wall, locked to the giving screen</span>
+            </button>
+            <button
+              type="button"
+              className={`app-pick__opt${!isKiosk ? ' app-pick__opt--on' : ''}`}
+              aria-pressed={!isKiosk}
+              onClick={() => setTarget('mobile')}
+            >
+              <Smartphone size={20} aria-hidden="true" />
+              <span className="app-pick__name">Mobile donations</span>
+              <span className="app-pick__sub">A phone carried round at a fundraising event</span>
+            </button>
+          </div>
+        )}
 
         <ol className="setup-steps">
           <li className="setup-step">
             <span className="num">1</span>
             <div className="setup-step__body">
-              <div className="setup-step__title">Download the kiosk app on the tablet</div>
-              <p className="setup-step__sub">On the Android tablet, open this page in its browser and tap Download.</p>
+              <div className="setup-step__title">Download the app on the {device}</div>
+              <p className="setup-step__sub">
+                On the Android {device}, open this page in its browser and tap Download.
+              </p>
               <div className="download-row">
-                {apkReady ? (
-                  <a className="btn btn--primary" href={apkHref} download={app?.apkFilename}>
-                    <Download size={17} /> Download the kiosk app
+                {ready ? (
+                  <a className="btn btn--primary" href={href} download={filename}>
+                    <Download size={17} /> Download {appName}
                   </a>
                 ) : (
                   <>
                     <button className="btn" disabled>
-                      <Download size={17} /> Download the kiosk app
+                      <Download size={17} /> Download {appName}
                     </button>
                     <span className="pill pill--test">Available after the first build</span>
                   </>
@@ -604,8 +676,8 @@ function NewPage({ app }: { app: AppInfo | null }) {
             <div className="setup-step__body">
               <div className="setup-step__title">Allow the install</div>
               <p className="setup-step__sub">
-                When the tablet asks, allow installing apps from your browser, then open the downloaded file to install
-                “OpenMasjid Kiosk”.
+                When the {device} asks, allow installing apps from your browser, then open the downloaded file to
+                install “{appName}”.
               </p>
             </div>
           </li>
@@ -615,15 +687,26 @@ function NewPage({ app }: { app: AppInfo | null }) {
             <div className="setup-step__body">
               <div className="setup-step__title">Pair it with this server</div>
               <p className="setup-step__sub">
-                In the admin panel, go to <b>Devices → Add kiosk</b> to get a 6-digit pairing code, then type it into the
-                tablet app (no camera needed). Pairing arrives in the next update.
+                In the admin panel, go to <b>Devices → Add {isKiosk ? 'kiosk' : 'device'}</b> to get a 6-digit pairing
+                code, then type it into the app along with this server’s address (no camera needed — the code expires
+                after 10 minutes and works once).
               </p>
               <div className="download-row">
-                <div className="pair-hint">Your 6-digit pairing code will appear in <b>Devices</b></div>
+                <div className="pair-hint">
+                  Your 6-digit pairing code will appear in <b>Devices</b>
+                </div>
               </div>
             </div>
           </li>
         </ol>
+
+        {!isKiosk && (
+          <p className="muted note" style={{ marginBlockStart: '1rem' }}>
+            The mobile app does <b>not</b> lock the phone down — it stays an ordinary phone that a volunteer can
+            still use. It takes cards with a Stripe Reader M2 over Bluetooth or USB. If this server is reachable at a
+            public address, a volunteer can do all three steps from anywhere, without being on the masjid’s Wi-Fi.
+          </p>
+        )}
 
         <div className="row" style={{ marginBlockStart: '1.2rem', justifyContent: 'center' }}>
           <button className="btn btn--ghost" onClick={() => navigate('/')}>

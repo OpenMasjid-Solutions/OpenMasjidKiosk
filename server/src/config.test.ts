@@ -47,7 +47,10 @@ test('all four server/tablet combinations compare the way the update check needs
 test('this is the bug the pairing exists to avoid: suffixing only the APK nags forever', () => {
   // If the server did NOT carry the suffix, a correctly-updated dev tablet would compare
   // "0.10.1" against "0.10.1-dev" and report an update that installing can never resolve.
-  const serverWithoutFix = '0.10.1';
+  // Typed as `string`, not left as literals: the whole point is the runtime comparison two
+  // independently-built halves make, and TypeScript would otherwise narrow these to constants and
+  // call the comparison unreachable — which is exactly the reasoning that let the bug ship.
+  const serverWithoutFix: string = '0.10.1';
   const devApk = '0.10.1-dev';
   assert.equal(serverWithoutFix !== devApk, true, 'demonstrates the permanent false positive');
   // With the fix both sides move together, so the same tablet is quiet.
@@ -71,7 +74,7 @@ test('a version that already carries a prerelease is left alone', () => {
   assert.equal(applyVersionSuffix('0.11.0-dev.1', '-dev'), '0.11.0-dev.1');
   assert.equal(applyVersionSuffix('0.11.0-dev.12', '-dev'), '0.11.0-dev.12');
   assert.equal(applyVersionSuffix('0.11.0-rc.1', '-dev'), '0.11.0-rc.1');
-  // A plain release version still takes one, so the old behaviour is intact where it applied.
+  // A plain release version still takes one, so the old behavior is intact where it applied.
   assert.equal(applyVersionSuffix('0.11.0', '-dev'), '0.11.0-dev');
 });
 

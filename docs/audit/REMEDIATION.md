@@ -17,7 +17,7 @@ That is a published artifact, which is the one condition that overrides "push it
 
 ---
 
-## Tier 2 first — the behaviour-changing changes, so you know where to look
+## Tier 2 first — the behavior-changing changes, so you know where to look
 
 ### `@fastify/static` 8.3.0 → 10.1.2 · `0a83b12` · [KIOSK-003]
 
@@ -87,7 +87,7 @@ Verified live, end to end (setup → set PIN → clear PIN → revoke device):
   GET /api/admin/audit with no cookie: 401
 ```
 
-### Behaviour changes worth knowing about, in one list
+### Behavior changes worth knowing about, in one list
 
 | Change | What an admin or donor might notice |
 |---|---|
@@ -212,13 +212,13 @@ job build: success
 
 This one run verifies two things: the three Kotlin changes **compile** and produce a signed release APK, and the **SHA-pinned actions resolve and run** (`actions/checkout@11d5960a…`, `setup-java`, `setup-android`, `upload-artifact` all succeeded on their pinned commits).
 
-It does **not** verify runtime behaviour. There is no Android SDK on this machine and no Android unit tests in the repo, so **none of the three Kotlin changes has been run on a tablet.** KIOSK-002 and KIOSK-015 are pure functions whose arithmetic I modelled directly; KIOSK-005 changes navigation behaviour and is the one that warrants a real keyed-card smoke test.
+It does **not** verify runtime behavior. There is no Android SDK on this machine and no Android unit tests in the repo, so **none of the three Kotlin changes has been run on a tablet.** KIOSK-002 and KIOSK-015 are pure functions whose arithmetic I modeled directly; KIOSK-005 changes navigation behavior and is the one that warrants a real keyed-card smoke test.
 
 ---
 
 ## A correction to my own finding
 
-I first rated KIOSK-002 **High**, on the reasoning that an overflowing shift would collapse the PIN lockout and leave a 4-digit PIN brute-forceable in an hour. Before writing it up I modelled `lshl` exactly, and the reasoning was wrong: because the ramp *restarts* rather than vanishing, the attacker gets 13.5 guesses/hour against an intended 12.0 — a 12% speedup, and ~31 days rather than ~35 to exhaust a 4-digit PIN.
+I first rated KIOSK-002 **High**, on the reasoning that an overflowing shift would collapse the PIN lockout and leave a 4-digit PIN brute-forceable in an hour. Before writing it up I modeled `lshl` exactly, and the reasoning was wrong: because the ramp *restarts* rather than vanishing, the attacker gets 13.5 guesses/hour against an intended 12.0 — a 12% speedup, and ~31 days rather than ~35 to exhaust a 4-digit PIN.
 
 **Re-rated Low.** The fix still shipped (it is free and provably identical in the intended range), but it is a degraded rate limiter, not a way past the PIN. The measured table is in the finding. Flagging it because the first framing was in an earlier draft and I would rather you have the number than the narrative.
 

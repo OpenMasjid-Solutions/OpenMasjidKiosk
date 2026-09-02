@@ -93,7 +93,9 @@ test('a requested-but-failed monthly is recorded as the one-off it actually was'
   // The other half of the same report: a $1 monthly showed a "Monthly" badge in Donations while the
   // Recurring screen was empty, so the admin believed there was a standing order to cancel and had
   // nothing to cancel. The record now follows what happened, not what was asked for.
-  const kindFor = (requested: boolean, created: boolean) => (created ? 'monthly' : 'one_time');
+  // `_requested` is ignored ON PURPOSE and named so — that IS the fix being pinned here. It stays
+  // in the signature so the call sites below read as the two facts an admin cares about.
+  const kindFor = (_requested: boolean, created: boolean) => (created ? 'monthly' : 'one_time');
 
   assert.equal(kindFor(true, true), 'monthly', 'plan created — genuinely recurring');
   assert.equal(kindFor(true, false), 'one_time', 'plan NOT created — a single gift, and must say so');

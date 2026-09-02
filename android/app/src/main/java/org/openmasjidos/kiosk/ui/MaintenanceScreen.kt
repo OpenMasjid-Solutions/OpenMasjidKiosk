@@ -386,11 +386,16 @@ private fun ReaderControls(
         Spacer(Modifier.height(4.dp))
         Text(it, style = MaterialTheme.typography.bodyMedium, color = InkMutedDark)
     }
-    if (reader.battery != null) {
+    // `?.let` rather than `if (reader.battery != null)` — and that is a requirement, not a style
+    // preference. `ReaderState` lives in :core now, and Kotlin will not smart-cast a public property
+    // declared in ANOTHER module: it cannot prove the getter returns the same value twice, so the
+    // null check does not narrow the type at the use site and `stringResource`, which takes a
+    // non-null `Any`, stops compiling. Binding it to a local once is what makes it a stable value.
+    reader.battery?.let { battery ->
         Spacer(Modifier.height(4.dp))
         val charge = if (reader.charging == true) " · " + stringResource(R.string.reader_charging) else ""
         Text(
-            text = stringResource(R.string.reader_battery, reader.battery) + charge,
+            text = stringResource(R.string.reader_battery, battery) + charge,
             style = MaterialTheme.typography.bodyMedium,
             color = InkMutedDark,
         )

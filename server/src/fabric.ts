@@ -208,6 +208,12 @@ export async function fabricEmail(msg: FabricEmailMessage): Promise<{ sent: bool
     // Reached-but-failed / unreachable — NOT proof it's unconfigured, so don't claim so.
     log.debug(`Fabric email failed: ${err instanceof Error ? err.message : String(err)}`);
     lastEmailStatus = 'error';
+    // COUNT IT. Every other failure path above increments; this one did not, and it is the most
+    // likely failure there is — the platform being down or the request timing out. A breaker that
+    // ignores "unreachable" never opens in the one situation it exists for: the server keeps
+    // minting branded PaymentIntents, each of which suppresses Stripe's own receipt, so donors get
+    // no receipt at all instead of falling back to Stripe's.
+    consecutiveEmailFailures++;
     return { sent: false, reason: 'unreachable' };
   }
 }
@@ -244,6 +250,374 @@ export async function fabricAlert(
   } catch (err) {
     log.debug(`Fabric alert failed: ${err instanceof Error ? err.message : String(err)}`);
     return { delivered: false, reason: 'unreachable' };
+  }
+}
+
+// ── WhatsApp, through the platform's queue (manifest `whatsapp: true`) ──
+// We never see the gateway, its credentials, or the masjid's number.
+//
+// WHAT THE PLATFORM USED TO DO FOR US, AND NO LONGER DOES (OpenMasjidOS 0.51.1). It used to pace
+// everything: randomized gaps, per-recipient and per-group cooldowns, hourly and daily caps, a
+// warm-up ramp on a new number, and quiet hours. All of that is gone. The only pause left is a
+// typing indicator sized to the message. A message handed over now goes out within seconds.
+//
+// That removes a delay we were relying on without having decided to. Ban risk still attaches to the
+// NUMBER, that number is shared by every app on the box, and a blocked number cannot be recovered —
+// the masjid simply loses the number their community reaches them on. So the pacing is OUR job now:
+// see `whatsappGate` in alerts.ts, which is what stops a Stripe outage turning forty failed
+// donations into forty messages on one caretaker's phone.
+//
+// Two things that did NOT change: `202 { queued: true }` still means ACCEPTED, never delivered —
+// there is no delivery receipt from WhatsApp — and nothing auth-critical may ever ride on it.
+//
+// What is NEW and worth using: the 202 carries an `id`, and `GET .../whatsapp/status/<id>` says
+// what became of it. The queue is also persisted across restarts now; before 0.51.1 it lived in
+// memory, so anything held for a retry was destroyed on every container restart while we had been
+// told `queued: true`.
+
+export type WhatsAppReason = 'ready' | 'not-configured' | 'not-linked' | 'unreachable';
+
+export interface WhatsAppStatus {
+  available: boolean;
+  reason: WhatsAppReason;
+  /** 0.51.1+: the platform can tell us what became of a message. ABSENT on an older platform, and
+   *  an absent field must read as false — never assume the endpoint is there. */
+  outcomes: boolean;
+}
+
+/** What became of one queued message. `queued` is the honest answer for most of a message's life. */
+export type WhatsAppState = 'queued' | 'sent' | 'failed' | 'expired' | 'unknown';
+
+export interface WhatsAppOutcome {
+  state: WhatsAppState;
+  /** Only on failed/expired, and only ever the platform's own words. */
+  reason?: string;
+}
+
+let waCache: { at: number; value: WhatsAppStatus } | null = null;
+const WA_CACHE_MS = 60_000;
+
+/**
+ * Can this masjid send WhatsApp at all?
+ *
+ * Asked before offering the feature, so a toggle is never live on an install where it could only
+ * ever fail at the moment a real alert was due. Cached for a minute: the settings screen polls it
+ * and a masjid does not link a phone twice a minute.
+ */
+export async function fabricWhatsAppStatus(force = false): Promise<WhatsAppStatus> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { available: false, reason: 'not-configured', outcomes: false };
+  const now = Date.now();
+  if (!force && waCache && now - waCache.at < WA_CACHE_MS) return waCache.value;
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp`, {
+      headers: { 'x-openmasjid-app-secret': config.omosAppSecret },
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    // A platform too old to know about WhatsApp 404s here. That is "not set up", not an error.
+    if (!res.ok) {
+      const value: WhatsAppStatus = { available: false, reason: res.status === 404 ? 'not-configured' : 'unreachable', outcomes: false };
+      waCache = { at: now, value };
+      return value;
+    }
+    const j = (await res.json().catch(() => ({}))) as { available?: boolean; reason?: string; outcomes?: boolean };
+    const reason: WhatsAppReason =
+      j.reason === 'ready' || j.reason === 'not-configured' || j.reason === 'not-linked' || j.reason === 'unreachable'
+        ? j.reason
+        : j.available === true
+          ? 'ready'
+          : 'not-configured';
+    // `outcomes` is absent on a platform older than 0.51.1. Absent MUST read as false — asking a
+    // platform that has no status endpoint just 404s every id and would look like "every message
+    // failed", which is worse than not asking.
+    const value: WhatsAppStatus = { available: j.available === true, reason, outcomes: j.outcomes === true };
+    waCache = { at: now, value };
+    return value;
+  } catch (err) {
+    log.debug(`Fabric whatsapp status failed: ${err instanceof Error ? err.message : String(err)}`);
+    const value: WhatsAppStatus = { available: false, reason: 'unreachable', outcomes: false };
+    waCache = { at: now, value };
+    return value;
+  }
+}
+
+/** Drop the cached availability so the next read re-asks (called when the admin presses Refresh). */
+export function clearWhatsAppCache(): void {
+  waCache = null;
+}
+
+/** Why the masjid's WhatsApp link was down. Drives the admin wording, because each one needs a
+ *  different thing done about it. An unrecognised value reads as `unknown` — the platform says more
+ *  may be added, and a new cause must never crash a screen. */
+export type LinkFailureCause = 'session-expired' | 'needs-relink' | 'key-rejected' | 'unknown';
+
+const CAUSES: readonly string[] = ['session-expired', 'needs-relink', 'key-rejected', 'unknown'];
+
+/** A period during which the masjid's WhatsApp link was dead but the platform had not yet noticed,
+ *  so messages were reported `sent` and never delivered. Epoch ms. */
+export interface WhatsAppSuspectWindow {
+  from: number;
+  to: number;
+  cause: LinkFailureCause;
+  /** How many of OUR messages the platform reported sent inside it (scoped to this app). */
+  count: number;
+  /** Those messages' ids, so we can reconcile exactly rather than by timestamp. Capped at 500. */
+  ids: string[];
+  /** The cap bit — `ids` is incomplete and `count` is the real number. */
+  truncated: boolean;
+}
+
+/**
+ * Periods where a message we were told was `sent` may never have arrived (OpenMasjidOS 0.51.1-dev.12+;
+ * `cause`/`ids`/`truncated`/`ok` since dev.13).
+ *
+ * A masjid's WhatsApp session can expire on its own, the way WhatsApp Desktop signs itself out. The
+ * gateway kept accepting messages and reporting them sent for over a day. The platform now spots
+ * that within about ten minutes and holds messages instead — but the gap between the link dying and
+ * the platform noticing is unrecoverable, and the platform cannot resend from it because it deletes
+ * message contents the moment it hands them over. So it tells each app WHEN it was blind.
+ *
+ * WINDOWS SURVIVE RECOVERY NOW, and that is a change worth knowing. The first cut answered only
+ * while the incident was open, so re-linking the phone erased the evidence at precisely the moment
+ * an admin went looking for what they had missed — we reported that, and it is fixed: windows are
+ * retained for seven days after the outage ends. That is why this app no longer hoards them.
+ *
+ * `ok` is checked explicitly. The platform added it because a caller ignoring the status code could
+ * read a 403 or 429 body as an all-clear — the trap Students hit on `/groups`. An older platform
+ * omits the field, so absent-but-well-shaped is still accepted.
+ *
+ * Fails soft. A 404 is a platform too old to have the route — "no information", never an incident.
+ */
+export async function fabricWhatsAppSuspect(): Promise<{ ok: true; windows: WhatsAppSuspectWindow[] } | { ok: false; reason: string }> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { ok: false, reason: 'no-fabric' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp/suspect`, {
+      headers: { 'x-openmasjid-app-secret': config.omosAppSecret },
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) return { ok: false, reason: res.status === 404 ? 'not-supported' : `http_${res.status}` };
+    const j = (await res.json().catch(() => null)) as { ok?: unknown; windows?: unknown } | null;
+    // An explicit `ok: false` is a refusal wearing a 200. Absent is fine — that is a platform older
+    // than dev.13, which only ever returned the field on success anyway.
+    if (!j || j.ok === false) return { ok: false, reason: 'refused' };
+    // A 200 of the wrong shape is a failure, not "all clear". Reading a malformed answer as "no
+    // problem" is precisely the silence this endpoint exists to break.
+    if (!Array.isArray(j.windows)) return { ok: false, reason: 'bad-shape' };
+    const windows = j.windows
+      .filter((w): w is Record<string, unknown> => !!w && typeof w === 'object')
+      .map((w) => ({
+        from: Math.trunc(Number(w.from) || 0),
+        to: Math.trunc(Number(w.to) || 0),
+        cause: (typeof w.cause === 'string' && CAUSES.includes(w.cause) ? w.cause : 'unknown') as LinkFailureCause,
+        count: Math.max(0, Math.trunc(Number(w.count) || 0)),
+        ids: Array.isArray(w.ids)
+          ? w.ids.filter((i): i is string => typeof i === 'string' && /^[\w.:-]{1,128}$/.test(i)).slice(0, 500)
+          : [],
+        truncated: w.truncated === true,
+      }))
+      .filter((w) => w.from > 0 && w.to >= w.from);
+    return { ok: true, windows };
+  } catch (err) {
+    log.debug(`whatsapp suspect lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { ok: false, reason: 'unreachable' };
+  }
+}
+
+/** One WhatsApp group the admin approved for apps to post into. `label` is the admin's own
+ *  nickname for it — the group's real WhatsApp subject is deliberately never sent to us, so this is
+ *  the only name there is and it should be shown as-is. */
+export interface WhatsAppGroup {
+  id: string;
+  label: string;
+}
+
+/** `ok: false` distinguishes "we could not ask" from "nothing is approved" — see below. */
+export type WhatsAppGroupList = { ok: true; groups: WhatsAppGroup[] } | { ok: false; reason: string };
+
+/**
+ * The groups this masjid's admin approved for apps to post into.
+ *
+ * The list is GLOBAL to the box, not per-app: every app with the `whatsapp` capability sees the same
+ * approved set, and there is no per-app grant. An id we did not get from here is refused `403`, so
+ * the admin panel offers this list as a picker rather than a text box.
+ *
+ * A 200 WHOSE BODY IS THE WRONG SHAPE IS A FAILURE, NOT AN EMPTY LIST. Reading a malformed answer as
+ * "no groups approved" is how an admin's still-live subscription would silently look withdrawn, and
+ * the screen would tell them to go and re-approve a group that was never un-approved. Same reason
+ * `reason` exists at all: "couldn't ask" and "none approved" need different words on the screen.
+ *
+ * Fails soft — never throws. Logs the STATUS only: the body carries the masjid's own group
+ * nicknames, which are theirs and not ours to write into a log file.
+ */
+export async function fabricWhatsAppGroups(): Promise<WhatsAppGroupList> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { ok: false, reason: 'no-fabric' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp/groups`, {
+      headers: { 'x-openmasjid-app-secret': config.omosAppSecret },
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) {
+      // 404 = a platform too old to have groups; 403 = we lack the `whatsapp` capability. Neither is
+      // an error worth alarming anyone about, so this is one line at warn with no body.
+      log.warn(`whatsapp groups unavailable (${res.status})`);
+      return { ok: false, reason: res.status === 404 ? 'not-supported' : `http_${res.status}` };
+    }
+    const j = (await res.json().catch(() => null)) as { groups?: unknown } | null;
+    if (!j || !Array.isArray(j.groups)) return { ok: false, reason: 'bad-shape' };
+    const groups = j.groups
+      .filter((g): g is Record<string, unknown> => !!g && typeof g === 'object' && typeof (g as { id?: unknown }).id === 'string')
+      .map((g) => ({
+        id: String(g.id).slice(0, 64),
+        // Fall back to the id rather than an empty row: a group with no nickname is still pickable.
+        label: typeof g.label === 'string' && g.label ? g.label.slice(0, 120) : String(g.id),
+      }));
+    return { ok: true, groups };
+  } catch (err) {
+    log.debug(`whatsapp groups lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { ok: false, reason: 'unreachable' };
+  }
+}
+
+/**
+ * Post ONE message into ONE approved group.
+ *
+ * A SEPARATE FUNCTION from [fabricWhatsApp], deliberately, and the separation is the enforcement
+ * rather than a note in a document — the same wall OpenMasjidStudents draws for the same reason.
+ * The platform's rule is that a group post is for genuine announcements and must never carry one
+ * person's own business, "because their fees are not the other 199 members'". Here that is a donor:
+ * everyone in a WhatsApp group can see every other member's phone number, so a refund notice posted
+ * to a group of forty tells forty people who asked for their money back. [fabricWhatsApp] has no
+ * parameter that could name a group, so a per-person message cannot reach one even by mistake.
+ *
+ * (Whether a group post names the donor at all is the admin's per-group choice — see
+ * `AlertRecipient.includeNames`. This function's job is only to make the two channels distinct.)
+ *
+ * The wire shape is the same endpoint with `group` in place of `to`. Sending BOTH is a 400 by
+ * design, which is another reason these are two functions and not one with an optional field.
+ */
+export async function fabricWhatsAppGroup(groupId: string, text: string): Promise<{ queued: boolean; id?: string; reason?: string }> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { queued: false, reason: 'no-fabric' };
+  if (!groupId.trim() || !text.trim()) return { queued: false, reason: 'empty' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-openmasjid-app-secret': config.omosAppSecret },
+      body: JSON.stringify({ group: groupId, text }),
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) {
+      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      // A 403 here means specifically "that group is not approved (any more)" — an authorisation
+      // answer, not a malformed request. The settings screen shows the sentence so an admin
+      // re-approves the group rather than hunting for a bug in the message.
+      log.warn(`whatsapp GROUP post REFUSED (${res.status}): ${j.error ?? '(no reason given)'}`);
+      return { queued: false, reason: j.error || `http_${res.status}` };
+    }
+    const j = (await res.json().catch(() => ({}))) as { queued?: boolean; id?: string; error?: string };
+    const id = typeof j.id === 'string' && /^[\w.:-]{1,128}$/.test(j.id) ? j.id : undefined;
+    return j.queued === true ? { queued: true, id } : { queued: false, reason: j.error || 'refused' };
+  } catch (err) {
+    log.debug(`whatsapp group post failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { queued: false, reason: 'unreachable' };
+  }
+}
+
+/**
+ * Queue one WhatsApp message to one person.
+ *
+ * ONE recipient per call, by the shape of the platform's API — the API discourages a blast, and so
+ * does this. `to` must be digits in international form with no plus; the platform refuses a number
+ * with no country code rather than guessing one, which is why [normalisePhone] refuses too.
+ *
+ * `queued: true` means ACCEPTED FOR LATER, not delivered. Fails soft in every case: an alert that
+ * could not be queued must never disturb the donation, refund or reader event that raised it.
+ */
+export async function fabricWhatsApp(to: string, text: string): Promise<{ queued: boolean; id?: string; reason?: string }> {
+  if (!config.omosBaseUrl || !config.omosAppSecret) return { queued: false, reason: 'no-fabric' };
+  if (!to.trim() || !text.trim()) return { queued: false, reason: 'empty' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-openmasjid-app-secret': config.omosAppSecret },
+      body: JSON.stringify({ to, text }),
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) {
+      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      // WARN, not debug. A 400/403 here is the platform telling us in a plain sentence why this will
+      // never work — an unapproved group, a number with no country code, our own gateway number. It
+      // is the most useful line anyone will get, and at debug it was invisible on a real install.
+      log.warn(`whatsapp send REFUSED (${res.status}): ${j.error ?? '(no reason given)'}`);
+      return { queued: false, reason: j.error || `http_${res.status}` };
+    }
+    const j = (await res.json().catch(() => ({}))) as { queued?: boolean; id?: string; error?: string };
+    // The id is what makes "did that actually go?" answerable later — see [fabricWhatsAppOutcome].
+    const id = typeof j.id === 'string' && /^[\w.:-]{1,128}$/.test(j.id) ? j.id : undefined;
+    return j.queued === true ? { queued: true, id } : { queued: false, reason: j.error || 'refused' };
+  } catch (err) {
+    log.debug(`Fabric whatsapp send failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { queued: false, reason: 'unreachable' };
+  }
+}
+
+/**
+ * What became of a message we queued (OpenMasjidOS 0.51.1+).
+ *
+ * Scoped to our own app by the platform: another app's id 404s exactly like an unknown one, so a
+ * 404 is never proof of anything except "not ours or gone". The records are bounded to the most
+ * recent 200, which is why we poll shortly after sending rather than days later.
+ *
+ * Carries NO message text and NO recipient — just a state — so nothing here can leak a donor's or
+ * an admin's details back out of the platform.
+ *
+ * Fails soft to `unknown`: this is diagnostics, and a diagnostic that throws is worse than one that
+ * shrugs. `unknown` deliberately reads as "no news", never as failure.
+ */
+export async function fabricWhatsAppOutcome(id: string): Promise<WhatsAppOutcome> {
+  if (!config.omosBaseUrl || !config.omosAppSecret || !id.trim()) return { state: 'unknown' };
+  warnIfCleartextSecret();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${config.omosBaseUrl}/api/fabric/whatsapp/status/${encodeURIComponent(id)}`, {
+      headers: { 'x-openmasjid-app-secret': config.omosAppSecret },
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    clearTimeout(t);
+    if (!res.ok) return { state: 'unknown' }; // 404 = not ours, unknown, or aged out of the ring
+    const j = (await res.json().catch(() => ({}))) as { state?: string; reason?: string };
+    const state: WhatsAppState =
+      j.state === 'queued' || j.state === 'sent' || j.state === 'failed' || j.state === 'expired' ? j.state : 'unknown';
+    const reason = typeof j.reason === 'string' ? j.reason.slice(0, 200) : undefined;
+    return reason ? { state, reason } : { state };
+  } catch (err) {
+    log.debug(`whatsapp outcome lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { state: 'unknown' };
   }
 }
 
@@ -474,7 +848,7 @@ export async function fetchFabricStripeAccounts(): Promise<FabricStripeAccountRe
 // aware (see index.ts rewriteUrl + HTML injection). We ask the platform for our public base
 // instead of guessing, and show it on the "Add a remote kiosk" page. Never persisted; fails soft.
 
-/** The platform's answer for this app's public address. `basePath` is normalised to a leading
+/** The platform's answer for this app's public address. `basePath` is normalized to a leading
  *  slash with no trailing slash (e.g. "/kiosk"), or "" when remote access is off. */
 export interface FabricSite {
   enabled: boolean;
@@ -485,7 +859,7 @@ export interface FabricSite {
 
 const SITE_OFF: FabricSite = { enabled: false, domain: '', publicUrl: '', basePath: '' };
 
-/** Normalise a path to "" or "/seg[/seg…]" (leading slash, no trailing slash). Restricted to a safe
+/** Normalize a path to "" or "/seg[/seg…]" (leading slash, no trailing slash). Restricted to a safe
  *  URL-path charset so the value we MATCH/STRIP (index.ts rewriteUrl) is byte-identical to the one we
  *  inject into `<base href>`/`window.__OMOS_BASE__` — no divergence, and no HTML-injection surface if
  *  the platform ever returned a hostile basePath. */

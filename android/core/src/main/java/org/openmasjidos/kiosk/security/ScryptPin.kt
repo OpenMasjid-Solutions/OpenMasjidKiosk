@@ -79,8 +79,8 @@ object ScryptPin {
     /** Decode standard OR URL-safe Base64, tolerating missing padding. Null on failure. */
     private fun decode(value: String): ByteArray? = runCatching {
         // URL_SAFE flag also accepts standard '+'/'/' via Android's decoder tolerance; NO_PADDING
-        // is not set so padded input is fine too. Normalise just in case the server used '+'/'/'.
-        val normalised = value.replace('+', '-').replace('/', '_')
-        Base64.decode(normalised, B64_FLAGS)
+        // is not set so padded input is fine too. Normalize just in case the server used '+'/'/'.
+        val normalized = value.replace('+', '-').replace('/', '_')
+        Base64.decode(normalized, B64_FLAGS)
     }.getOrNull()
 }

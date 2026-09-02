@@ -22,12 +22,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
@@ -51,6 +53,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,16 +63,17 @@ import org.openmasjidos.kiosk.GivingState
 import org.openmasjidos.kiosk.GivingStep
 import org.openmasjidos.kiosk.MonthlyOutcome
 import org.openmasjidos.kiosk.TuitionInvoiceUi
+import org.openmasjidos.kiosk.R
+import org.openmasjidos.kiosk.TuitionFeeQuote
 import org.openmasjidos.kiosk.TuitionState
 import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.ui.theme.DangerDark
 import org.openmasjidos.kiosk.ui.theme.SuccessDark
-import java.util.Locale
 
 /**
  * Resolved per-campaign appearance for the giving screen (computed in [GivingHome]). Lets one bright
- * or dark, accent-tinted look flow through every step without hard-coding colours.
+ * or dark, accent-tinted look flow through every step without hard-coding colors.
  */
 data class SceneStyle(
     val bright: Boolean,
@@ -87,7 +91,7 @@ data class SceneStyle(
  * The donor-facing giving flow (§9) for one campaign: amount → (details) → card → thank-you.
  * GiveALittle-simple — huge full-screen tiles, warm wording, no jargon. Card data is never touched
  * here; the reader + Stripe SDK handle it, and the server verifies every payment before it counts.
- * The full-screen background + campaign tabs are drawn by [GivingHome]; colours come from [style].
+ * The full-screen background + campaign tabs are drawn by [GivingHome]; colors come from [style].
  */
 @Composable
 fun GivingScreen(
@@ -116,6 +120,8 @@ fun GivingScreen(
     onTuitionToggleUnit: (String) -> Unit = {},
     onTuitionToggleInvoice: (String) -> Unit = {},
     onTuitionPay: () -> Unit = {},
+    /** The parent accepted the tuition + processing-fee total, so the reader may be armed. */
+    onTuitionConfirmFee: () -> Unit = {},
     onTuitionPayAmount: (Long, String) -> Unit = { _, _ -> },
     loadImage: suspend (String) -> ImageBitmap? = { null },
     modifier: Modifier = Modifier,
@@ -135,6 +141,11 @@ fun GivingScreen(
             TuitionConfirmStep(giving.tuition, style, onTuitionConfirmStudent, onTuitionRejectStudent, modifier)
         isTuition && giving.step == GivingStep.TuitionInvoices ->
             TuitionInvoicesStep(giving.tuition, style, onTuitionPayFull, onTuitionToggleUnit, onTuitionToggleInvoice, onTuitionPay, onTuitionPayAmount, onCancel, modifier)
+        // Only reached when the school passes Stripe's cut to the payer. It sits between "pay" and the
+        // reader being armed, because the parent has to see the total — and whose money the extra is —
+        // before they commit to it (§11.4).
+        isTuition && giving.step == GivingStep.TuitionFeeConfirm ->
+            TuitionFeeStep(giving.feeQuote, style, onTuitionConfirmFee, onCancel, modifier)
         giving.step == GivingStep.Amount || giving.step == GivingStep.Idle ->
             AmountStep(giving, campaign, currency, style, readerConnected, config?.footerText ?: "OpenMasjid Solutions", onSetMonthly, onChooseAmount, loadImage, modifier)
         // Details has its own full-screen scrollable layout (it hosts the in-app keyboard), so it is
@@ -144,7 +155,15 @@ fun GivingScreen(
         else -> CenteredScene(modifier) {
             when (giving.step) {
                 GivingStep.LargeAmount -> LargeAmountStep(giving, config, currency, style, loadImage, onProceedLarge, onCancel)
-                GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard && !isTuition, giving.preparingManual, onEnterManually, onCancel)
+                // `!giving.monthly` is load-bearing, not tidiness. Keyed entry ALWAYS creates a
+                // one-off charge (`startManualCollect` passes monthly = false), but it never cleared
+                // `giving.monthly` — so a donor who chose Monthly and then tapped "enter card by
+                // hand" was charged once, told "$X / month" on the thank-you screen, and given no
+                // standing order. Exactly the failure 0.11.0 headlined, reached by a different door.
+                // The flow already holds that a monthly gift NEEDS the reader (see the guard in
+                // KioskViewModel.startGiving: "Monthly giving needs the card reader"); this makes the
+                // card step agree with it instead of offering a way around it.
+                GivingStep.Card -> CardStep(chargeMinor, currency, style, readerPrompt, manualOnCard && !isTuition && !giving.monthly, giving.preparingManual, onEnterManually, onCancel)
                 GivingStep.Processing -> ProcessingStep(chargeMinor, currency, style)
                 GivingStep.Thanks -> ThanksStep(giving, campaign, currency, chargeMinor, style, onCancel)
                 GivingStep.Error -> ErrorStep(giving.error, style, onRetry, onCancel)
@@ -154,8 +173,8 @@ fun GivingScreen(
     }
 }
 
-/** Transparent centred column for the form-like steps (GivingHome owns the background).
- *  Scrollable as well as centred: kiosk type is deliberately large, and on a short screen (or in
+/** Transparent centered column for the form-like steps (GivingHome owns the background).
+ *  Scrollable as well as centered: kiosk type is deliberately large, and on a short screen (or in
  *  landscape) a step like the card prompt must be able to scroll rather than clip its buttons. */
 @Composable
 private fun CenteredScene(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
@@ -747,7 +766,7 @@ private fun TuitionConfirmStep(
     modifier: Modifier = Modifier,
 ) {
     val t = tuition ?: TuitionState()
-    // Centred, but scrollable so a short landscape screen can never clip the two buttons.
+    // Centered, but scrollable so a short landscape screen can never clip the two buttons.
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -791,6 +810,116 @@ private fun TuitionConfirmStep(
     }
 }
 
+/**
+ * WHOSE MONEY IS THIS? The itemized total, shown before the reader is armed, when the madrasah has
+ * chosen to pass Stripe's processing fee to the payer (students/billing 0.51.0, §11.4).
+ *
+ * Two things are requirements rather than niceties, and both are here:
+ *
+ *  1. The fee is its OWN LINE with the total, seen before the parent commits. A total that first
+ *     appears on the reader — or on a card statement — is what generates phone calls to the office.
+ *  2. The sentence saying the extra is NOT the masjid's. It is what the card networks charge to
+ *     accept a card and it goes to the payment processor. A parent who thinks the madrasah added
+ *     3% to their child's tuition will say so, to other parents, and they will be wrong.
+ *
+ * Every figure comes from the server's own reply. This screen does no arithmetic: the total shown is
+ * by construction the total the card is asked for.
+ *
+ * A school that absorbs the fee — almost all of them — never reaches this screen at all.
+ */
+@Composable
+private fun TuitionFeeStep(
+    quote: TuitionFeeQuote?,
+    style: SceneStyle,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val q = quote ?: return
+    Column(
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 620.dp).fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                stringResource(R.string.tuition_fee_title),
+                style = MaterialTheme.typography.headlineSmall,
+                color = style.onSceneMuted,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(22.dp))
+
+            // The three lines, in the order the contract sets them out. Tuition, then the fee, then
+            // what the card is actually asked for — emphasised, because it is the number that matters.
+            FeeRow(stringResource(R.string.tuition_fee_line_tuition), formatMoney(q.tuitionMinor, q.currency), style, emphasised = false)
+            Spacer(Modifier.height(10.dp))
+            FeeRow(stringResource(R.string.tuition_fee_line_fee), formatMoney(q.feeMinor, q.currency), style, emphasised = false)
+            Spacer(Modifier.height(14.dp))
+            HorizontalDivider(color = style.onSceneMuted.copy(alpha = 0.25f))
+            Spacer(Modifier.height(14.dp))
+            FeeRow(stringResource(R.string.tuition_fee_line_total), formatMoney(q.totalMinor, q.currency), style, emphasised = true)
+
+            Spacer(Modifier.height(22.dp))
+            Text(
+                stringResource(R.string.tuition_fee_explainer),
+                style = MaterialTheme.typography.bodyMedium,
+                color = style.onSceneMuted,
+                textAlign = TextAlign.Center,
+            )
+
+            Spacer(Modifier.height(26.dp))
+            Button(
+                onClick = onConfirm,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = style.accent, contentColor = style.onAccent),
+                modifier = Modifier.fillMaxWidth().height(78.dp),
+            ) {
+                Text(
+                    stringResource(R.string.tuition_fee_pay, formatMoney(q.totalMinor, q.currency)),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onCancel,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth().height(68.dp),
+            ) { Text(stringResource(R.string.tuition_fee_cancel), color = style.onScene, style = MaterialTheme.typography.titleMedium) }
+        }
+    }
+}
+
+/** One label/amount row of the fee breakdown. The total is emphasised; the parts are not. */
+@Composable
+private fun FeeRow(label: String, amount: String, style: SceneStyle, emphasised: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = if (emphasised) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
+            color = if (emphasised) style.onScene else style.onSceneMuted,
+            fontWeight = if (emphasised) FontWeight.Bold else FontWeight.Normal,
+            modifier = Modifier.weight(1f, fill = true),
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(
+            amount,
+            style = if (emphasised) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
+            color = if (emphasised) style.accent else style.onScene,
+            fontWeight = if (emphasised) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 1,
+        )
+    }
+}
+
 /** The family's account, CHILD BY CHILD: each one's balance or credit and their own bills, which can
  *  be paid whole, line by line ("just the book fee" — contract 0.43.0 §11.0b), or by typing an amount
  *  towards that child — including when nothing is due, which is how a family pays a term up front.
@@ -814,7 +943,7 @@ private fun TuitionInvoicesStep(
     val t = tuition ?: TuitionState()
     val currency = t.currency.ifBlank { "USD" }
     // What can be paid is what the BILLS come to, never the household balance: that figure is netted,
-    // so one child being in credit hides another child's real, payable bills behind a £0 total.
+    // so one child being in credit hides another child's real, payable bills behind a $0 total.
     val owes = t.dueMinor > 0
     val kids = t.students
     // One child needs no headings — the family line above already names the account. Several do.
@@ -849,7 +978,7 @@ private fun TuitionInvoicesStep(
             Text(t.familyLabel.ifBlank { "Your account" }, style = MaterialTheme.typography.headlineSmall, color = style.onScene, textAlign = TextAlign.Center)
             Spacer(Modifier.height(4.dp))
             // The headline is what's DUE. Credit is shown too when there is any, but it never
-            // replaces a real balance — "£180 paid ahead" above three unpaid bills is a lie of
+            // replaces a real balance — "$180 paid ahead" above three unpaid bills is a lie of
             // omission, and it is exactly what the netted household figure produces.
             TuitionAccountLine(t.dueMinor, t.creditMinor, currency, style, big = true)
             Spacer(Modifier.height(16.dp))
@@ -913,7 +1042,7 @@ private fun TuitionInvoicesStep(
                         )
                     }
                 }
-                // Money for THIS child. With one ledger per child, "add £50" has to say for whom —
+                // Money for THIS child. With one ledger per child, "add $50" has to say for whom —
                 // and a family where one child is clear and another owes is the ordinary case.
                 if (perChild && t.allowAdvance && kid.key.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
@@ -991,8 +1120,8 @@ private fun TuitionInvoicesStep(
  *  invoice the credit is the only signal left.
  *
  *  Due and credit CAN both be non-zero here even though Students never reports both on one ledger,
- *  because a household total nets its children against each other: one child £340 ahead and another
- *  £160 behind is £160 due AND £180 of credit. Both get said — leading with the credit alone reads
+ *  because a household total nets its children against each other: one child $340 ahead and another
+ *  $160 behind is $160 due AND $180 of credit. Both get said — leading with the credit alone reads
  *  as "nothing to pay" over a screen full of unpaid bills. */
 @Composable
 private fun TuitionAccountLine(
@@ -1066,10 +1195,10 @@ private fun TuitionBillCard(
         inv.studentName.takeIf { showStudentName && it.isNotBlank() },
         inv.dueDate.takeIf { it.isNotBlank() }?.let { "Due $it" },
     ).joinToString(" · ")
-    // Lines only when EVERY bill on the screen has them — a half-itemised selection can't be expressed
+    // Lines only when EVERY bill on the screen has them — a half-itemized selection can't be expressed
     // on the wire, so the choice is made once for the whole account, not per bill.
     val units = t.unitsOf(inv)
-    val lines = if (t.itemised) inv.items else emptyList()
+    val lines = if (t.itemized) inv.items else emptyList()
     // One line is not a list. Render it as the single row it has always been — the tick target is the
     // line itself where there is one, so even this simple case is paid the precise way.
     if (lines.size <= 1) {
@@ -1320,7 +1449,7 @@ private fun ColumnScope.CardStep(
     if (!preparing) {
         // The single most common failure at the reader is lifting the card too early — a contactless
         // read plus the online authorisation takes a few seconds, and a card pulled away mid-read
-        // reads to the donor as "it didn't work". Say the quiet part out loud, in the accent colour
+        // reads to the donor as "it didn't work". Say the quiet part out loud, in the accent color
         // so it is not mistaken for fine print.
         Spacer(Modifier.height(14.dp))
         Text(
@@ -1443,50 +1572,13 @@ private fun feeExtra(baseMinor: Long, config: KioskConfig?): Long {
     return maxOf(0L, total - baseMinor)
 }
 
-// ── Money formatting ─────────────────────────────────────────────────────────
-private val ZERO_DECIMAL = setOf(
-    "JPY", "KRW", "VND", "CLP", "XAF", "XOF", "BIF", "DJF", "GNF", "KMF", "MGA", "PYG", "RWF", "UGX", "VUV", "XPF",
-)
-private val THREE_DECIMAL = setOf("BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND")
-
-private fun isZeroDecimal(currency: String) = currency.uppercase() in ZERO_DECIMAL
-private fun decimals(currency: String): Int = when {
-    isZeroDecimal(currency) -> 0
-    currency.uppercase() in THREE_DECIMAL -> 3
-    else -> 2
-}
-private fun factorFor(currency: String): Long = when (decimals(currency)) {
-    0 -> 1L
-    3 -> 1000L
-    else -> 100L
-}
-
-private fun symbolFor(currency: String) = when (currency.uppercase()) {
-    "USD", "CAD", "AUD", "NZD" -> "$"
-    "GBP" -> "£"
-    "EUR" -> "€"
-    "PKR" -> "₨"
-    "INR" -> "₹"
-    "MYR" -> "RM"
-    "AED" -> "AED "
-    "SAR" -> "SAR "
-    else -> ""
-}
+// ── Money formatting ───────────────────────────────────────────
+// formatMoney / symbolFor / decimals / factorFor MOVED to :core (ui/Money.kt), so the kiosk and
+// OpenMasjid Mobile Donations cannot render the same masjid's amounts two different ways. They kept
+// this exact package, so nothing here needed an import.
 
 /** A SIGNED amount, for the one place a negative can appear: a credit line on a bill (a bursary, a
- *  correction). The minus belongs in front of the symbol — "−£30", not "£-30". */
+ *  correction). The minus belongs in front of the symbol — "−$30", not "$-30". Stays here: it is
+ *  used by the tuition bill list only, which is a kiosk screen. */
 private fun formatSignedMoney(minor: Long, currency: String): String =
     if (minor < 0) "−${formatMoney(-minor, currency)}" else formatMoney(minor, currency)
-
-/** Format integer minor units as a human amount (e.g. 2500 USD → "$25"). */
-fun formatMoney(minor: Long, currency: String): String {
-    val sym = symbolFor(currency)
-    val d = decimals(currency)
-    val f = factorFor(currency)
-    val body = when {
-        d == 0 -> minor.toString()
-        minor % f == 0L -> (minor / f).toString()
-        else -> String.format(Locale.US, "%.${d}f", minor.toDouble() / f)
-    }
-    return if (sym.isNotEmpty()) "$sym$body" else "$body ${currency.uppercase()}"
-}

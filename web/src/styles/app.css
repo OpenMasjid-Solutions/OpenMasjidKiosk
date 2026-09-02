@@ -129,7 +129,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .muted { color: var(--color-ink-muted); }
 .faint { color: var(--color-ink-faint); }
 .row { display: flex; align-items: center; gap: 0.6rem; }
-/* A row of FORM FIELDS rather than controls. `.row` centres its children, which is right for buttons
+/* A row of FORM FIELDS rather than controls. `.row` centers its children, which is right for buttons
    and pills but wrong for label+input stacks: the moment one field carries a hint line it becomes
    taller, and centring then pushes its neighbour's label and input DOWN by half the difference, so
    two fields side by side visibly fail to line up. Align to the top so the labels share a baseline
@@ -141,6 +141,21 @@ h1, h2, h3, p, ul { margin: 0; }
 .setup { width: min(40rem, 100%); padding: 2rem 1.9rem; }
 .setup-head { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.6rem; margin-block-end: 1.4rem; }
 .setup-title { font-family: var(--font-display); font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; }
+/* Which of the two apps am I installing? Shown only when the image bundles both. Two big targets,
+   because this page is read on a phone held in one hand while standing next to the device. */
+.app-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.6rem; margin-block-end: 1.4rem; }
+.app-pick__opt {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 0.25rem;
+  padding: 0.85rem 0.95rem; text-align: start; cursor: pointer;
+  border: 1px solid var(--color-border); border-radius: 14px;
+  background: var(--glass-bg-inset); color: var(--color-ink);
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.app-pick__opt:hover { background: var(--color-surface-hover); }
+.app-pick__opt--on { border-color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary); background: var(--color-primary-subtle); }
+.app-pick__name { font-weight: 600; }
+.app-pick__sub { font-size: 0.8rem; color: var(--color-ink-muted); line-height: 1.4; }
+
 .setup-steps { display: flex; flex-direction: column; gap: 1rem; }
 .setup-step { display: flex; gap: 0.9rem; align-items: flex-start; }
 .setup-step .num {
@@ -364,6 +379,32 @@ h1, h2, h3, p, ul { margin: 0; }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* `.spin` animates an icon that is already there. `.spinner` is a standalone ring for the places
+   that render `<span className="spinner" />` with no icon inside it — three buttons on the Email
+   receipts screen. The class had never been defined, so those spans were zero-sized and pressing
+   "Send me a test" looked like it had done nothing at all until the result appeared. */
+.spinner {
+  display: inline-block; inline-size: 0.9em; block-size: 0.9em; vertical-align: -0.1em;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-block-start-color: currentColor;
+  animation: spin 0.9s linear infinite;
+}
+
+/* A number that reports something taken back rather than received — the refunded total in a
+   donation's detail window. Used before it existed, so the figure that most needs to stand out was
+   rendering in ordinary body color. */
+.text-warn { color: var(--color-warning); }
+
+/* A quiet explanatory line under a panel heading: the WhatsApp availability note, the pacing note,
+   the "not connected to OpenMasjidOS" note. Pairs with `.muted`, which sets the color. Also
+   previously undefined, so the notes ran flush against the controls above them. */
+.note {
+  display: block; margin-block: 0.45rem; padding-inline-start: 0.65rem;
+  border-inline-start: 2px solid var(--color-border);
+  font-size: 0.82rem; line-height: 1.55;
+}
+
 /* ── Devices (fleet management) ──────────────────────────────────────────────── */
 /* Big single-use pairing code the volunteer types into the tablet. */
 .pair-box {
@@ -374,7 +415,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .pair-code {
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: clamp(2.2rem, 9vw, 3.2rem); font-weight: 700; line-height: 1.1;
-  letter-spacing: 0.35em; padding-inline-start: 0.35em; /* re-centre against trailing spacing */
+  letter-spacing: 0.35em; padding-inline-start: 0.35em; /* re-center against trailing spacing */
   color: var(--color-primary); font-variant-numeric: tabular-nums;
 }
 .pair-instr { max-width: 22rem; line-height: 1.5; }
@@ -439,7 +480,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .camp-pill__dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15); }
 .camp-pill__main { color: var(--color-gold); font-weight: 600; }
 
-/* Theme presets (campaign editor): a row of two-swatch chips that fill the colour fields. */
+/* Theme presets (campaign editor): a row of two-swatch chips that fill the color fields. */
 .theme-presets { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .theme-preset {
   display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.6rem 0.35rem 0.4rem;
@@ -509,7 +550,7 @@ button.status-pill:hover { filter: brightness(1.08); }
 .switch--on .switch-knob { inset-inline-start: calc(100% - 1.28rem); }
 
 /* ── Live giving-screen preview (both orientations) ──────────────────────────────────
-   Colours come from campaigns.tsx computeScene() (mirrors the Android kiosk). Deliberately simple +
+   Colors come from campaigns.tsx computeScene() (mirrors the Android kiosk). Deliberately simple +
    bulletproof: each screen sizes to its CONTENT (no aspect-ratio fill, no container queries — those
    clipped before), with fixed rem type. Landscape reads wide (3-col, shorter); portrait reads narrow
    (2-col, taller) — so both orientations are clear at a glance. */
@@ -621,7 +662,7 @@ button.status-pill:hover { filter: brightness(1.08); }
 .img-field .input { flex: 1; min-width: 12rem; }
 .img-preview { flex: none; width: 2.4rem; height: 2.4rem; border-radius: 8px; object-fit: cover; box-shadow: inset 0 0 0 1px var(--color-border); }
 
-/* Accent-colour picker row. */
+/* Accent-color picker row. */
 .accent-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .accent-swatch-input { width: 2.8rem; height: 2.2rem; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer; box-shadow: inset 0 0 0 1px var(--color-border); }
 .accent-swatch-input::-webkit-color-swatch-wrapper { padding: 2px; }
@@ -657,10 +698,10 @@ button.status-pill:hover { filter: brightness(1.08); }
 .donation-amt { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-ink); }
 .donation-row__meta { font-size: 0.82rem; }
 .badge--monthly { background: var(--color-primary-subtle); color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary-subtle); }
-/* Refunded money. Struck through rather than hidden or recoloured on its own: the donation still
+/* Refunded money. Struck through rather than hidden or recolored on its own: the donation still
    happened and stays in the log, but scanning the list must never read a returned gift as income.
-   The strike is what carries the meaning, so the colour is a reinforcement and not the only signal
-   (it still reads on a mono display, and to anyone who can't distinguish the two colours). */
+   The strike is what carries the meaning, so the color is a reinforcement and not the only signal
+   (it still reads on a mono display, and to anyone who can't distinguish the two colors). */
 .badge--refunded { background: color-mix(in srgb, var(--color-danger) 12%, transparent); color: var(--color-danger); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent); }
 .donation-amt--refunded,
 .detail-amt--refunded { text-decoration: line-through; text-decoration-thickness: 2px; color: var(--color-ink-muted); }
@@ -668,7 +709,7 @@ button.status-pill:hover { filter: brightness(1.08); }
 .device-danger { background: var(--color-danger); color: var(--color-on-primary); }
 .device-danger:hover { background: var(--color-danger); filter: brightness(1.06); }
 
-/* Per-device activity log modal — a real centred window over a dimmed, blurred backdrop
+/* Per-device activity log modal — a real centered window over a dimmed, blurred backdrop
    (z-index above the sticky top bar + dock) so it never overlaps the cards behind it. */
 .modal-scrim {
   position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
@@ -824,9 +865,80 @@ button.status-pill:hover { filter: brightness(1.08); }
 .inv-row--warn .inv-sub { color: var(--color-warning); }
 .inv-row--bad .inv-sub { color: var(--color-danger); }
 
-/* The hex box beside a colour swatch. Monospace so a code reads as a code, and narrow so the row
+/* The hex box beside a color swatch. Monospace so a code reads as a code, and narrow so the row
    still fits the swatch, the field and the reset button on a laptop. */
 .color-hex {
   width: 8.5rem; flex: none; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: lowercase;
 }
 .color-hex[aria-invalid="true"] { box-shadow: inset 0 0 0 1px var(--color-danger); }
+
+/* ── Settings → Notifications (the recipient × alert matrix) ───────────── */
+/* A row is a destination, a column is an alert, and the checkbox at the intersection is the whole
+   setting. Same shape as OpenMasjidStudents' staff-alerts table, for the same reason: "who hears
+   about a refund?" should be one column to read down.
+
+   IT SCROLLS SIDEWAYS RATHER THAN WRAPPING, which is the opposite of what the per-alert blocks
+   here used to do, and the change is deliberate. A matrix that reflows loses the thing that makes
+   it readable — the alignment between a row and a column. On a phone the first column stays put
+   (`position: sticky`) so you can always see whose row you are ticking. */
+.mx-wrap { margin-top: 0.9rem; overflow-x: auto; border: 1px solid var(--color-border); border-radius: 12px; background: var(--glass-bg-inset); }
+.mx { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.mx th, .mx td { padding: 0.6rem 0.7rem; text-align: left; vertical-align: top; }
+.mx thead th { font-size: 0.72rem; letter-spacing: 0.03em; text-transform: uppercase; color: var(--color-ink-muted); font-weight: 600; border-block-end: 1px solid var(--color-border); }
+.mx tbody tr + tr th, .mx tbody tr + tr td { border-block-start: 1px solid var(--color-border); }
+
+/* Narrow enough that ten alerts fit without the table becoming absurd, wide enough that a label
+   wraps to two lines instead of one word per line. */
+.mx-head { min-width: 6.5rem; white-space: normal; }
+.mx-head__flag { display: block; margin-block-start: 0.2rem; font-size: 0.62rem; text-transform: none; letter-spacing: 0; color: var(--color-gold); font-weight: 500; }
+
+/* The identity column. Sticky so it survives a sideways scroll — a checkbox with no visible row
+   label is a coin flip. It needs its own background for that: a transparent sticky cell shows the
+   cells sliding under it. */
+.mx-who {
+  position: sticky; inset-inline-start: 0; z-index: 1;
+  min-width: 13rem; max-width: 20rem;
+  background: var(--color-surface-raised);
+  font-weight: 400;
+}
+.mx thead .mx-who { z-index: 2; }
+.mx-who__name { display: flex; align-items: center; gap: 0.35rem; font-weight: 600; color: var(--color-ink); }
+.mx-who__sub { display: block; margin-block-start: 0.1rem; font-size: 0.78rem; color: var(--color-ink-faint); overflow-wrap: anywhere; }
+.mx-cell { text-align: center; }
+.mx-cell input[type="checkbox"] { cursor: pointer; }
+.mx-cell input[type="checkbox"]:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* The platform relay reads as a destination like any other, but it is not one the admin typed, so
+   it is tinted rather than listed among their own rows. */
+.mx-relay .mx-who { background: color-mix(in srgb, var(--color-primary) 7%, var(--color-surface-raised)); }
+/* The tally row: what each column actually adds up to. */
+.mx-foot .mx-who { background: var(--color-surface-raised); }
+.mx-foot td { padding-block: 0.5rem; }
+.mx-tally { font-size: 0.78rem; white-space: nowrap; }
+
+/* Per-group "include donor names". Indented under the row it belongs to so it reads as a property
+   of that group rather than another alert column. */
+.mx-names { display: flex; align-items: flex-start; gap: 0.35rem; margin-block-start: 0.4rem; font-size: 0.78rem; color: var(--color-ink-muted); }
+.mx-names small { display: block; }
+.mx-last { display: flex; align-items: center; gap: 0.3rem; margin-block-start: 0.4rem; font-size: 0.74rem; color: var(--color-ink-faint); overflow-wrap: anywhere; }
+
+/* Adding one. Wraps freely — unlike the matrix, there is no alignment here worth preserving. */
+.mx-add { margin-top: 0.85rem; padding: 0.85rem 0.9rem; border: 1px solid var(--color-border); border-radius: 12px; background: var(--glass-bg-inset); }
+.mx-add__kinds { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-block-end: 0.7rem; }
+.mx-add__row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.6rem; }
+.mx-add__row .field { margin: 0; }
+.mx-add__grow { flex: 1 1 14rem; min-width: 0; }
+.mx-add__grow .input { width: 100%; }
+.mx-add__hint { margin: 0.6rem 0 0; font-size: 0.8rem; line-height: 1.5; }
+
+/* WhatsApp limits. Three numbers and what they have been used for so far. */
+.mx-pacing { margin-top: 0.85rem; padding: 0.85rem 0.9rem; border: 1px solid var(--color-border); border-radius: 12px; background: var(--glass-bg-inset); }
+.mx-pacing__row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; }
+.mx-pacing__row .field { margin: 0; flex: 1 1 9rem; min-width: 0; }
+.mx-pacing__row .input { width: 100%; }
+
+/* A period when the masjid's WhatsApp link was dead while messages were still being reported as
+   sent. Warning-toned rather than error-toned: nothing is broken now, but something in the past
+   is in doubt and only the admin can decide whether it mattered. */
+.suspect { border-color: color-mix(in srgb, var(--color-warning) 45%, var(--color-border)); margin-block-end: 0.9rem; }
+.suspect .note { margin-block: 0.5rem 0.7rem; }

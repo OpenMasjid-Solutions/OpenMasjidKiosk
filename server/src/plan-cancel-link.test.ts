@@ -112,7 +112,7 @@ test('the email carries the link, says to keep it, and escapes the donor’s own
   assert.ok(!evil.html.includes('javascript:'), 'only http(s) links are ever emitted');
 });
 
-test('cancelling is the SAFE direction, which is what makes a public link acceptable', () => {
+test('canceling is the SAFE direction, which is what makes a public link acceptable', () => {
   // Worst case for a stolen link is a stopped donation, which the donor can restart at the kiosk.
   // Money can never move TO anyone through this route, and nothing else is reachable from it.
   const canDo = (action: string) => ['view-this-plan', 'cancel-this-plan'].includes(action);
@@ -186,7 +186,7 @@ test('the liveness lookup is budgeted, and running out never refuses a donor', (
 
 test('a skipped liveness lookup shows the button — the POST is what must be right', () => {
   // Fail-open has one visible cost: on an already-stopped plan the donor sees the button and presses
-  // it for nothing. That is the pre-existing behaviour, and the POST re-checks unconditionally, so
+  // it for nothing. That is the pre-existing behavior, and the POST re-checks unconditionally, so
   // the money outcome is identical either way. Encoded here so nobody "optimises" the POST later.
   const page = (checked: boolean, over: boolean) => (checked && over ? 'already-stopped' : 'button');
   assert.equal(page(true, true), 'already-stopped', 'checked and over');

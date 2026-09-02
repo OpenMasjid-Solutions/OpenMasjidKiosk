@@ -169,7 +169,7 @@ test('the donor refund email states the refunded amount, and escapes everything'
   );
   assert.ok(!evil.html.includes('<script>'), 'donor name must be escaped');
   assert.match(evil.html, /&lt;script&gt;/);
-  // And the accent is gated to a hex colour so it can't break out of the inline style attribute.
+  // And the accent is gated to a hex color so it can't break out of the inline style attribute.
   const badAccent = renderRefund(
     { accent: 'red;background:url(javascript:alert(1))' },
     { ...base, refundAmountText: '$1.00', full: true, dateRefunded: 'x' },

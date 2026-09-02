@@ -17,7 +17,7 @@ const TPL: ReceiptTemplate = {
 };
 const CTX: ReceiptContext = {
   name: 'Yusuf',
-  amountText: '£50.00',
+  amountText: '$50.00',
   campaignTitle: 'General Fund',
   masjidName: 'An-Noor',
   masjidLogo: '',
@@ -38,7 +38,7 @@ test('fills variables in subject/heading/body', () => {
 
 test('the receipt DETAILS block renders amount/date/method/fund (separate from the paragraph)', () => {
   const r = renderReceipt(TPL, CTX);
-  for (const s of ['Amount paid', '£50.00', 'Date paid', 'Jul 15, 2026, 6:03 PM UTC', 'Payment method', 'Visa •••• 4242', 'Fund', 'General Fund', '0065A17F']) {
+  for (const s of ['Amount paid', '$50.00', 'Date paid', 'Jul 15, 2026, 6:03 PM UTC', 'Payment method', 'Visa •••• 4242', 'Fund', 'General Fund', '0065A17F']) {
     assert.ok(r.html.includes(s), `html should contain "${s}"`);
     assert.ok(r.text.includes(s), `text should contain "${s}"`);
   }

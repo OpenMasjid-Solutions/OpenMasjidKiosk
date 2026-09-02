@@ -35,14 +35,27 @@ is always the last release and only the maintainer moves it. See the Branching p
 ## Build and test
 
 ```bash
-cd server && npm install && npm run build && npm test   # tsc + node --test
+cd server && npm install && npm run build && npm run typecheck:tests && npm test
 cd web    && npm install && npm run build               # tsc + vite build
 cd android && ./gradlew assembleDebug                    # needs JDK 17+ and the Android SDK
 ```
 
-All three must pass before you open a PR. Local development uses Stripe **test keys** and the
-Terminal **simulated reader**, so the whole donation flow runs without hardware. `web`'s dev server
-(`npm run dev`) proxies `/api`, `/healthz` and `/download` to the server on `:8080`.
+CI runs the first two on every pull request and on every push to `dev` and `main`
+(`.github/workflows/test.yml`), and **no image is published unless they pass**. The Android build
+runs as part of the image pipeline — and since there is no Android SDK on most dev machines, that
+job is in practice the only compile check the Kotlin gets.
+
+`npm run typecheck:tests` is separate from `npm run build` on purpose: `tsconfig.json` excludes
+`*.test.ts` (they run from source under tsx, which strips types without checking them), so the tests
+are the one part of the tree the normal build never type-checks. Run both.
+
+Local development uses Stripe **test keys** and the Terminal **simulated reader**, so the whole
+donation flow runs without hardware. `web`'s dev server (`npm run dev`) proxies `/api`, `/healthz`
+and `/download` to the server on `:8080`.
+
+Two tests deliberately reach across from `server/` into `web/` — `theme-contrast.test.ts` reads the
+design tokens and `refund-amount.test.ts` imports the currency arithmetic. The server's runner is
+the only one CI executes, and asserting web behavior there is worth more than asserting it nowhere.
 
 ## Code
 
@@ -66,6 +79,10 @@ Changes here need care and a clear reason, because each was a real incident:
 - **The Stripe secret key lives in memory only** — never sent to a browser or tablet, never logged,
   never written to `/data`.
 - **The tunnel allowlist** (`server/src/tunnel.ts`) must judge the path the *router* resolves, not
-  the one that arrived — that is what percent-encoding walked past once already.
+  the one that arrived — that is what percent-encoding walked past once already. `/fabric` is **not**
+  under `/api` and is listed separately; adding a route outside `/api` means checking it again.
+- **Money is integer minor units everywhere**, and the scale comes from the currency *code* via
+  `web/src/money.ts` — never from formatted output. Sniffing it made partial refunds give back
+  1/100th of what the admin typed.
 - **`CHANGELOG.md` sections for released versions are never edited or deleted** — running installs
   display them. New work goes in `## Unreleased`.

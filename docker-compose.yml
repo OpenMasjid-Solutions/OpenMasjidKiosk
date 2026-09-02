@@ -11,23 +11,29 @@
 # a tablet from Devices. All state is saved to /data.
 services:
   app:
-    # ── MAIN BRANCH: the stable channel ──────────────────────────────────────
-    # Tag for humans + @sha256 digest for integrity. The tag MUST match `version:` in manifest.yaml
-    # exactly, and the digest is what a masjid actually pulls — so this line is the real integrity
-    # pin, and both halves move together on every release.
+    # ── DEV BRANCH: the development channel ──────────────────────────────────
+    # This MUST match `version:` in manifest.yaml exactly, and it must never be the moving :dev
+    # tag. The dev channel is versioned: every dev build gets its own X.Y.Z-dev.N and its own
+    # immutable image tag, and the catalog serves this file verbatim.
     #
-    # The release order is: merge to main -> CI builds and publishes -> copy the digest it prints
-    # ("What was published") back into this line -> tag vX.Y.Z on THAT commit. A push to main is
-    # allowed to be unpinned for exactly that one commit, because the digest cannot be known before
-    # the image exists; CI warns rather than fails there, and fails hard on a v* tag that is not
-    # digest-pinned.
+    # Why not :dev, which is what this line used to say. OpenMasjidOS decides an app has an
+    # update by comparing the catalog's `version` with the installed one. A dev entry that reused
+    # the stable version and a moving tag changed NOTHING observable when a new build shipped —
+    # same version string, same image reference — so the platform could not notify anyone and had
+    # nothing to point at. Stable works precisely because each release has a distinct version and
+    # a pinned image; dev now has the same property, via the prerelease version instead of a
+    # digest. (0.11.0 < 0.12.0-dev.5 < 0.12.0: ahead of the last release, behind the next.)
     #
-    # NEVER let the dev branch's line survive a merge to main. `dev` carries a bare
-    # :X.Y.Z-dev.N tag, and leaving that here would point every stable install at a development
-    # build. CI's "Check the compose image matches the channel" step fails the build in both
-    # directions — a prerelease version or image reaching stable, or a digest pin stranding dev —
-    # but check it by eye too, because a merge is exactly when someone is in a hurry.
-    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.11.0@sha256:161bc8126a12e70ebd159ed1b7d847c1dc0f44686b8165c75a68526a53097464
+    # Bump BOTH this line and manifest.yaml's `version:` on every dev build you want installable,
+    # and never publish the catalog entry before CI has pushed the matching image — the tag is
+    # exact, so an entry that lands first is a pull failure on someone's box.
+    #
+    # :dev is still published as a convenience alias for `docker pull`, and every build also gets
+    # :dev-<12-char commit sha> for identifying exactly what a box is running. Neither is what the
+    # catalog installs. On `main` this line carries the release tag + @sha256 digest; a "merge to
+    # main" must restore that form, and CI's "Check the compose image matches the channel" step
+    # fails the build in both directions.
+    image: ghcr.io/openmasjid-solutions/openmasjidkiosk:0.12.0-dev.23
     restart: unless-stopped
     environment:
       PORT: "8080"

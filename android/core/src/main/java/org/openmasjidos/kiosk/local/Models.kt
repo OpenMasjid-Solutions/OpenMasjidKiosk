@@ -25,7 +25,7 @@ data class PairingRecord(
 
 /**
  * One giving campaign (an "appeal") the kiosk shows as a browser-style tab. Each has its own
- * amounts, colour, background, thank-you and monthly/cover-fees options — designed in the admin
+ * amounts, color, background, thank-you and monthly/cover-fees options — designed in the admin
  * panel. Exactly one is the [isMain] campaign (the always-present first tab the kiosk idles on).
  *
  * [readerCapable] is computed by the server and is now only meaningful to OLDER tablets: it says
@@ -39,7 +39,7 @@ data class Campaign(
      *  rule is already resolved server-side into coverFees/forceCoverFees). */
     val type: String = "donation",
     val description: String = "",
-    /** '#rrggbb' background colour for this tab, or '' to inherit. Drives the giving-screen gradient. */
+    /** '#rrggbb' background color for this tab, or '' to inherit. Drives the giving-screen gradient. */
     val primaryColor: String = "",
     /** '#rrggbb' or '' to inherit the kiosk default accent. Drives the "Donate" band + buttons. */
     val accentColor: String = "",

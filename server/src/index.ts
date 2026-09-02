@@ -20,12 +20,33 @@ import fastifyMultipart from '@fastify/multipart';
 import { z } from 'zod';
 import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
-import { Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
+import { MAX_ALERT_RECIPIENTS, Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, emailStatus, emailCanSend } from './fabric';
+import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppGroup, fabricWhatsAppGroups, fabricWhatsAppSuspect, fabricWhatsAppStatus, fabricWhatsAppOutcome, clearWhatsAppCache, emailStatus, emailCanSend, type WhatsAppSuspectWindow } from './fabric';
+import {
+  ALERT_IDS,
+  ALERT_META,
+  DEFAULT_ROUTE,
+  PACING_LIMITS,
+  alertDelivery,
+  alertEmailLooksValid,
+  bodyForRecipient,
+  groupIdLooksValid,
+  isAlertId,
+  newRecipient,
+  pacingUsage,
+  permitReasonText,
+  phoneLooksValid,
+  recipientsFor,
+  recordWhatsAppSends,
+  whatsappPermit,
+  withSuppressedNote,
+  type AlertId,
+} from './alerts';
 import { escapeHtml, renderMonthlyStarted, renderReceipt, renderRefund, type ReceiptContext } from './email';
-import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
+import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, checkStudentPayment, createTuitionSession, getTuitionSession, computeTuitionAmount, studentKey, dueCents, billingConfigured, grossUpForStudentsFee, kioskFeeRate, MIN_TUITION_CENTS, MAX_TUITION_CENTS } from './students';
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
+import { authorizeCommandCall, buildCommands, findCommand, runCommand, tidyReply, validFollowUpToken } from './commands';
 import { blockedOverTunnel } from './tunnel';
 import { toCsv } from './csv';
 import {
@@ -61,9 +82,15 @@ const log = makeLog('main');
 
 const LOOPBACK_RE = /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[?::1)/i;
 
-/** The download filename we hand the tablet — versioned so a stale cached copy is obvious.
- *  The URL path stays stable at /download/openmasjidkiosk.apk. */
+/** A kiosk that hasn't checked in within this window is reported offline. Check-ins are every 10s,
+ *  so ~35s is three missed beats — long enough not to flap on one dropped packet. Module-level so
+ *  the Devices page and the WhatsApp `kiosks` command can never disagree about who is online. */
+const ONLINE_MS = 35_000;
+
+/** The download filenames we hand the device — versioned so a stale cached copy is obvious.
+ *  The URL paths stay stable at /download/openmasjidkiosk.apk and /download/openmasjidmobile.apk. */
 const apkFilename = `openmasjidkiosk-${config.version}.apk`;
+const mobileApkFilename = `openmasjid-mobile-donations-${config.version}.apk`;
 
 async function main(): Promise<void> {
   const store = new Store();
@@ -205,6 +232,82 @@ async function main(): Promise<void> {
   // ── Health check ────────────────────────────────────────────────────────────
   app.get('/healthz', async () => ({ ok: true }));
 
+  // ── Admin commands from WhatsApp (platform → us) ────────────────────────────
+  // The ONLY route the platform calls on us; everything else in fabric.ts is us calling it. An
+  // admin messages the masjid's own WhatsApp number, the platform decides who may run what and
+  // renders the menu from our manifest, and we are asked to execute one command we declared.
+  //
+  // Refused over the tunnel (tunnel.ts blocks all of /fabric), so the caller is always on the LAN.
+  // See commands.ts for the two-header trust boundary and why an absent secret fails closed.
+  //
+  // `money` is passed as a closure rather than a value because formatMoney is defined further down
+  // this function; it is only ever called while handling a request, long after startup.
+  const commands = buildCommands({
+    store,
+    money: (minor, currency) => formatMoney(minor, currency),
+    onlineWithinMs: ONLINE_MS,
+  });
+  app.post('/fabric/commands/run', async (req, reply) => {
+    const auth = authorizeCommandCall(
+      typeof req.headers['x-openmasjid-app-secret'] === 'string' ? (req.headers['x-openmasjid-app-secret'] as string) : undefined,
+      typeof req.headers['x-openmasjid-caller-app'] === 'string' ? (req.headers['x-openmasjid-caller-app'] as string) : undefined,
+      config.omosAppSecret,
+    );
+    if (!auth.ok) {
+      // 503 for "we hold no secret": the platform is telling us to run something we were never
+      // issued credentials for, which is a not-ready condition on THIS side, not a bad caller.
+      if (auth.reason === 'not_configured') {
+        return reply.code(503).send({ ok: false, code: 'not_ready', error: 'This app is not linked to OpenMasjidOS yet.' });
+      }
+      // Everything else is one flat 403 with no detail. Distinguishing "wrong secret" from "wrong
+      // caller" on the wire would tell someone probing which half they had already got right.
+      log.warn(`rejected a command call (${auth.reason})`);
+      return reply.code(403).send({ ok: false, error: 'Not authorised.' });
+    }
+
+    const parsed = z
+      .object({
+        command: z.string().min(1).max(64),
+        text: z.string().max(2000).optional(),
+        requestId: z.string().max(120).optional(),
+        locale: z.string().max(35).optional(),
+        // The token WE handed back last turn. Shape-checked on the way IN as well as out: it
+        // arrives in a request body and is compared against our own constants, so anything
+        // malformed is simply not one of ours and starts a fresh turn.
+        followUpToken: z.string().max(200).optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ ok: false, error: 'That command request wasn’t valid.' });
+
+    const cmd = findCommand(commands, parsed.data.command);
+    if (!cmd) {
+      // 404 + unknown_command is the contract's own signal: the platform renders it rather than
+      // leaving the sender with a menu entry that answers nothing.
+      return reply.code(404).send({ ok: false, code: 'unknown_command' });
+    }
+
+    const token = parsed.data.followUpToken ?? '';
+    const ctx = {
+      text: (parsed.data.text ?? '').trim(),
+      requestId: parsed.data.requestId ?? '',
+      locale: parsed.data.locale ?? 'en',
+      followUpToken: validFollowUpToken(token) ? token : '',
+    };
+    // The phone only ever gets a contentless apology, so this callback is the ONLY record that a
+    // command threw. Without it a broken command is invisible on both ends at once.
+    const result = await runCommand(cmd, ctx, (err) => log.error(`command ${cmd.id} threw:`, err));
+    log.info(`command ${cmd.id} (${ctx.requestId || 'no id'}) -> ${result.ok ? 'ok' : 'failed'}`);
+    if (!result.ok) return reply.code(200).send({ ok: false, error: tidyReply(result.error) });
+    // Only echo a follow-up token we know the platform will accept. An invalid one is OUR bug, and
+    // sending it would surface as a conversation that silently stops answering — the hardest thing
+    // to diagnose from a chat window. Dropping it ends the exchange cleanly instead.
+    const next = result.followUp?.token;
+    if (next && !validFollowUpToken(next)) log.warn(`dropped a malformed follow-up token from ${cmd.id}`);
+    return next && validFollowUpToken(next)
+      ? { ok: true, text: tidyReply(result.text), followUp: { token: next } }
+      : { ok: true, text: tidyReply(result.text) };
+  });
+
   // ── Public bootstrap the web app reads on load (no secrets) ─────────────────
   app.get('/api/app', async () => ({
     data: {
@@ -218,6 +321,11 @@ async function main(): Promise<void> {
       apkAvailable: fs.existsSync(config.apkPath),
       apkDownloadPath: '/download/openmasjidkiosk.apk',
       apkFilename,
+      // The handheld app, offered beside the kiosk on /new. Checked separately: a build that
+      // bundles one and not the other must offer exactly the one it has, never a dead button.
+      mobileApkAvailable: fs.existsSync(config.mobileApkPath),
+      mobileApkDownloadPath: '/download/openmasjidmobile.apk',
+      mobileApkFilename,
     },
   }));
 
@@ -410,6 +518,12 @@ async function main(): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: 'Please choose an account.' });
     store.setFabricStripeChoice(parsed.data.accountId.trim());
     clearFabricStripeCache(); // apply immediately — next fetch re-reads the OS vault
+    // The primary Terminal Location belonged to the OLD account and cannot exist on the new one:
+    // a `tml_…` is scoped to one account and one mode. Leaving it meant every reader connect failed
+    // with `No such location` until somebody re-created it by hand, with nothing on screen saying
+    // why. Cleared here so the next connection token makes a fresh one on the account now in use.
+    store.setLocation(null);
+    verifiedLocations.clear();
     return { data: await paymentsStatus() };
   });
 
@@ -420,6 +534,13 @@ async function main(): Promise<void> {
     const p = parsed.data;
     if (p.publishableKey && !looksLikePublishable(p.publishableKey)) return reply.code(400).send({ error: 'The publishable key should start with pk_.' });
     if (p.secretKey && !looksLikeSecret(p.secretKey)) return reply.code(400).send({ error: 'The secret key should start with sk_.' });
+    // A NEW SECRET KEY MAY BE A DIFFERENT ACCOUNT OR A DIFFERENT MODE, and switching test->live is
+    // precisely the common case. The stored Location cannot survive either, so drop it for the same
+    // reason the account picker does.
+    if (p.secretKey) {
+      store.setLocation(null);
+      verifiedLocations.clear();
+    }
     store.setLocalStripe(p);
     const verify = p.secretKey ? await verifySecretKey(p.secretKey) : undefined;
     return { data: { ...(await paymentsStatus()), verify } };
@@ -479,18 +600,451 @@ async function main(): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: 'Please check the details and try again.' });
     return { data: emailReceiptView(store.setEmailReceipt(parsed.data)) };
   });
-  // In-app "send me a test": fire the declared `test` alert. The platform delivers it to the ADMIN's
-  // own email + webhook (per their Settings → Alerts matrix) — the app never learns the admin's
-  // address. (Donor receipts still go via /api/fabric/email with the donor's address; the admin's
-  // email is never exposed to apps, so this alert is the only way the app can reach the admin.)
+  // ── Raising an alert: one entry point, many possible destinations ───────────
+  // EVERY alert in this app goes through here rather than calling fabricAlert directly, so the
+  // admin's choices (Settings → Notifications) are impossible to bypass by accident.
+  //
+  // The channels are ADDITIVE and independent, and each fails soft on its own. That is the whole
+  // point: an alert exists to tell someone something is wrong, so one channel being broken must
+  // never suppress the others, and none of them may ever disturb the donation, refund or reader
+  // event that raised it. Hence every path is caught and nothing is awaited by the caller.
+  //
+  // The WhatsApp pacing ledger used to live in a Map here, in memory, on the argument that a
+  // restart letting one extra message through is the safe direction to fail. That still holds for
+  // the burst gap — but the admin can now set a DAILY cap, and an in-memory ledger would reset it
+  // on every deploy, which on the dev channel is several times an afternoon. It is in the database
+  // now (`store.getWhatsAppLedger`), and the burst gap rides along in the same record.
+
+  /**
+   * Ask the platform what became of a queued message, a little later (0.51.1+).
+   *
+   * Before this existed there was no way to find out: we were told `queued: true` and that was the
+   * end of it. An admin whose alerts had silently stopped arriving had nothing to look at, and no
+   * reason to suspect the platform rather than us — which is most of why this felt mysterious.
+   *
+   * Two quick goes for responsiveness: one after a minute (with the pacing gone, most messages are
+   * sent within seconds) and one after ten. Anything still `queued` is then picked up by
+   * [reconcileWhatsApp] below, which keeps asking for as long as the platform still has the record.
+   *
+   * THAT SECOND HALF IS NEW, and it exists because the reasoning here used to be wrong in a way
+   * that only showed up once the platform changed. This gave up after ten minutes on the grounds
+   * that "the platform keeps only the most recent 200 records" and that polling was not worth the
+   * traffic. Both premises are gone as of 0.51.1-dev.8: the history is 500 PER APP kept for 24
+   * hours (no other app can evict ours), and status reads have their own 600/min budget separate
+   * from sending, so a poll can no longer cost a masjid an alert. Giving up at ten minutes left a
+   * message that failed at twenty reading as `queued` in the admin panel for ever — which is
+   * precisely the "accepted and silently lost" state this whole feature exists to end.
+   *
+   * Best-effort throughout. This is diagnostics; it must never disturb anything.
+   */
+  const scheduleWhatsAppFollowUp = (recipientId: string, alertId: AlertId, messageId: string): void => {
+    const check = async (): Promise<boolean> => {
+      const o = await fabricWhatsAppOutcome(messageId).catch(() => ({ state: 'unknown' as const, reason: undefined }));
+      if (o.state === 'unknown' || o.state === 'queued') return false;
+      const prev = store.getWhatsAppOutcomes()[recipientId];
+      // Only overwrite the record we created — a newer message to the same recipient may have
+      // replaced it while we were asking.
+      if (prev && prev.messageId !== messageId) return true;
+      store.setWhatsAppOutcome(recipientId, {
+        state: o.state,
+        at: Date.now(),
+        messageId,
+        reason: o.reason ?? '',
+        suppressed: prev?.suppressed ?? 0,
+        alertId,
+      });
+      if (o.state === 'failed' || o.state === 'expired') {
+        log.warn(`WhatsApp for alert ${alertId} ended as ${o.state}${o.reason ? `: ${o.reason}` : ''}`);
+      }
+      return true;
+    };
+    setTimeout(() => {
+      void check()
+        .then((done) => {
+          if (!done) setTimeout(() => void check().catch(() => {}), 9 * 60_000).unref();
+        })
+        .catch(() => {});
+    }, 60_000).unref();
+  };
+
+  /**
+   * Re-ask about anything still sitting at `queued`.
+   *
+   * At most one record per RECIPIENT — bounded by `MAX_ALERT_RECIPIENTS`, so at worst two dozen
+   * reads a sweep against a 600/min read budget. Still far too small to matter, and it is what stops
+   * a late failure being reported as `queued` for ever. Records older than the platform's 24-hour
+   * window are left alone: it no longer has them, the lookup would 404, and `unknown` correctly
+   * changes nothing.
+   */
+  // SEVEN DAYS, not 24 hours. Until 0.51.1-dev.13 the platform's retention ran from QUEUEING, so a
+  // message held through a long outage lost its record before it was ever sent and there was no
+  // point asking past a day. A still-queued message now keeps its record for as long as it waits,
+  // so a 24h cutoff would abandon messages that still exist and can still resolve.
+  const WA_HISTORY_MS = 7 * 24 * 60 * 60_000;
+  const reconcileWhatsApp = async (): Promise<void> => {
+    const now = Date.now();
+    for (const [recipientId, rec] of Object.entries(store.getWhatsAppOutcomes())) {
+      if (rec.state !== 'queued' || !rec.messageId) continue;
+      if (now - rec.at > WA_HISTORY_MS) continue; // aged out of the platform's history
+      const o = await fabricWhatsAppOutcome(rec.messageId).catch(() => ({ state: 'unknown' as const, reason: undefined }));
+      if (o.state === 'unknown' || o.state === 'queued') continue;
+      // Re-read: a newer message to this recipient may have replaced the record while we asked.
+      const cur = store.getWhatsAppOutcomes()[recipientId];
+      if (!cur || cur.messageId !== rec.messageId) continue;
+      store.setWhatsAppOutcome(recipientId, {
+        state: o.state,
+        at: Date.now(),
+        messageId: rec.messageId,
+        reason: o.reason ?? '',
+        suppressed: cur.suppressed,
+        alertId: cur.alertId,
+      });
+      if (o.state === 'failed' || o.state === 'expired') {
+        log.warn(`WhatsApp for alert ${cur.alertId || '?'} ended as ${o.state}${o.reason ? `: ${o.reason}` : ''} (late)`);
+      }
+    }
+  };
+
+  /**
+   * Fan one alert out to every channel that wants it.
+   *
+   * THE ORDER OF BUSINESS: the OpenMasjidOS relay (per alert), then every subscribed email, then
+   * every subscribed WhatsApp number and group. All of it is ADDITIVE and each leg fails soft on its
+   * own — an alert exists to tell someone something is wrong, so one channel being broken must never
+   * suppress another, and none of them may disturb the donation, refund or reader event that raised
+   * it.
+   *
+   * `textWithoutNames` is the same message with the donor unnamed, and it is supplied by the CALL
+   * SITE rather than derived here. Only two alerts need it (`donation-refunded`,
+   * `monthly-cancelled`). Deriving it — regexing a name back out of finished prose — is the kind of
+   * thing that works on the examples you tried it on and leaks on the one you did not.
+   *
+   * WHY THE WHATSAPP LEG IS THE COMPLICATED ONE. Ban risk attaches to the masjid's phone NUMBER,
+   * that number is shared with every other app on the box, and a ban cannot be undone. So the
+   * budget is checked before the loop, charged only for what actually went out, and every message
+   * held back is counted so the next one that gets through can say how many were missed.
+   */
+  /**
+   * Ask whether any WhatsApp we were told was `sent` may never have arrived.
+   *
+   * HOURLY, and held in memory rather than hoarded. The first version polled every 15 minutes and
+   * persisted every window on sight, because the platform then reported one only while the outage
+   * was OPEN — re-linking the phone erased it, so the evidence disappeared at the exact moment an
+   * admin went looking. We reported that; OpenMasjidOS 0.51.1-dev.13 retains windows for seven days
+   * after recovery, so the platform is the source of truth again and this app keeps only the
+   * DISMISSALS, which are a fact about our own UI that the platform cannot know.
+   *
+   * WE DO NOT RESEND, and that is a domain decision rather than caution. Every WhatsApp this app
+   * sends is an ALERT about a moment: a reader went offline, a payment was refused, a donation was
+   * refunded. Re-sending "the card reader is offline" a day late is worse than not sending it — the
+   * reader is probably fine now, and the message would send someone to check hardware that works.
+   * (This app also stores no message body, deliberately, so a faithful resend is not even possible.)
+   * What IS useful is telling the admin which period is in doubt, so they can look at the Donations
+   * and Devices pages themselves. That is what this records.
+   *
+   * Free of the send budget: this is on the platform's separate 600/min READ budget, so polling it
+   * can never cost a masjid an actual alert.
+   */
+  let suspectWindows: WhatsAppSuspectWindow[] = [];
+  let suspectSeen = new Set<number>();
+  const pollWhatsAppSuspect = async (): Promise<void> => {
+    const r = await fabricWhatsAppSuspect().catch(() => ({ ok: false as const, reason: 'threw' }));
+    // 404 = a platform too old to know; anything else transient. Never an incident, and never a
+    // reason to drop windows we already have on screen.
+    if (!r.ok) return;
+    suspectWindows = r.windows;
+    for (const w of r.windows) {
+      // Prefer the ids the platform names. Exact beats matching a record's single timestamp
+      // against an interval, which is ambiguous for anything queued one side of a boundary and
+      // sent the other. Fall back to the window when ids are absent (older platform) or truncated.
+      const flagged = w.ids.length > 0 ? store.markWhatsAppSuspectByIds(w.ids) : 0;
+      const extra = w.ids.length === 0 || w.truncated ? store.markWhatsAppSuspect(w.from, w.to) : 0;
+      if (!suspectSeen.has(w.from)) {
+        suspectSeen.add(w.from);
+        log.warn(
+          `WhatsApp: the masjid's link was down (${w.cause}) from ${new Date(w.from).toISOString()} to ` +
+            `${new Date(w.to).toISOString()} — ${w.count} message(s) reported sent may not have arrived ` +
+            `(${flagged + extra} of our records flagged). Shown in Settings -> Notifications.`,
+        );
+      }
+    }
+  };
+
+  const raiseAlert = async (
+    id: AlertId,
+    title: string,
+    text: string,
+    level: 'info' | 'success' | 'warning' | 'error' = 'warning',
+    textWithoutNames?: string,
+  ): Promise<{ os: boolean; email: number; whatsapp: number; reasons: string[] }> => {
+    const route = store.getAlertRoutes()[id] ?? DEFAULT_ROUTE;
+    const subscribed = recipientsFor(store.getAlertRecipients(), id);
+    const reasons: string[] = [];
+    let os = false;
+    let email = 0;
+    let whatsapp = 0;
+
+    if (route.os) {
+      const r = await fabricAlert(id, title, text, level).catch(() => ({ delivered: false, reason: 'threw' }));
+      os = r.delivered;
+      if (!r.delivered && r.reason) reasons.push(`OpenMasjidOS: ${r.reason}`);
+    }
+
+    // ── Email: no pacing, because there is nothing here to protect. A real provider, a real
+    //    reputation that is not a single phone number, and no ban to be had.
+    for (const r of subscribed.filter((x) => x.kind === 'email')) {
+      // Plain text on purpose. An alert is one paragraph read on a phone at an awkward moment; a
+      // branded HTML shell would add nothing and one more thing to render wrong.
+      const body = bodyForRecipient(r, text, textWithoutNames);
+      const sent = await fabricEmail({ to: r.address, subject: title, text: body }).catch(() => ({ sent: false, reason: 'threw' }));
+      if (sent.sent) email += 1;
+      else if (sent.reason) reasons.push(`email ${r.label || r.address}: ${sent.reason}`);
+    }
+
+    // ── WhatsApp: numbers and groups, inside one budget.
+    const waTargets = subscribed.filter((x) => x.kind === 'phone' || x.kind === 'group');
+    if (waTargets.length) {
+      const pacing = store.getWhatsAppPacing();
+      const now = Date.now();
+      const permit = whatsappPermit(id, store.getWhatsAppLedger(), pacing, now);
+      if (permit.allowed <= 0) {
+        const why = permitReasonText(permit.reason, pacing);
+        reasons.push(`WhatsApp: ${why}`);
+        log.info(`alert ${id}: WhatsApp ${why}`);
+        store.setWhatsAppLedger(recordWhatsAppSends(store.getWhatsAppLedger(), id, 0, now));
+      } else {
+        // The budget is in MESSAGES. When it cannot cover everyone, groups go first: one group send
+        // reaches more people per message than any individual number, so under a squeeze it is the
+        // channel that tells the most people. Say plainly who missed out rather than truncating in
+        // silence.
+        const ordered = [...waTargets].sort((a, b) => (a.kind === 'group' ? -1 : 0) - (b.kind === 'group' ? -1 : 0));
+        const going = ordered.slice(0, permit.allowed);
+        const skipped = ordered.length - going.length;
+        if (skipped > 0) {
+          reasons.push(`WhatsApp: ${skipped} recipient${skipped === 1 ? '' : 's'} not messaged — the hourly or daily limit was reached partway through`);
+        }
+        for (const r of going) {
+          const body = withSuppressedNote(`${title}\n\n${bodyForRecipient(r, text, textWithoutNames)}`, permit.suppressedBefore);
+          const sendIt =
+            r.kind === 'group'
+              ? fabricWhatsAppGroup(r.address, body)
+              : fabricWhatsApp(r.address, body);
+          const res = await sendIt.catch(() => ({ queued: false, id: undefined, reason: 'threw' }));
+          if (res.queued) whatsapp += 1;
+          // RECORD THE OUTCOME EITHER WAY, per recipient. A refusal used to reach nothing but a
+          // debug line, so a message the platform rejected in a plain sentence — an unapproved
+          // group, a number missing its country code, the masjid's own gateway number — looked
+          // exactly like one that vanished into the queue. The settings screen reads this record and
+          // shows the sentence on the row that caused it.
+          store.setWhatsAppOutcome(r.id, {
+            state: res.queued ? 'queued' : 'refused',
+            at: Date.now(),
+            messageId: res.queued ? (res.id ?? '') : '',
+            reason: res.queued ? '' : (res.reason ?? 'refused'),
+            suppressed: permit.suppressedBefore,
+            alertId: id,
+          });
+          if (!res.queued && res.reason) reasons.push(`WhatsApp ${r.label || r.address}: ${res.reason}`);
+          // Resolve queued -> sent/failed shortly afterwards, when the platform can say (0.51.1+).
+          if (res.queued && res.id) scheduleWhatsAppFollowUp(r.id, id, res.id);
+        }
+        // Charge the budget for what was actually handed over, not for what was permitted.
+        //
+        // AND ONLY WHEN SOMETHING WENT. A run where every send was refused must leave the ledger
+        // alone: nothing was handed over, so there is no budget to charge — and it is not
+        // suppression either. Recording it as a hold would make the NEXT message say "3 alerts were
+        // held back to protect the masjid's number" about three messages the platform rejected
+        // outright, which is a confident, wrong answer to the one question the admin is asking.
+        // Their real reasons are already on their rows.
+        if (whatsapp > 0) {
+          store.setWhatsAppLedger(recordWhatsAppSends(store.getWhatsAppLedger(), id, whatsapp, now));
+        }
+      }
+    }
+
+    if (reasons.length) log.warn(`alert ${id} partially undelivered — ${reasons.join('; ')}`);
+    return { os, email, whatsapp, reasons };
+  };
+
+  // Fire-and-forget wrapper for the call sites that must never block on an alert.
+  const alert = (
+    id: AlertId,
+    title: string,
+    text: string,
+    level: 'info' | 'success' | 'warning' | 'error' = 'warning',
+    textWithoutNames?: string,
+  ): void => {
+    void raiseAlert(id, title, text, level, textWithoutNames).catch(() => {});
+  };
+
+  // ── Notification settings: who gets told what ───────────────────────────────
+  const alertsView = async () => {
+    const routes = store.getAlertRoutes();
+    const recipients = store.getAlertRecipients();
+    // What actually became of the last WhatsApp to each RECIPIENT. Shown on the row that caused it,
+    // because that is the only place the answer is any use — a refusal (unapproved group, missing
+    // country code, the masjid's own gateway number) used to reach nothing but a debug log and was
+    // indistinguishable from a message that simply vanished.
+    const outcomes = store.getWhatsAppOutcomes();
+    const pacing = store.getWhatsAppPacing();
+    const wa = await fabricWhatsAppStatus();
+    // Only ask for groups when WhatsApp is actually available — on a standalone install this would
+    // be a guaranteed-failing request on every load of the screen.
+    const groups = wa.available ? await fabricWhatsAppGroups() : ({ ok: false, reason: 'not-available' } as const);
+    return {
+      alerts: ALERT_META.map((m) => ({
+        id: m.id,
+        label: m.label,
+        description: m.description,
+        carriesDonorIdentity: m.carriesDonorIdentity,
+        os: (routes[m.id] ?? DEFAULT_ROUTE).os,
+        delivery: alertDelivery(routes[m.id] ?? DEFAULT_ROUTE, recipients, m.id),
+      })),
+      recipients: recipients.map((r) => ({ ...r, lastWhatsApp: outcomes[r.id] ?? null })),
+      maxRecipients: MAX_ALERT_RECIPIENTS,
+      groups: groups.ok ? groups.groups : [],
+      groupsProblem: groups.ok ? '' : groups.reason,
+      pacing,
+      pacingLimits: PACING_LIMITS,
+      // Periods when the masjid's WhatsApp link was dead but messages were still being reported
+      // sent. Straight from the platform (it retains them for a week after recovery), minus the
+      // ones a human has already ticked off — which is the only part of this we store.
+      suspectWindows: suspectWindows.filter((w) => !new Set(store.getDismissedSuspectWindows()).has(w.from)),
+      usage: pacingUsage(store.getWhatsAppLedger(), pacing, Date.now()),
+      whatsapp: wa,
+      embedded: ssoConfigured(),
+      emailStatus: emailStatus(),
+    };
+  };
+  app.get('/api/admin/alerts', { preHandler: requireAdmin }, async () => ({ data: await alertsView() }));
+
+  /** The platform relay, per alert. The only thing still decided per alert rather than per person. */
+  app.put('/api/admin/alerts/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = String((req.params as { id: string }).id || '');
+    if (!isAlertId(id)) return reply.code(404).send({ error: 'No such notification.' });
+    const parsed = z.object({ os: z.boolean() }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check those details.' });
+    store.setAlertRoute(id, parsed.data);
+    await audit(req, 'alert-route-changed', id, `os=${parsed.data.os}`);
+    return { data: await alertsView() };
+  });
+
+  app.post('/api/admin/alerts/recipients', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z
+      .object({
+        kind: z.enum(['email', 'phone', 'group']),
+        address: z.string().min(1).max(200),
+        label: z.string().max(80).optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check those details.' });
+    const { kind, address } = parsed.data;
+    // Tell the admin WHY rather than saving a blank. A box that empties itself on save reads as the
+    // app having lost the value, and they retype the very same thing.
+    if (kind === 'email' && !alertEmailLooksValid(address)) {
+      return reply.code(400).send({ error: 'That doesn’t look like an email address.' });
+    }
+    if (kind === 'phone' && !phoneLooksValid(address)) {
+      return reply.code(400).send({ error: 'That number needs its country code and no leading zero — e.g. +1 555 010 1234.' });
+    }
+    if (kind === 'group') {
+      if (!groupIdLooksValid(address)) return reply.code(400).send({ error: 'That isn’t a WhatsApp group.' });
+      // Only a group the admin approved in OpenMasjidOS. The platform would refuse an unapproved one
+      // with a 403 anyway, but refusing here means the admin finds out while they are looking at the
+      // screen rather than when a real alert silently fails weeks later.
+      const groups = await fabricWhatsAppGroups();
+      if (!groups.ok) {
+        return reply.code(503).send({ error: 'Couldn’t check your approved WhatsApp groups just now. Please try again.' });
+      }
+      if (!groups.groups.some((g) => g.id === address)) {
+        return reply.code(400).send({ error: 'That group isn’t approved for apps in OpenMasjidOS → Settings → WhatsApp → Groups.' });
+      }
+    }
+    const draft = newRecipient(kind, address, parsed.data.label ?? '');
+    const row = store.addAlertRecipient(draft);
+    if (!row) {
+      const list = store.getAlertRecipients();
+      return reply.code(400).send({
+        error:
+          list.length >= MAX_ALERT_RECIPIENTS
+            ? `That’s the most recipients we can hold (${MAX_ALERT_RECIPIENTS}). To reach more people over WhatsApp, use a group — one message reaches everyone in it.`
+            : 'That address is already on the list.',
+      });
+    }
+    await audit(req, 'alert-recipient-added', row.id, `${row.kind}`);
+    return { data: await alertsView() };
+  });
+
+  app.patch('/api/admin/alerts/recipients/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const rid_ = String((req.params as { id: string }).id || '');
+    const parsed = z
+      .object({
+        label: z.string().max(80).optional(),
+        alerts: z.array(z.string()).max(ALERT_IDS.length).optional(),
+        includeNames: z.boolean().optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please check those details.' });
+    const alertsPatch = parsed.data.alerts?.filter(isAlertId);
+    const row = store.updateAlertRecipient(rid_, {
+      ...(parsed.data.label !== undefined ? { label: parsed.data.label } : {}),
+      ...(alertsPatch ? { alerts: alertsPatch } : {}),
+      ...(parsed.data.includeNames !== undefined ? { includeNames: parsed.data.includeNames } : {}),
+    });
+    if (!row) return reply.code(404).send({ error: 'That recipient is no longer on the list.' });
+    await audit(req, 'alert-recipient-changed', row.id, `alerts=${row.alerts.length} names=${row.includeNames}`);
+    return { data: await alertsView() };
+  });
+
+  app.delete('/api/admin/alerts/recipients/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const rid_ = String((req.params as { id: string }).id || '');
+    if (!store.removeAlertRecipient(rid_)) return reply.code(404).send({ error: 'That recipient is no longer on the list.' });
+    await audit(req, 'alert-recipient-removed', rid_, '');
+    return { data: await alertsView() };
+  });
+
+  /** How hard we may lean on the masjid's WhatsApp number. Theirs to set — see alerts.ts. */
+  app.put('/api/admin/alerts/pacing', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z
+      .object({
+        minGapMinutes: z.number().int().optional(),
+        maxPerHour: z.number().int().optional(),
+        maxPerDay: z.number().int().optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Please enter whole numbers.' });
+    const next = store.setWhatsAppPacing(parsed.data);
+    await audit(req, 'whatsapp-pacing-changed', '', `gap=${next.minGapMinutes}m hour=${next.maxPerHour} day=${next.maxPerDay}`);
+    return { data: await alertsView() };
+  });
+
+  /** The admin has looked into a suspect window and is done with it. */
+  app.delete('/api/admin/alerts/suspect/:from', { preHandler: requireAdmin }, async (req, reply) => {
+    const from = Number((req.params as { from: string }).from);
+    if (!Number.isFinite(from) || !suspectWindows.some((w) => w.from === Math.trunc(from))) {
+      return reply.code(404).send({ error: 'That period is no longer listed.' });
+    }
+    store.dismissSuspectWindow(Math.trunc(from));
+    await audit(req, 'whatsapp-suspect-dismissed', String(Math.trunc(from)), '');
+    return { data: await alertsView() };
+  });
+
+  app.post('/api/admin/alerts/whatsapp/refresh', { preHandler: requireAdmin }, async () => {
+    clearWhatsAppCache();
+    return { data: await alertsView() };
+  });
+
+  // In-app "send me a test": fire the declared `test` alert THROUGH THE SAME ROUTING as a real one,
+  // so what it proves is the admin's actual configuration — not merely that the platform is up. A
+  // test that took a different path would be the least useful kind of test.
   app.post('/api/admin/test-alert', { preHandler: requireAdmin }, async () => {
-    const res = await fabricAlert(
+    const res = await raiseAlert(
       'test',
       'Test from OpenMasjid Kiosk',
-      'If you received this, OpenMasjidOS is reaching you by email/webhook. Your donation receipts go to donors through the same email provider.',
+      'If you received this, your kiosk notifications are reaching you on this channel. Nothing is wrong — you pressed Send test.',
       'info',
     );
-    return { data: res };
+    return { data: { ...res, delivered: res.os || res.email > 0 || res.whatsapp > 0 } };
   });
 
   // ── Terminal Locations (a reader must connect with a locationId) ─────────────
@@ -565,7 +1119,7 @@ async function main(): Promise<void> {
   // NOT refill the brute-force budget (a shared-IP attacker with one good ID could otherwise reset the
   // backoff), and splitting the budget per endpoint would just let a sweep alternate between them.
   // Students locks a Student ID after 6 failed probes an hour (contract §11.0/§14); this is
-  // defence-in-depth so the kiosk is never the open relay. Well above any real kiosk's lookup rate.
+  // defense-in-depth so the kiosk is never the open relay. Well above any real kiosk's lookup rate.
   const tuitionLookupHits = new Map<string, { count: number; resetAt: number }>();
   const tuitionLookupOk = (ip: string): boolean => {
     const now = Date.now();
@@ -579,7 +1133,7 @@ async function main(): Promise<void> {
 
   // Kiosks heartbeat every ~10s; treat one as offline after ~3 missed beats (+ a little slack for
   // jitter) so a fallen/unplugged tablet shows offline in the admin panel within ~35s, not minutes.
-  const ONLINE_MS = 35_000;
+  // ONLINE_MS is module-level (top of file) so the WhatsApp `kiosks` command uses the same window.
   const deviceView = (d: Device) => ({
     ...d,
     online: !!d.lastSeen && Date.now() - Date.parse(d.lastSeen) < ONLINE_MS,
@@ -617,9 +1171,9 @@ async function main(): Promise<void> {
     const parsed = z
       .object({
         name: z.string().max(80).optional(),
-        // A UI rotation in degrees ('0'/'90'/'180'/'270'); legacy named values are normalised in the store.
+        // A UI rotation in degrees ('0'/'90'/'180'/'270'); legacy named values are normalized in the store.
         orientation: z.string().max(20).optional(),
-        // Which side the reader sits on ('off'/'left'/'right'); normalised in the store.
+        // Which side the reader sits on ('off'/'left'/'right'); normalized in the store.
         nfcSide: z.string().max(20).optional(),
       })
       .safeParse(req.body);
@@ -712,7 +1266,7 @@ async function main(): Promise<void> {
     const parsed = GivingBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'Please check the giving-screen settings.' });
     const { attractTitle, masjidName, ...giving } = parsed.data;
-    store.setGiving(giving); // sanitises (≤6 presets, sane bounds, known policies) + bumps configVersion
+    store.setGiving(giving); // sanitizes (≤6 presets, sane bounds, known policies) + bumps configVersion
     if (attractTitle !== undefined) store.setAttractTitle(attractTitle.trim());
     if (masjidName !== undefined) {
       store.setMasjid({ name: masjidName.trim() });
@@ -722,7 +1276,7 @@ async function main(): Promise<void> {
   });
 
   // ── Campaigns (giving appeals shown as kiosk tabs) ───────────────────────────
-  // Each campaign has its own amounts, colour, background, thank-you, monthly/cover-fees, and
+  // Each campaign has its own amounts, color, background, thank-you, monthly/cover-fees, and
   // (optionally) its own Stripe account. Changes bump the config version → kiosks pick them up
   // on the next heartbeat. Amounts are integer MINOR units (same as the giving API).
   const CampaignBody = z
@@ -885,7 +1439,7 @@ async function main(): Promise<void> {
     const rec = store.getPlanRecord(sp.id);
     // Month one never appears in `invoices.list` — it was a card-present PaymentIntent on the reader.
     // Without the local record we cannot know it, so the total is flagged short rather than quietly
-    // under-reported: "this plan has raised £X" being wrong by a month is the kind of number an
+    // under-reported: "this plan has raised $X" being wrong by a month is the kind of number an
     // admin repeats to a committee.
     const first = rec?.firstAmountMinor ?? 0;
     return {
@@ -990,7 +1544,7 @@ async function main(): Promise<void> {
       .map((p) => (totalsCapped ? { ...p, totalPartial: true } : p))
       .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
     // Say so when a whole account couldn't be read, or when the scan filled up — an admin looking at
-    // a short list needs to know it's short, not assume those donors cancelled.
+    // a short list needs to know it's short, not assume those donors canceled.
     const unavailable =
       failures && !plans.length
         ? 'Couldn’t reach Stripe just now — please try again.'
@@ -1001,7 +1555,7 @@ async function main(): Promise<void> {
             // should know the record is stale) or it lives on an account this app can no longer resolve,
             // in which case a donor is still being charged somewhere this screen cannot show or cancel.
             unconfirmed
-            ? `${unconfirmed} plan${unconfirmed === 1 ? '' : 's'} we set up couldn’t be found in Stripe — ${unconfirmed === 1 ? 'it was' : 'they were'} either cancelled in the Stripe dashboard, or ${unconfirmed === 1 ? 'it lives' : 'they live'} on a Stripe account this app can no longer reach.`
+            ? `${unconfirmed} plan${unconfirmed === 1 ? '' : 's'} we set up couldn’t be found in Stripe — ${unconfirmed === 1 ? 'it was' : 'they were'} either canceled in the Stripe dashboard, or ${unconfirmed === 1 ? 'it lives' : 'they live'} on a Stripe account this app can no longer reach.`
             : truncated
               ? 'This Stripe account has more subscriptions than we can scan at once, so this list may be incomplete.'
               : '';
@@ -1167,7 +1721,7 @@ async function main(): Promise<void> {
     const fullyRefunded = after.refundedMinor >= after.amountMinor;
 
     // A refunded FIRST payment does not stop a monthly plan — Stripe keeps collecting next month.
-    // The admin has to be told, or a donor gets their £10 back and is charged again in four weeks.
+    // The admin has to be told, or a donor gets their $10 back and is charged again in four weeks.
     const monthlyStillLive = don.kind === 'monthly';
 
     // ── The donor (only if they gave us an address) ──
@@ -1188,12 +1742,11 @@ async function main(): Promise<void> {
       }
     }
 
-    // ── The admin: one alert, which OpenMasjidOS fans out to email and/or webhook per their choice ──
-    void fabricAlert(
-      'donation-refunded',
-      'A donation was refunded',
+    // ── The admin: one alert, fanned out per Settings → Notifications (OpenMasjidOS, a direct
+    //    email address, and/or WhatsApp — whichever they turned on for THIS alert) ──
+    const refundAlertBody = (withNames: boolean): string =>
       [
-        `${formatMoney(refund.amountMinor || want, after.currency)} was refunded to ${after.donorName || 'a donor'}${addr ? ` (${addr})` : ''}`,
+        `${formatMoney(refund.amountMinor || want, after.currency)} was refunded to ${withNames ? after.donorName || 'a donor' : 'a donor'}${withNames && addr ? ` (${addr})` : ''}`,
         `from ${after.deviceName || 'the kiosk'}${after.campaignTitle ? ` · ${after.campaignTitle}` : ''}.`,
         fullyRefunded ? 'This was the full donation.' : `This was part of ${formatMoney(after.amountMinor, after.currency)}.`,
         addr ? (donorEmailed ? 'The donor has been emailed.' : 'The donor could NOT be emailed — please contact them.') : 'No donor email was given, so they have not been told.',
@@ -1202,9 +1755,32 @@ async function main(): Promise<void> {
           : '',
       ]
         .filter(Boolean)
-        .join(' '),
+        .join(' ');
+    alert(
+      'donation-refunded',
+      'A donation was refunded',
+      // TWO BODIES, and the second is not a nicety. A recipient can be a WhatsApp GROUP, and the
+      // platform's rule for those is blunt: a group post must never carry one person's own
+      // business, because everyone in a group can see everyone else's number. So the call site
+      // builds the unnamed version too and `includeNames` on the recipient picks. Derived here
+      // rather than regexed out of the finished sentence downstream, which is the version that
+      // works on the examples you tried and leaks on the one you did not.
+      refundAlertBody(true),
       'warning',
-    ).catch(() => {});
+      refundAlertBody(false),
+    );
+
+    // The audit trail exists for "actions that reach outside the app". Refunding is the only admin
+    // action that moves money OUT of the masjid's account, and it was the one financial write with
+    // no entry — canceling a plan was recorded, giving $500 back was not. Recorded after the fact
+    // on purpose: this row means "a refund happened", and Stripe has already confirmed it by here.
+    await audit(
+      req,
+      'donation.refund',
+      after.id,
+      `${formatMoney(refund.amountMinor || want, after.currency)} of ${formatMoney(after.amountMinor, after.currency)} refunded` +
+        `${fullyRefunded ? ' (in full)' : ' (part)'} · reason ${parsed.data.reason} · ${refund.refundId}`,
+    );
 
     log.info(`refunded ${refund.amountMinor || want} ${after.currency} of donation ${after.id} (${refund.refundId})`);
     return {
@@ -1263,7 +1839,7 @@ async function main(): Promise<void> {
   //     does not let anyone cancel a donation;
   //   • it can do exactly one thing — end THIS plan. There is nothing here to read a donor list
   //     from, nothing to change an amount with, and no way to reach the admin API;
-  //   • cancelling is the safe direction. The worst a stolen link achieves is stopping a donation,
+  //   • canceling is the safe direction. The worst a stolen link achieves is stopping a donation,
   //     which the donor can restart at the kiosk. Money can never move TO anyone through this;
   //   • the outbound Stripe traffic it can cause is bounded (donorLookups, below), and an unknown
   //     token gets the same answer as a used one.
@@ -1285,7 +1861,7 @@ async function main(): Promise<void> {
      *
      * Scoped to this plugin ON PURPOSE. Registering it globally would let every other POST route accept
      * a cross-origin form submission, and a form POST needs no CORS preflight — the admin API's only
-     * other line of defence there is the SameSite=Lax cookie. Nothing outside these two routes gains
+     * other line of defense there is the SameSite=Lax cookie. Nothing outside these two routes gains
      * anything from urlencoded, so nothing outside them gets it.
      */
     donor.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, _body, done) => {
@@ -1463,15 +2039,18 @@ ${body}
         ),
       );
     }
-    log.info(`donor cancelled plan ${plan.subscriptionId} via their own link`);
+    log.info(`donor canceled plan ${plan.subscriptionId} via their own link`);
     // Tell the masjid: a standing order ending is something an admin should know about, and the donor
     // did it outside the admin panel so nothing else would ever surface it.
-    void fabricAlert(
+    alert(
       'monthly-cancelled',
       'A donor stopped their monthly donation',
       `${plan.donorName || 'A donor'}${plan.donorEmail ? ` (${plan.donorEmail})` : ''} stopped their ${formatMoney(plan.firstAmountMinor, plan.currency)}/month donation${plan.campaignTitle ? ` to ${plan.campaignTitle}` : ''} using the link in their confirmation email. Nothing further will be collected.`,
       'info',
-    ).catch(() => {});
+      // The same sentence with nobody named — for a recipient (typically a group) set not to
+      // carry donor identity. See the note at the donation-refunded call site.
+      `A donor stopped their ${formatMoney(plan.firstAmountMinor, plan.currency)}/month donation${plan.campaignTitle ? ` to ${plan.campaignTitle}` : ''} using the link in their confirmation email. Nothing further will be collected.`,
+    );
     return reply.send(
       cancelPage(
         `<h1 class="ok">Your monthly donation has stopped</h1>
@@ -1563,7 +2142,7 @@ ${body}
     const everConnected = st.everConnected || status === 'connected' || status === 'updating' || !!readerSerial.trim();
     if (status === 'connected' || status === 'updating') {
       if (st.alerted) {
-        void fabricAlert('reader-offline', 'Card reader back online', `The card reader on ${deviceName || 'a kiosk'} is connected again — donations can be taken.`, 'info').catch(() => {});
+        alert('reader-offline', 'Card reader back online', `The card reader on ${deviceName || 'a kiosk'} is connected again — donations can be taken.`, 'info');
       }
       readerAlert.set(deviceId, { offlineSince: null, alerted: false, everConnected: true });
       return;
@@ -1571,7 +2150,7 @@ ${body}
     if ((status === 'not_connected' || status === 'error') && everConnected) {
       const offlineSince = st.offlineSince ?? now;
       if (!st.alerted && now - offlineSince >= READER_OFFLINE_DEBOUNCE_MS) {
-        void fabricAlert('reader-offline', 'Card reader offline', `The card reader on ${deviceName || 'a kiosk'} stopped responding — donations can't be taken until it's back. Check the reader is powered on and paired.`, 'warning').catch(() => {});
+        alert('reader-offline', 'Card reader offline', `The card reader on ${deviceName || 'a kiosk'} stopped responding — donations can't be taken until it's back. Check the reader is powered on and paired.`, 'warning');
         readerAlert.set(deviceId, { offlineSince, alerted: true, everConnected: true });
       } else {
         readerAlert.set(deviceId, { offlineSince, alerted: st.alerted, everConnected });
@@ -1640,7 +2219,31 @@ ${body}
   const locationForAccount = async (acct: ResolvedAccount): Promise<string> => {
     const key = acct.id === '' ? '' : acct.id;
     const existing = store.getLocation(key);
-    if (existing) return existing.id;
+    if (existing) {
+      // VERIFY IT STILL EXISTS BEFORE HANDING IT OUT. A `tml_…` is scoped to one Stripe account AND
+      // one mode, but this app stored it as though it were permanent — so switching accounts, or
+      // flipping test keys to live, left a stale id that every reader connect then failed on with
+      // Stripe's `No such location: 'tml_…'`. The tablet has no way to recover from that: the
+      // location arrives in its synced config and it will keep retrying the same dead id for ever.
+      // Deleting one in the Stripe dashboard does the same thing.
+      //
+      // Cached per process so this is one extra Stripe call per account per restart, not one per
+      // connection token. A verified location does not stop existing while we are looking at it,
+      // and if it does the next restart re-checks.
+      if (verifiedLocations.has(`${key}:${existing.id}`)) return existing.id;
+      const live = await retrieveLocation(acct.keys.secretKey, existing.id).catch(() => null);
+      if (live) {
+        verifiedLocations.add(`${key}:${existing.id}`);
+        return existing.id;
+      }
+      // Gone. Fall through and make a new one on the account actually in use. Dropping the dead
+      // reference first means a failure below leaves no stale id behind to be handed out again.
+      log.warn(
+        `Terminal location ${existing.id} no longer exists on this Stripe account (account changed, ` +
+          `test/live switched, or it was deleted in Stripe) — creating a replacement.`,
+      );
+      store.setLocation(null, key);
+    }
     // Reuse the masjid address the admin already gave for the primary account's Location — the same
     // building, just registered on a second Stripe account. Without a usable address we throw, and the
     // caller falls back to whatever Location is stored rather than blocking the donation here.
@@ -1658,6 +2261,10 @@ ${body}
     store.setLocation({ id: created.id, name: created.displayName }, key);
     return created.id;
   };
+
+  /** Locations confirmed to exist on their account this process. Keyed `accountId:locationId`, so
+   *  re-pointing at a different account can never reuse the previous one's verdict. */
+  const verifiedLocations = new Set<string>();
 
   /**
    * Mint a Terminal connection token — for a SPECIFIC Stripe account when the tablet names one.
@@ -1840,7 +2447,7 @@ ${body}
     monthly: z.boolean().optional(),
     // Keyed/manual card entry (Stripe's on-device card form) instead of the reader.
     manual: z.boolean().optional(),
-    // Donor opted to cover the estimated card fee (only honoured if the campaign allows it).
+    // Donor opted to cover the estimated card fee (only honored if the campaign allows it).
     coverFees: z.boolean().optional(),
     // Per-attempt key so a network retry can't create a second PI (Stripe idempotency).
     idempotencyKey: z.string().trim().min(8).max(255).optional(),
@@ -1986,12 +2593,13 @@ ${body}
         store.addLogs(d.id, [
           { level: 'warn', event: 'monthly_intent_rejected', detail: `Stripe refused the card-saving payment; taking it as a one-off instead · ${why}` },
         ]);
-        void fabricAlert(
+        alert(
           'monthly-failed',
           'Monthly donations are not being set up',
-          `Stripe refused to set up a repeat payment at ${d.name || 'the kiosk'}, so this gift was taken as a ONE-OFF instead. Donors choosing "Monthly" are being charged once and no standing order is created. Reason: ${why}`,
+          `Stripe refused to set up a repeat payment at ${d.name || 'the kiosk'} · ${campaign.title}, so this gift was taken as a ONE-OFF instead. ` +
+            `Donors choosing "Monthly" are being charged once and no standing order is created. Reason: ${why}`,
           'warning',
-        ).catch(() => {});
+        );
         // A DIFFERENT idempotency key: same key + different body is itself a Stripe error, and this
         // body deliberately differs (no customer, no setup_future_usage).
         pi = await create(
@@ -2011,7 +2619,16 @@ ${body}
       store.addLogs(d.id, [{ level: 'warn', event: 'payment_create_failed', detail: `${manual ? 'manual' : 'reader'} · ${why}` }]);
       // Alert the admin donations are broken (bad/expired keys, Stripe down). Fire-and-forget; the
       // .catch() is REQUIRED — an unhandled async rejection would crash the process.
-      void fabricAlert('payment-failed', 'A donation payment failed to start', 'Stripe rejected a payment setup — donors can’t give until it’s fixed. Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.', 'error').catch(() => {});
+      // Names the appeal and the kiosk. A masjid with several appeals may have one broken and the
+      // rest fine — an appeal paying into its own Stripe account fails on its own keys — so "donors
+      // can't give" without saying WHERE sends someone to check working kiosks.
+      alert(
+        'payment-failed',
+        'A donation payment failed to start',
+        `Stripe rejected a payment setup at ${d.name || 'the kiosk'} · ${campaign.title} — donors can’t give to it until it’s fixed. ` +
+          `Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.`,
+        'error',
+      );
       return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
     }
   });
@@ -2143,12 +2760,14 @@ ${body}
       // this kiosk's log, and an alert to the admin.
       if (result.succeeded && wantsMonthly && !monthly.created) {
         store.addLogs(d.id, [{ level: 'warn', event: 'monthly_setup_failed', detail: monthlyProblem || 'No standing order was created.' }]);
-        void fabricAlert(
+        alert(
           'monthly-failed',
           'A monthly donation could not be set up',
-          `${formatMoney(result.amountMinor, result.currency)} was taken once at ${d.name || 'the kiosk'}, but the donor's monthly plan could NOT be created, so nothing will be collected again and there is nothing to cancel. ${monthlyProblem} If the donor expected a standing order, please contact them.`,
+          `${formatMoney(result.amountMinor, result.currency)} was taken once at ${d.name || 'the kiosk'}` +
+            `${(meta.campaign || '').trim() ? ` · ${(meta.campaign || '').trim()}` : ''}, but the donor's monthly plan could NOT be created, ` +
+            `so nothing will be collected again and there is nothing to cancel. ${monthlyProblem} If the donor expected a standing order, please contact them.`,
           'warning',
-        ).catch(() => {});
+        );
       }
       // Branded receipt owed ONLY when the PI was minted branded (Stripe's receipt suppressed at
       // intent) AND it succeeded AND the donor gave an email. recordDonation persists that decision
@@ -2178,8 +2797,16 @@ ${body}
       });
       if (result.succeeded) {
         const label = monthly.created ? 'monthly donation set up' : 'donation received';
+        // NAME THE APPEAL. A masjid running several at once ("Roof", "Zakat", "Winter Appeal") got
+        // notifications that said only the amount and the kiosk, which is the one thing a treasurer
+        // cannot work out for themselves — two kiosks in a foyer may be showing different campaigns,
+        // and one kiosk shows several as tabs. The ` · ` separator matches the refund alert, which
+        // has always named it.
+        const appeal = (meta.campaign || '').trim();
         void notify({
-          text: `${formatMoney(result.amountMinor, result.currency)} ${label} at ${d.name || 'the kiosk'}.`,
+          text:
+            `${formatMoney(result.amountMinor, result.currency)} ${label} at ${d.name || 'the kiosk'}` +
+            `${appeal ? ` · ${appeal}` : ''}.`,
           level: 'success',
         });
         // "Your monthly donation is set up", carrying the donor's own cancel link. Sent ONCE, on the
@@ -2211,7 +2838,21 @@ ${body}
         }
       }
       return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency, monthly } };
-    } catch {
+    } catch (e) {
+      // LOG IT. This catch wraps the whole handler, not just the Stripe call — `recordDonation`,
+      // the plan write, the receipt decision and the device log all run AFTER the money has been
+      // captured. So the case it silently hid is the worst one this app has: Stripe took the
+      // donation, something downstream threw, and the only trace anywhere was a 502 the donor's
+      // tablet renders as "that didn't complete". No log line, no donation row, no alert.
+      const why = e instanceof Error ? e.message : String(e);
+      log.error(`/complete failed for ${id}: ${why}`);
+      // The device log is what an admin actually reads when a donor says they were charged, so put
+      // it where they will look — best-effort, and never allowed to mask the original failure.
+      try {
+        store.addLogs(d.id, [{ level: 'error', event: 'complete_failed', detail: `${id}: ${why.slice(0, 300)}` }]);
+      } catch {
+        /* the container log above still has it */
+      }
       return reply.code(502).send({ error: 'Couldn’t confirm the payment with Stripe.' });
     }
   });
@@ -2236,7 +2877,11 @@ ${body}
       idempotencyKey: piId,
       familyId: row.familyId,
       studentId: row.studentId || undefined,
+      // The TUITION. `row.amountMinor` is stored net for exactly this reason (§11.3) — Students'
+      // ledger holds tuition only, and a gross here reads as an overpayment.
       amountCents: row.amountMinor,
+      // Informational, and omitted when the school absorbed the fee (the usual case).
+      feeCents: row.feeMinor > 0 ? row.feeMinor : undefined,
       currency: row.currency,
       occurredAt: row.occurredAt || new Date().toISOString(),
       externalRef: {
@@ -2271,7 +2916,7 @@ ${body}
     }
   };
 
-  // Should the tuition tile show, and how is it labelled? (Cached ~5 min in students.ts.)
+  // Should the tuition tile show, and how is it labeled? (Cached ~5 min in students.ts.)
   app.get('/api/kiosk/tuition/info', async (req, reply) => {
     const d = authDevice(req, reply);
     if (!d) return;
@@ -2297,7 +2942,7 @@ ${body}
   // uniform `found:false`. Rate-limited per peer on the same bucket as the lookup below.
   const TuitionCodeBody = z.object({
     campaignId: z.string().max(120),
-    // Max 32 to match the provider's own cap; normalised (case/spaces/hyphens) in students.ts.
+    // Max 32 to match the provider's own cap; normalized (case/spaces/hyphens) in students.ts.
     studentCode: z.string().trim().min(1).max(32),
   });
   app.post('/api/kiosk/tuition/identify', async (req, reply) => {
@@ -2334,12 +2979,17 @@ ${body}
       // Uniform "not found" (no enumeration oracle); the rolling window already counted this attempt.
       return { data: { found: false } };
     }
-    // The school's advance/floor policy, captured into the session so the pay step validates against
-    // the server's copy. Cached ~5 min alongside the tile label; unavailable → no paying ahead.
+    // The school's advance/floor policy AND its processing-fee rate, captured into the session so the
+    // pay step validates and prices against the server's copy. Cached ~5 min alongside the tile label;
+    // unavailable → no paying ahead, and no fee (the school absorbs it, exactly as before 0.51.0).
+    //
+    // Pinning the RATE to the session is what makes the quote binding: `info` is cached and an office
+    // can change the rate, so reading it again at charge time could hand a parent a total they were
+    // never shown. The rate they were quoted on is the rate they pay.
     const info = await studentsInfo();
     const policy = info.available
-      ? { allowAdvance: info.info.allowAdvance, minAmountCents: info.info.minAmountCents }
-      : { allowAdvance: false, minAmountCents: MIN_TUITION_CENTS };
+      ? { allowAdvance: info.info.allowAdvance, minAmountCents: info.info.minAmountCents, feeRate: kioskFeeRate(info.info) }
+      : { allowAdvance: false, minAmountCents: MIN_TUITION_CENTS, feeRate: null };
     // Stash the family + invoices server-side; the tablet only gets display fields + an opaque session id.
     const session = createTuitionSession({
       campaignId: campaign.id,
@@ -2352,8 +3002,9 @@ ${body}
       creditCents: r.family.creditCents,
       allowAdvance: policy.allowAdvance,
       minAmountCents: policy.minAmountCents,
+      feeRate: policy.feeRate,
       // The children, in the SAME order the response lists them — the tablet addresses one by its
-      // position (`s0`, `s1`) so "add £50 for Maryam" can name her ledger without the device ever
+      // position (`s0`, `s1`) so "add $50 for Maryam" can name her ledger without the device ever
       // holding the school's internal ids.
       students: r.family.students.map((s) => ({
         studentId: s.studentId,
@@ -2419,7 +3070,7 @@ ${body}
           balanceCents: r.family.balanceCents,
           // What is actually PAYABLE — the open bills added up. It differs from `balanceCents` the
           // moment a sibling is in credit, because the household figure Students reports is a NET:
-          // a family with one child £340 ahead and another £160 behind reports a £0 balance. This is
+          // a family with one child $340 ahead and another $160 behind reports a $0 balance. This is
           // the number the pay button spends, and the server re-derives it at pay time.
           dueCents: dueCents(session),
           // 0.41.0: money already paid ahead. A zero balance means "square" or "paid ahead", and the
@@ -2494,6 +3145,13 @@ ${body}
     const acct = await resolveAccount();
     if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     const currency = session.currency || store.getCurrency();
+    // WHO PAYS STRIPE'S CUT (Students 0.51.0, §11.2). Off for almost every install, and off means
+    // change nothing: charge the tuition, report the tuition. When it IS on, the payer covers it, so
+    // the charge is grossed up and the two numbers part company from here on — `amt.amountCents` is
+    // the TUITION for the rest of this handler, `chargeMinor` is what the card is asked for.
+    //
+    // The rate comes from the SESSION, captured at lookup, so the total quoted is the total charged.
+    const { grossCents: chargeMinor, feeCents: feeMinor } = grossUpForStudentsFee(amt.amountCents, session.feeRate);
     const metadata: Record<string, string> = {
       purpose: 'students-billing', // §11.3 reconciliation discriminator (REQUIRED)
       omos_app: 'kiosk',
@@ -2504,12 +3162,19 @@ ${body}
       campaignId: campaign.id,
       stripeAccountId: acct.id,
     };
+    // §11.3: whenever we grossed up, say by how much. This is NOT bookkeeping. Students' daily
+    // reconciliation reads succeeded PaymentIntents a day later, on a job that never saw this request
+    // and may by then find the setting switched off or the rate changed — without this key it cannot
+    // tell a $103.30 charge covering $100 of tuition from a family who genuinely paid $103.30, and
+    // credits the difference. An amount identifies nobody, so this breaks no metadata privacy rule;
+    // the standing ban still holds and is enforced above — never a Student ID, never a child's name.
+    if (feeMinor > 0) metadata.students_fee_cents = String(feeMinor);
     // The child this charge is for: the one the parent picked on the "add money for…" pad when there
     // was one, else the student whose ID was typed.
     const chargeStudentId = amt.studentId || session.studentId;
     if (chargeStudentId) metadata.students_student_id = chargeStudentId;
     const piInput = {
-      amountMinor: amt.amountCents,
+      amountMinor: chargeMinor, // the GROSS — what the card is asked for
       currency,
       description: `School balance — ${session.familyLabel}`.slice(0, 200), // never the PIN/typed name
       metadata,
@@ -2526,20 +3191,42 @@ ${body}
         familyId: session.familyId,
         studentId: chargeStudentId,
         familyLabel: session.familyLabel,
+        // The TUITION, deliberately — this row is what `record-payment` is built from, and
+        // `amountCents` there has always meant what the family owed. A gross here would be booked
+        // as an overpayment and sit as a credit eating into their next bill.
         amountMinor: amt.amountCents,
+        feeMinor,
         currency,
         allocations: amt.allocations,
         students: amt.students, // per-child split (v2); null for a pay-full charge
         lines: amt.lines, // the ticked bill lines (0.43.0); supersedes both of the above
       });
-      return { data: { paymentIntentId: pi.id, clientSecret: pi.clientSecret, chargeMinor: amt.amountCents, currency } };
+      // The tablet renders its confirm screen from THESE numbers, not from a rate of its own — which
+      // is the whole reason no rate is sent to the device. The total a parent is shown is by
+      // construction the total the card is asked for.
+      return {
+        data: {
+          paymentIntentId: pi.id,
+          clientSecret: pi.clientSecret,
+          chargeMinor, // gross = tuition + fee; what the reader will take
+          tuitionMinor: amt.amountCents,
+          feeMinor,
+          currency,
+        },
+      };
     } catch (err) {
       const e = err as { code?: string; message?: string };
       const why = `${e.code ?? ''} ${e.message ?? ''}`.trim().slice(0, 300);
       log.warn(`tuition payment-intent create failed: ${why}`);
       store.addLogs(d.id, [{ level: 'warn', event: 'tuition_pi_failed', detail: why.slice(0, 200) }]);
       // Same admin alert as a failed donation — parents can't pay tuition until it's fixed. Fail-soft.
-      void fabricAlert('payment-failed', 'A tuition payment failed to start', 'Stripe rejected a payment setup — parents can’t pay tuition until it’s fixed. Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.', 'error').catch(() => {});
+      alert(
+        'payment-failed',
+        'A tuition payment failed to start',
+        `Stripe rejected a payment setup at ${d.name || 'the kiosk'} · ${campaign.title} — parents can’t pay tuition until it’s fixed. ` +
+          `Check your Stripe keys/status in OpenMasjidOS → Settings → Payments.`,
+        'error',
+      );
       return reply.code(502).send({ error: 'Couldn’t start the payment. Please try again.' });
     }
   });
@@ -2561,14 +3248,42 @@ ${body}
         result.chargeId,
         new Date(result.createdSec * 1000).toISOString(),
       );
+      // The outbox row is the only place that knows how the charge splits: `result.amountMinor` is
+      // the PaymentIntent's amount, which is the GROSS whenever the payer covered the processing fee.
+      const row = store.getTuitionOutbox(id);
+      const feeMinor = row?.feeMinor ?? 0;
+      const tuitionMinor = row?.amountMinor ?? result.amountMinor;
       if (result.succeeded) {
+        // Which tuition appeal, for a school running more than one (e.g. a hifz class and a weekend
+        // school billed separately). Taken from the outbox row's campaign id — this path has no
+        // PaymentIntent metadata in scope, unlike the donation one. Blank if the campaign has since
+        // been deleted, which is fine: a missing name is better than a stale one.
+        const tuitionAppealTitle = (row?.campaignId ? store.getCampaign(row.campaignId)?.title : '') || '';
+        const tuitionAppeal = tuitionAppealTitle.trim() ? ` · ${tuitionAppealTitle.trim()}` : '';
         await tryRecordTuition(id); // best-effort now; the outbox retries if Students is unreachable
         void notify({
-          text: `${formatMoney(result.amountMinor, result.currency)} tuition payment at ${d.name || 'the kiosk'}.`,
+          // Say what the SCHOOL is owed and what the processor took, separately. A single grossed-up
+          // figure in a dashboard notification reads as tuition and quietly overstates every payment.
+          text:
+            feeMinor > 0
+              ? `${formatMoney(tuitionMinor, result.currency)} tuition at ${d.name || 'the kiosk'}${tuitionAppeal} ` +
+                `(${formatMoney(result.amountMinor, result.currency)} charged — the payer covered the ${formatMoney(feeMinor, result.currency)} processing fee).`
+              : `${formatMoney(result.amountMinor, result.currency)} tuition payment at ${d.name || 'the kiosk'}${tuitionAppeal}.`,
           level: 'success',
         });
       }
-      return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency } };
+      // `amountMinor` stays the CHARGE — it is what the card was debited and what the thank-you
+      // screen shows — with the split beside it so the tablet can itemize the receipt line.
+      return {
+        data: {
+          status: result.status,
+          succeeded: result.succeeded,
+          amountMinor: result.amountMinor,
+          tuitionMinor,
+          feeMinor,
+          currency: result.currency,
+        },
+      };
     } catch {
       return reply.code(502).send({ error: 'Couldn’t confirm the payment with Stripe.' });
     }
@@ -2586,6 +3301,23 @@ ${body}
       .header('content-length', String(stat.size))
       .header('cache-control', 'no-cache');
     return reply.send(fs.createReadStream(config.apkPath));
+  });
+
+  // ── Download the bundled OpenMasjid Mobile Donations APK (served by /new) ───
+  // The handheld app for fundraising events. Reachable over the Cloudflare tunnel like the kiosk
+  // APK is, and deliberately so: a volunteer standing at an event opens this server's public
+  // address on their own phone, downloads, installs and pairs — without ever being on the LAN.
+  app.get('/download/openmasjidmobile.apk', async (_req, reply) => {
+    if (!fs.existsSync(config.mobileApkPath)) {
+      return reply.code(404).send({ error: 'The mobile donations app isn’t available yet on this server.' });
+    }
+    const stat = fs.statSync(config.mobileApkPath);
+    reply
+      .header('content-type', 'application/vnd.android.package-archive')
+      .header('content-disposition', `attachment; filename="${mobileApkFilename}"`)
+      .header('content-length', String(stat.size))
+      .header('cache-control', 'no-cache');
+    return reply.send(fs.createReadStream(config.mobileApkPath));
   });
 
   // ── Static web app (built by Vite into ./public) ────────────────────────────
@@ -2610,7 +3342,7 @@ ${body}
   // uses root paths — critical, so the LAN admin panel keeps working when remote access is on.
   // When injected: a `<base href>` (relative-built Vite assets resolve under the prefix) plus
   // `window.__OMOS_BASE__` (web/src/base.ts prefixes API/nav/asset URLs). basePath is already a
-  // safe URL-path charset (normBasePath), re-sanitised here defensively.
+  // safe URL-path charset (normBasePath), re-sanitized here defensively.
   const sendIndexHtml = (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
     const viaTunnel = (req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel === true;
     const base = viaTunnel ? cachedFabricSite().basePath.replace(/[^\w/-]/g, '') : '';
@@ -2647,6 +3379,17 @@ ${body}
   // Fabric is absent or remote access is off, this stays "" and we behave exactly as a LAN app.
   await fetchFabricSite().catch(() => {});
   setInterval(() => { void fetchFabricSite(); }, 60_000).unref();
+  // Resolve any WhatsApp still reading `queued`. Cheap (at most one read per alert id) and only
+  // useful when the Fabric is there at all.
+  if (ssoConfigured()) {
+    setInterval(() => { void reconcileWhatsApp().catch(() => {}); }, 15 * 60_000).unref();
+    // Same sweep, same cadence: ask whether the masjid's WhatsApp link was dead while we were being
+    // told messages went out. Once at startup too — a restart is a common moment to have missed one.
+    void pollWhatsAppSuspect().catch(() => {});
+    // Hourly is enough now that windows survive recovery for a week; the 15-minute cadence only
+    // existed to race an admin re-linking the phone.
+    setInterval(() => { void pollWhatsAppSuspect().catch(() => {}); }, 60 * 60_000).unref();
+  }
 
   // Tuition (students/billing): keep availability warm so the tile shows/hides correctly, and drain the
   // record-payment outbox so a dropped push after a successful charge is retried (Students' daily

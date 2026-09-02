@@ -17,9 +17,42 @@ import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { config } from './config';
 import { makeLog } from './logger';
+import {
+  ALERT_IDS,
+  DEFAULT_PACING,
+  addressLooksValid,
+  canonicalAddress,
+  defaultRoutes,
+  isAlertId,
+  isRecipientKind,
+  migrateLegacyRoutes,
+  pruneLedger,
+  sanitizePacing,
+  sanitizeRecipient,
+  sanitizeRoute,
+  type AlertId,
+  type AlertRecipient,
+  type AlertRoute,
+  type AlertRoutes,
+  type LegacyAlertRoute,
+  type WhatsAppLedger,
+  type WhatsAppPacing,
+} from './alerts';
 import type { Cred } from './auth';
 
 const log = makeLog('store');
+
+/**
+ * How many recipients an admin may add.
+ *
+ * Not a technical limit — the list is a small JSON blob and could hold hundreds. It is a WhatsApp
+ * one: every individual number on this list is a separate outbound message per alert, and messaging
+ * many individuals is, in the platform's own words, "the riskiest thing this number can do". A
+ * masjid that needs to reach thirty people should reach them through one GROUP, which is a single
+ * send. Twenty-four rows is comfortably more than any masjid needs for the former and leaves plenty
+ * of room for the latter.
+ */
+export const MAX_ALERT_RECIPIENTS = 24;
 
 /** Drop undefined values so a partial update never overwrites a field with nothing. */
 function clean<T extends object>(obj: T): Partial<T> {
@@ -120,10 +153,10 @@ const GIVING_DEFAULTS: GivingConfig = {
   celebrateThresholdMinor: 0,
 };
 
-/** A giving campaign (an "appeal") the kiosk shows as a tab — its own amounts, colour,
+/** A giving campaign (an "appeal") the kiosk shows as a tab — its own amounts, color,
  *  background, thank-you, monthly/cover-fees options and (optionally) its own Stripe account.
  *  Exactly one campaign is the **main** one (the always-present first tab). Amounts are integer
- *  MINOR units. Colours are '#rrggbb' or '' (inherit the default). Images are URLs (an uploaded
+ *  MINOR units. Colors are '#rrggbb' or '' (inherit the default). Images are URLs (an uploaded
  *  '/uploads/…' path, or an external https URL) or '' (use the default look / masjid logo). */
 /** Every campaign has a type, which drives the card-fee rule (see deriveFees): a **Donation** lets the
  *  admin offer fee-covering; **Zakat** always enforces it (so the full Zakat reaches the masjid);
@@ -136,10 +169,10 @@ export interface Campaign {
   /** Required campaign type — drives the fee rule (see coverFees/forceCoverFees + deriveFees). */
   type: CampaignType;
   description: string;
-  /** Primary colour hex ('#rrggbb') — drives the giving screen's background gradient. '' inherits
-   *  the accent (or the kiosk default). Think of it as the campaign's "wallpaper" colour. */
+  /** Primary color hex ('#rrggbb') — drives the giving screen's background gradient. '' inherits
+   *  the accent (or the kiosk default). Think of it as the campaign's "wallpaper" color. */
   primaryColor: string;
-  /** Accent colour hex ('#rrggbb') or '' to inherit the kiosk default (cyan). Drives the tiles'
+  /** Accent color hex ('#rrggbb') or '' to inherit the kiosk default (cyan). Drives the tiles'
    *  "Donate" band, pills and buttons. */
   accentColor: string;
   /** Full-screen background image URL for this campaign's tab, or '' for the default scene. */
@@ -275,6 +308,26 @@ export interface DonationRecord {
 
 /** A tuition (students/billing) payment in the outbox — held only to push it into the Students ledger
  *  and retry until recorded. Deliberately holds NO PIN / typed name. `allocations` null = pay-full. */
+/** One WhatsApp send, as far as we know about it. `refused` is OURS — the platform rejected the
+ *  message outright with a reason (an unapproved group, a number with no country code, our own
+ *  gateway number) and nothing was ever queued. The other four are the platform's own states. */
+export interface WhatsAppSendRecord {
+  state: 'queued' | 'sent' | 'failed' | 'expired' | 'refused';
+  at: number;
+  /** The platform's message id, so a `queued` can later be resolved. Empty for `refused`. */
+  messageId: string;
+  /** Plain language, from the platform. Empty unless something went wrong. */
+  reason: string;
+  /** How many alerts of this kind our own pacing gate held back before this one. */
+  suppressed: number;
+  /** Which alert this message was for. Recorded because these are now keyed by RECIPIENT, so the
+   *  row on the settings screen has to be able to say what the last message was about. */
+  alertId: string;
+  /** The platform later reported that the masjid's WhatsApp link was dead when this was sent, so
+   *  `sent` cannot be believed for it. See [Store.markWhatsAppSuspect]. */
+  suspect?: boolean;
+}
+
 export interface TuitionOutboxRow {
   paymentIntentId: string;
   deviceId: string;
@@ -283,7 +336,11 @@ export interface TuitionOutboxRow {
   familyId: string;
   studentId: string;
   familyLabel: string;
+  /** The TUITION — what the family owed, and what goes to Students as `amountCents`. */
   amountMinor: number;
+  /** Stripe's cut when the PAYER covered it (0.51.0); 0 = the school absorbed it. Kept SEPARATE
+   *  from `amountMinor` on purpose — the charge is their sum, the ledger only ever sees the tuition. */
+  feeMinor: number;
   currency: string;
   allocations: { invoiceId: string; amountCents: number }[] | null;
   /** The per-CHILD split (contract v2) — null = let Students derive it (a pay-full charge). */
@@ -350,7 +407,7 @@ export interface Device {
   revoked: boolean;
   /** Kiosk UI rotation in DEGREES, set from the web UI: '0' (as mounted) | '90' | '180' | '270'. The
    *  tablet rotates its own content by this angle (works even where the device ignores orientation
-   *  requests). Legacy named values are normalised to degrees on read. */
+   *  requests). Legacy named values are normalized to degrees on read. */
   orientation: string;
   /** Which side of the tablet the card reader sits on, so the kiosk can point donors to it during the
    *  card step: 'off' (no hint) | 'left' | 'right'. Left/right are in the app's LOGICAL landscape
@@ -373,7 +430,7 @@ const LEGACY_ORIENTATION: Record<string, DeviceOrientation> = {
   portraitReverse: '270',
 };
 
-/** Normalise any stored/incoming orientation to a valid degree string (default '0'). */
+/** Normalize any stored/incoming orientation to a valid degree string (default '0'). */
 export function normalizeOrientation(v: unknown): DeviceOrientation {
   const s = String(v ?? '');
   if ((DEVICE_ORIENTATIONS as readonly string[]).includes(s)) return s as DeviceOrientation;
@@ -390,7 +447,7 @@ export function normalizeOrientation(v: unknown): DeviceOrientation {
 export const DEVICE_NFC_SIDES = ['off', 'left', 'right', 'top', 'bottom'] as const;
 export type DeviceNfcSide = (typeof DEVICE_NFC_SIDES)[number];
 
-/** Normalise any stored/incoming NFC side to a valid value (default 'off'). */
+/** Normalize any stored/incoming NFC side to a valid value (default 'off'). */
 export function normalizeNfcSide(v: unknown): DeviceNfcSide {
   const s = String(v ?? '');
   return (DEVICE_NFC_SIDES as readonly string[]).includes(s) ? (s as DeviceNfcSide) : 'off';
@@ -521,7 +578,8 @@ export class Store {
         family_id TEXT NOT NULL,
         student_id TEXT NOT NULL DEFAULT '',
         family_label TEXT NOT NULL DEFAULT '',
-        amount_minor INTEGER NOT NULL,
+        amount_minor INTEGER NOT NULL,                 -- the TUITION (net). NEVER the grossed-up charge.
+        fee_minor INTEGER NOT NULL DEFAULT 0,          -- Stripe's cut, when the PAYER covered it (0.51.0)
         currency TEXT NOT NULL,
         allocations TEXT NOT NULL DEFAULT '',          -- JSON [{invoiceId,amountCents}] or '' for pay-full
         student_shares TEXT NOT NULL DEFAULT '',       -- JSON [{studentId,amountCents}] (v2 per-child split) or ''
@@ -553,9 +611,9 @@ export class Store {
       -- admin panel does is a settings edit that the settings themselves already show.
       --
       -- WHY: a masjid's admin login is shared in practice (the standalone fallback is one password,
-      -- and SSO sessions mint the same cookie), and Stripe's own dashboard only ever says "cancelled
+      -- and SSO sessions mint the same cookie), and Stripe's own dashboard only ever says "canceled
       -- by API key" — the same key for every admin. Without this there is no way to answer "who
-      -- cancelled Fatima's monthly gift, and when?". Best-effort: a failure to write an audit row
+      -- canceled Fatima's monthly gift, and when?". Best-effort: a failure to write an audit row
       -- must never fail the action it describes.
       CREATE TABLE IF NOT EXISTS admin_audit (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -649,6 +707,9 @@ export class Store {
       const tcols = (this.db.prepare('PRAGMA table_info(tuition_outbox)').all() as { name: string }[]).map((c) => c.name);
       if (!tcols.includes('student_shares')) this.db.exec("ALTER TABLE tuition_outbox ADD COLUMN student_shares TEXT NOT NULL DEFAULT ''");
       if (!tcols.includes('bill_lines')) this.db.exec("ALTER TABLE tuition_outbox ADD COLUMN bill_lines TEXT NOT NULL DEFAULT ''");
+      // Payer-covered processing fee (0.51.0, §11.2). 0 is correct for every legacy row: before this
+      // existed the school absorbed the fee, so the tuition and the charge were the same number.
+      if (!tcols.includes('fee_minor')) this.db.exec('ALTER TABLE tuition_outbox ADD COLUMN fee_minor INTEGER NOT NULL DEFAULT 0');
     }
     // Tighten file perms where the OS supports it (the admin hash + signing secret live here).
     try {
@@ -828,6 +889,311 @@ export class Store {
     return merged;
   }
 
+  // ── Where each admin alert goes (see alerts.ts) ─────────────────────────────
+  /** Stored per alert, merged over the defaults on read — so an alert added in a later release
+   *  arrives at its default (relay on) rather than missing from a saved blob. */
+  getAlertRoutes(): AlertRoutes {
+    const saved = this.getJson<Partial<Record<string, Partial<AlertRoute>>>>('alert_routes', {});
+    const out = defaultRoutes();
+    for (const id of ALERT_IDS) {
+      const s = saved?.[id];
+      if (s) out[id] = sanitizeRoute(s, out[id]);
+    }
+    return out;
+  }
+
+  setAlertRoute(id: AlertId, patch: Partial<AlertRoute>): AlertRoutes {
+    const all = this.getAlertRoutes();
+    all[id] = sanitizeRoute(patch, all[id]);
+    this.setRaw('alert_routes', JSON.stringify(all));
+    return all;
+  }
+
+  /**
+   * The recipient list: one row per person or group, each carrying the alerts they hear about.
+   *
+   * THE MIGRATION IS THE INTERESTING PART. Before 0.12.0-dev.10 each alert held a single email and
+   * a single phone number, so an upgrade has to turn "these six alerts each had an address in a
+   * box" into "these addresses are subscribed to these alerts" without losing a single one. It runs
+   * exactly once, marked by `alert_recipients_migrated`, and is driven by [migrateLegacyRoutes] so
+   * the grouping rule is unit-tested rather than buried in a method.
+   *
+   * The marker is separate from the list being empty: an admin who deliberately removes every
+   * recipient must not have the old ones resurrected on the next read.
+   */
+  getAlertRecipients(): AlertRecipient[] {
+    if (!this.getRaw('alert_recipients_migrated')) this.migrateAlertRecipients();
+    const saved = this.getJson<{ list?: unknown[] }>('alert_recipients', {});
+    const list = Array.isArray(saved.list) ? saved.list : [];
+    const out: AlertRecipient[] = [];
+    for (const raw of list) {
+      if (!raw || typeof raw !== 'object') continue;
+      const r = raw as Partial<AlertRecipient>;
+      if (typeof r.id !== 'string' || !r.id) continue;
+      if (!isRecipientKind(r.kind)) continue;
+      const address = canonicalAddress(r.kind, typeof r.address === 'string' ? r.address : '');
+      if (!address) continue;
+      const base: AlertRecipient = {
+        id: r.id.slice(0, 40),
+        kind: r.kind,
+        address,
+        label: '',
+        alerts: [],
+        // An older row written before this field existed behaves as it did then: names included.
+        includeNames: r.includeNames !== false,
+      };
+      out.push(sanitizeRecipient({ label: r.label, alerts: r.alerts, includeNames: base.includeNames }, base));
+    }
+    return out;
+  }
+
+  private writeAlertRecipients(list: AlertRecipient[]): void {
+    this.setRaw('alert_recipients', JSON.stringify({ list: list.slice(0, MAX_ALERT_RECIPIENTS) }));
+  }
+
+  /** Carry a pre-recipient-list install's addresses across. Runs once; see [getAlertRecipients]. */
+  private migrateAlertRecipients(): void {
+    const legacy = this.getJson<Partial<Record<string, Partial<LegacyAlertRoute>>>>('alert_routes', {});
+    const { routes, recipients } = migrateLegacyRoutes(legacy);
+    // Rewrite the routes blob in the new (relay-only) shape, keeping each alert's own `os` value.
+    this.setRaw('alert_routes', JSON.stringify(routes));
+    this.writeAlertRecipients(recipients.map((r) => ({ ...r, id: rid('rcp') })));
+    this.setRaw('alert_recipients_migrated', new Date().toISOString());
+  }
+
+  /** Add one. Returns null when the address is already on the list — the same inbox or number
+   *  subscribed twice would simply double every message it gets. */
+  addAlertRecipient(draft: Omit<AlertRecipient, 'id'>): AlertRecipient | null {
+    const list = this.getAlertRecipients();
+    if (list.length >= MAX_ALERT_RECIPIENTS) return null;
+    const address = canonicalAddress(draft.kind, draft.address);
+    if (!address || !addressLooksValid(draft.kind, address)) return null;
+    if (list.some((r) => r.kind === draft.kind && r.address === address)) return null;
+    const row = sanitizeRecipient(
+      { label: draft.label, alerts: draft.alerts, includeNames: draft.includeNames },
+      { id: rid('rcp'), kind: draft.kind, address, label: '', alerts: [], includeNames: draft.includeNames },
+    );
+    this.writeAlertRecipients([...list, row]);
+    return row;
+  }
+
+  updateAlertRecipient(id: string, patch: Partial<AlertRecipient>): AlertRecipient | null {
+    const list = this.getAlertRecipients();
+    const i = list.findIndex((r) => r.id === id);
+    if (i < 0) return null;
+    const next = sanitizeRecipient(patch, list[i]);
+    // Changing an address onto one already present would create the duplicate `add` refuses.
+    if (next.address !== list[i].address && list.some((r, j) => j !== i && r.kind === next.kind && r.address === next.address)) {
+      return null;
+    }
+    const copy = [...list];
+    copy[i] = next;
+    this.writeAlertRecipients(copy);
+    return next;
+  }
+
+  removeAlertRecipient(id: string): boolean {
+    const list = this.getAlertRecipients();
+    const next = list.filter((r) => r.id !== id);
+    if (next.length === list.length) return false;
+    this.writeAlertRecipients(next);
+    // Their delivery record goes with them — it is about a row that no longer exists.
+    const outcomes = this.getWhatsAppOutcomes();
+    if (outcomes[id]) {
+      delete outcomes[id];
+      this.setRaw('whatsapp_outcomes', JSON.stringify(outcomes));
+    }
+    return true;
+  }
+
+  /** How hard we are allowed to lean on the masjid's WhatsApp number. See alerts.ts. */
+  getWhatsAppPacing(): WhatsAppPacing {
+    const s = this.getJson<Partial<WhatsAppPacing>>('whatsapp_pacing', {});
+    return sanitizePacing(s, { ...DEFAULT_PACING });
+  }
+
+  setWhatsAppPacing(patch: Partial<WhatsAppPacing>): WhatsAppPacing {
+    const next = sanitizePacing(patch, this.getWhatsAppPacing());
+    this.setRaw('whatsapp_pacing', JSON.stringify(next));
+    return next;
+  }
+
+  /**
+   * The pacing ledger — every WhatsApp handover in the last day.
+   *
+   * PERSISTED, deliberately. The first version of the gate kept this in memory and argued that a
+   * restart letting one extra message through was the right direction to fail. That holds for a
+   * burst gap measured in minutes; it does not hold for a DAILY cap, which an in-memory ledger
+   * resets on every deploy — and on the dev channel that is several times an afternoon, so the
+   * limit the admin set would have been close to fiction.
+   */
+  getWhatsAppLedger(): WhatsAppLedger {
+    const s = this.getJson<{ sends?: unknown; perAlert?: unknown }>('whatsapp_ledger', {});
+    const sends = Array.isArray(s.sends) ? s.sends.filter((n): n is number => typeof n === 'number' && n > 0) : [];
+    const perAlert: WhatsAppLedger['perAlert'] = {};
+    if (s.perAlert && typeof s.perAlert === 'object') {
+      for (const [k, v] of Object.entries(s.perAlert as Record<string, unknown>)) {
+        if (!isAlertId(k) || !v || typeof v !== 'object') continue;
+        const e = v as { lastSentAt?: unknown; suppressed?: unknown };
+        perAlert[k] = {
+          lastSentAt: Math.max(0, Math.trunc(Number(e.lastSentAt) || 0)),
+          suppressed: Math.max(0, Math.trunc(Number(e.suppressed) || 0)),
+        };
+      }
+    }
+    return pruneLedger({ sends, perAlert }, Date.now());
+  }
+
+  setWhatsAppLedger(ledger: WhatsAppLedger): void {
+    this.setRaw('whatsapp_ledger', JSON.stringify(pruneLedger(ledger, Date.now())));
+  }
+
+  /**
+   * The last thing that happened to a WhatsApp message for each alert.
+   *
+   * WHY THIS IS PERSISTED. Before OpenMasjidOS 0.51.1 there was no way to learn the fate of a
+   * message: we were told `queued: true` and that was the end of it, so an admin whose alerts
+   * silently stopped arriving had nothing to look at and no reason to suspect the platform rather
+   * than us. Now the platform can tell us, and the only useful place to put that answer is in front
+   * of the admin on the screen where they turned the channel on.
+   *
+   * Kept in the kv table rather than its own: it is one small record per recipient, overwritten each
+   * time, and nothing reads it but the settings screen.
+   *
+   * KEYED BY RECIPIENT, not by alert (0.12.0-dev.10). It used to be one record per alert id, which
+   * was unambiguous only while an alert had exactly one destination. With a recipient list, "the
+   * last WhatsApp for this alert" could mean any of five rows, and the one thing an admin actually
+   * wants to know is whether the message to THIS number arrived. The alert id rides along in the
+   * record so the row can still say what the message was about.
+   *
+   * NO MESSAGE TEXT AND NO PHONE NUMBER is stored here — a state, a platform-authored reason, and a
+   * timestamp. The number already lives in the recipient row; the text is not ours to keep.
+   */
+  getWhatsAppOutcomes(): Record<string, WhatsAppSendRecord> {
+    const saved = this.getJson<Record<string, Partial<WhatsAppSendRecord>>>('whatsapp_outcomes', {});
+    const out: Record<string, WhatsAppSendRecord> = {};
+    for (const [key, r] of Object.entries(saved ?? {})) {
+      if (!key || key.length > 40 || !r || typeof r !== 'object') continue;
+      const state = r.state;
+      if (state !== 'queued' && state !== 'sent' && state !== 'failed' && state !== 'expired' && state !== 'refused') continue;
+      out[key] = {
+        state,
+        at: Number(r.at) || 0,
+        messageId: typeof r.messageId === 'string' ? r.messageId.slice(0, 128) : '',
+        reason: typeof r.reason === 'string' ? r.reason.slice(0, 200) : '',
+        suppressed: Math.max(0, Math.trunc(Number(r.suppressed) || 0)),
+        alertId: typeof r.alertId === 'string' && isAlertId(r.alertId) ? r.alertId : '',
+        suspect: r.suspect === true,
+      };
+    }
+    return out;
+  }
+
+  /**
+   * Suspect windows the admin has already dealt with.
+   *
+   * ONLY THE DISMISSALS ARE OURS NOW. The first version of this hoarded the windows themselves,
+   * because the platform reported one only while the outage was open and forgot it the instant an
+   * admin re-linked — so the evidence vanished exactly when someone went looking. We reported that
+   * and OpenMasjidOS 0.51.1-dev.13 fixed it: windows are retained for seven days after recovery. The
+   * platform is the source of truth again, and all this app needs to remember is which ones a human
+   * has ticked off, because that is a fact about our UI that the platform has no idea about.
+   *
+   * Keyed by `from`, which identifies an incident. Pruned at 30 days — comfortably past the
+   * platform's 7-day retention, so a dismissal can never expire before the thing it dismissed and
+   * resurrect a banner someone already dealt with.
+   */
+  getDismissedSuspectWindows(): number[] {
+    const saved = this.getJson<{ list?: unknown[] }>('whatsapp_suspect_dismissed', {});
+    const list = Array.isArray(saved.list) ? saved.list : [];
+    const cutoff = Date.now() - 30 * 24 * 60 * 60_000;
+    return list
+      .map((v) => Math.trunc(Number(v) || 0))
+      .filter((v) => v > cutoff)
+      .slice(0, 100);
+  }
+
+  dismissSuspectWindow(from: number): boolean {
+    const list = this.getDismissedSuspectWindows();
+    if (list.includes(from)) return false;
+    this.setRaw('whatsapp_suspect_dismissed', JSON.stringify({ list: [from, ...list].slice(0, 100) }));
+    return true;
+  }
+
+  /**
+   * Flag delivery records the platform named by message id.
+   *
+   * PREFERRED OVER MATCHING BY TIMESTAMP. The platform now hands back the actual ids of our
+   * messages that fell in a window, so there is no need to reason about whether a record's single
+   * timestamp lands inside an interval — a comparison that is ambiguous for anything queued on one
+   * side of the boundary and sent on the other. Exact is better than close.
+   */
+  markWhatsAppSuspectByIds(ids: string[]): number {
+    if (ids.length === 0) return 0;
+    const wanted = new Set(ids);
+    const all = this.getWhatsAppOutcomes();
+    let n = 0;
+    for (const [key, rec] of Object.entries(all)) {
+      if (rec.suspect || !rec.messageId || !wanted.has(rec.messageId)) continue;
+      all[key] = { ...rec, suspect: true };
+      n += 1;
+    }
+    if (n > 0) this.setRaw('whatsapp_outcomes', JSON.stringify(all));
+    return n;
+  }
+
+  /**
+   * Flag by time window — the fallback for a platform too old to send ids, and for a window whose
+   * id list was truncated at the platform's 500 cap.
+   *
+   * Only records we were told reached WhatsApp: a `refused` was never handed over and was honestly
+   * reported at the time, so it is not in doubt and flagging it would send someone to re-check a
+   * known failure.
+   *
+   * A CAVEAT WORTH KNOWING: we keep only the LAST outcome per recipient, so this can flag at most
+   * one message per recipient even when the platform counted nine. The window itself is the
+   * reliable artefact; these flags are a convenience on top of it.
+   */
+  markWhatsAppSuspect(from: number, to: number): number {
+    const all = this.getWhatsAppOutcomes();
+    let n = 0;
+    for (const [key, rec] of Object.entries(all)) {
+      if (rec.suspect) continue;
+      if (rec.at < from || rec.at > to) continue;
+      // `sent` ONLY — not `queued`, which this used to include and which was wrong twice over.
+      //
+      // The claim being doubted is "reported SENT but may never have arrived". A record still
+      // reading `queued` was never claimed delivered, so there is nothing about it to disbelieve.
+      // Worse, it is exactly the false positive the platform warned about: a message queued DURING
+      // an outage is held, released when the admin re-links, and delivered perfectly well — its
+      // record carries the queue-time timestamp, lands inside the window, and would be flagged for
+      // a delivery that succeeded. `refused` is excluded for the opposite reason: it never reached
+      // WhatsApp at all and was reported honestly at the time.
+      if (rec.state !== 'sent') continue;
+      all[key] = { ...rec, suspect: true };
+      n += 1;
+    }
+    if (n > 0) this.setRaw('whatsapp_outcomes', JSON.stringify(all));
+    return n;
+  }
+
+  /** `key` is a RECIPIENT id. */
+  setWhatsAppOutcome(key: string, rec: WhatsAppSendRecord): void {
+    const all = this.getWhatsAppOutcomes();
+    all[key] = {
+      state: rec.state,
+      at: rec.at || Date.now(),
+      messageId: (rec.messageId || '').slice(0, 128),
+      reason: (rec.reason || '').slice(0, 200),
+      suppressed: Math.max(0, Math.trunc(rec.suppressed || 0)),
+      alertId: rec.alertId || '',
+      // A NEW message to this recipient is not in doubt just because an older one was, so this is
+      // taken from the incoming record (normally absent = false) rather than carried over.
+      suspect: rec.suspect === true,
+    };
+    this.setRaw('whatsapp_outcomes', JSON.stringify(all));
+  }
+
   /** The emailed donation-receipt template (admin-editable). Off by default. */
   getEmailReceipt(): EmailReceipt {
     const s = this.getJson<Partial<EmailReceipt>>('email_receipt', {});
@@ -896,7 +1262,7 @@ export class Store {
   setGiving(patch: Partial<GivingConfig>): GivingConfig {
     const cur = this.getGiving();
     const merged: GivingConfig = { ...cur, ...clean(patch as Record<string, unknown>) } as GivingConfig;
-    // Sanitise: at most 6 positive integer presets; sane custom bounds; known policies.
+    // Sanitize: at most 6 positive integer presets; sane custom bounds; known policies.
     merged.presetsMinor = (Array.isArray(merged.presetsMinor) ? merged.presetsMinor : [])
       .map((n) => Math.round(Number(n)))
       .filter((n) => Number.isFinite(n) && n > 0)
@@ -926,14 +1292,11 @@ export class Store {
     return merged;
   }
 
-  /** Server-side amount guard (never trust the tablet): an allowed amount is a configured
-   *  preset, or — when custom is enabled — within [min,max]. Integer minor units only. */
-  isAllowedAmount(amountMinor: number): boolean {
-    if (!Number.isInteger(amountMinor) || amountMinor <= 0) return false;
-    const g = this.getGiving();
-    if (g.presetsMinor.includes(amountMinor)) return true;
-    return g.allowCustom && amountMinor >= g.customMinMinor && amountMinor <= g.customMaxMinor;
-  }
+  // (There used to be an `isAllowedAmount(amountMinor)` here, checking the amount against the
+  // single global giving config. Campaigns replaced it: every appeal carries its own presets and
+  // bounds, so the guard that actually runs is `isAllowedAmountForCampaign` below, and the payment
+  // route has only ever called that one. Removed 2026-08-17 — a second, laxer amount guard sitting
+  // next to the real one is worth deleting rather than leaving for someone to reach for.)
 
   // ── Campaigns (giving appeals, shown as kiosk tabs) ─────────────────────────
   private rowToCampaign(r: Record<string, unknown>): Campaign {
@@ -979,7 +1342,7 @@ export class Store {
     };
   }
 
-  /** Clamp/normalise campaign fields (server-authoritative — never trust the client). */
+  /** Clamp/normalize campaign fields (server-authoritative — never trust the client). */
   private sanitizeCampaign(c: Campaign): Campaign {
     const hex = (v: string): string => (/^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : '');
     const img = (v: string): string => {
@@ -1207,12 +1570,32 @@ export class Store {
   }
 
   /** Remember which Stripe account a PaymentIntent was created on, so /complete verifies it with
-   *  the SAME account's key (campaigns can settle to different accounts). Best-effort: prunes old
-   *  rows; if lost (e.g. a restart between create and complete), the caller falls back to primary. */
+   *  the SAME account's key (campaigns can settle to different accounts). If lost (e.g. a restart
+   *  between create and complete), the caller falls back to primary.
+   *
+   *  THE PRUNE USED TO DROP EVERYTHING AFTER 7 DAYS, and its reasoning — "a PI is completed within
+   *  seconds, so 7 days is generous" — was right about the only reader it had at the time. Then
+   *  refunds shipped, and `/api/admin/donations/:id/refund` reads the same table to pick the key to
+   *  refund WITH. A refund happens days or weeks later, which is precisely when the row was gone:
+   *  the lookup fell back to the primary account, Stripe correctly answered "no such
+   *  payment_intent" for a PI that lives on a campaign's own account, and the admin got a 502 they
+   *  could never get past. A donor asking for their money back a month later is the ordinary case,
+   *  not the edge one.
+   *
+   *  So a row is now kept for as long as its donation exists, and only ABANDONED attempts — PIs
+   *  that never became a donation, a tuition payment or a plan's first payment — are pruned. Those
+   *  are the ones that would otherwise accumulate, and nothing can ever need their account again. */
   rememberPiAccount(pi: string, account: string): void {
     this.db.prepare('INSERT OR REPLACE INTO pi_accounts (pi, account, created_at) VALUES (?, ?, ?)').run(pi, account, new Date().toISOString());
-    // Keep the table small — a PI is completed within seconds, so 7 days is generous.
-    this.db.prepare("DELETE FROM pi_accounts WHERE created_at < ?").run(new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString());
+    this.db
+      .prepare(
+        `DELETE FROM pi_accounts
+          WHERE created_at < ?
+            AND pi NOT IN (SELECT payment_intent_id FROM donations)
+            AND pi NOT IN (SELECT payment_intent_id FROM tuition_outbox)
+            AND pi NOT IN (SELECT first_payment_intent_id FROM plans)`,
+      )
+      .run(new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString());
   }
   getPiAccount(pi: string): string {
     const r = this.db.prepare('SELECT account FROM pi_accounts WHERE pi = ?').get(pi) as { account?: string } | undefined;
@@ -1447,7 +1830,11 @@ export class Store {
     familyId: string;
     studentId?: string;
     familyLabel?: string;
+    /** The TUITION — what the family owed. Never the grossed-up charge: this is the number sent to
+     *  Students as `amountCents`, and a gross there is booked as an overpayment. */
     amountMinor: number;
+    /** Stripe's cut, when the payer covered it (0.51.0). 0 = the school absorbed it, as before. */
+    feeMinor?: number;
     currency: string;
     allocations?: { invoiceId: string; amountCents: number }[] | null;
     students?: { studentId: string; amountCents: number }[] | null;
@@ -1456,9 +1843,9 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO tuition_outbox (payment_intent_id, device_id, campaign_id, stripe_account_id, family_id,
-           student_id, family_label, amount_minor, currency, allocations, student_shares, bill_lines, created_at)
+           student_id, family_label, amount_minor, fee_minor, currency, allocations, student_shares, bill_lines, created_at)
          VALUES (@pi, @deviceId, @campaignId, @stripeAccountId, @familyId, @studentId, @familyLabel,
-           @amountMinor, @currency, @allocations, @studentShares, @billLines, @createdAt)
+           @amountMinor, @feeMinor, @currency, @allocations, @studentShares, @billLines, @createdAt)
          ON CONFLICT(payment_intent_id) DO NOTHING`,
       )
       .run({
@@ -1470,6 +1857,7 @@ export class Store {
         studentId: d.studentId || '',
         familyLabel: d.familyLabel || '',
         amountMinor: d.amountMinor,
+        feeMinor: Math.max(0, Math.trunc(d.feeMinor ?? 0)),
         currency: d.currency,
         allocations: d.allocations && d.allocations.length ? JSON.stringify(d.allocations) : '',
         studentShares: d.students && d.students.length ? JSON.stringify(d.students) : '',
@@ -1530,6 +1918,7 @@ export class Store {
       studentId: String(r.student_id ?? ''),
       familyLabel: String(r.family_label ?? ''),
       amountMinor: Number(r.amount_minor),
+      feeMinor: Number(r.fee_minor ?? 0),
       currency: String(r.currency),
       allocations,
       students,

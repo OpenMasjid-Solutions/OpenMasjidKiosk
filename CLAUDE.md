@@ -39,21 +39,55 @@ If it prints anything else, `git checkout dev` first. If you are on `main`, you 
 6. **After every push to `dev`, ask.** End the reply with a clear one-line offer — *"Pushed to `dev`. Do you want me to push to main?"* — and then keep working on `dev` until he answers with the words in rule 4. Ask every time, not once per session: the answer is per change, and silence is not a yes. A "no" (or no reply) means carry on pushing to `dev` as normal.
 6b. **Version every dev build you want installable.** OpenMasjidOS decides an app has an update by comparing the catalog's `version:` with the installed one, so a dev build that reuses the last stable version is *undetectable* — nothing to notify about, nothing to install. So on `dev`, `version:` is a **semver prerelease `X.Y.Z-dev.N`**: `X.Y.Z` is the release being worked toward, `N` increments on each publishable dev build. Stable 0.10.2 → `0.11.0-dev.1`, `-dev.2`, … → ships as `0.11.0` → dev moves to `0.12.0-dev.1`. It must never equal a stable version; `0.10.2 < 0.11.0-dev.1 < 0.11.0` is exactly right.
 
-    Bump **all six together** — `VERSION`, `manifest.yaml`, `server/package.json`, `web/package.json`, both lockfile `version` fields — **and** the tag in `docker-compose.yml`, which must equal `manifest.yaml`'s version exactly. CI fails the build on drift, on a `:dev` line, and on a non-prerelease version.
+    Bump **all six together** — `VERSION`, `manifest.yaml`, `server/package.json`, `web/package.json`, both lockfile `version` fields (each carries it **twice**: top level and `packages[""]`) — **and** the tag in `docker-compose.yml`, which must equal `manifest.yaml`'s version exactly.
+
+    **CI now genuinely checks all of them** (`build-image.yml` → "Check every version field agrees"), plus the `:dev` line and the prerelease shape. Until 0.12.0 this sentence was a promise the workflow did not keep: it compared the compose tag against the manifest and nothing else. That gap mattered because **`server/package.json` is where `config.version` is read from** — forget it and the build is green, the image publishes, and the server tells every tablet the *previous* version is the latest, which is a permanent false "Update available" that installing cannot clear.
 
     The `-dev.N` **shape is load-bearing**: the platform compares dotted-numeric parts, so `N` must sit in its own dotted position. `0.11.0-dev1` collapses to `0.11.0` and is silently never offered. Pinned by `server/src/config.test.ts`.
-7. **That merge is a release.** When told, run the full runbook: set the release version (drop the `-dev.N`) in `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and write the `CHANGELOG.md` release entry (rule 7b) → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → bump the OpenMasjidAPPS `registry.yaml` entry (`ref:` + the immutable 40-char `commit:`) → start the next dev cycle at `X.Y+1.0-dev.1`. `VERSION` moves on `dev` too (rule 6b), and so does `CHANGELOG.md` (rule 7b).
+7. **That merge is a release.** When told, run the full runbook: set the release version (drop the `-dev.N`) in `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and write the `CHANGELOG.md` release entry (rule 7b) → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → **open a PR against OpenMasjidAPPS `dev` and stop there** (rule 7c — you cannot and must not push the catalog yourself) → start the next dev cycle at `X.Y+1.0-dev.1`. `VERSION` moves on `dev` too (rule 6b), and so does `CHANGELOG.md` (rule 7b).
 
 7b. **`CHANGELOG.md`: two audiences, one file.** The changelog ships *inside the image* — the admin panel's "What's new" reads it from disk — so it is a product surface, not a git artefact, and it has to serve a masjid admin reading release notes and a developer tracking `dev` at the same time. It therefore has two kinds of section, and both branches carry the file:
 
     | Section | Lives on | Contains | Written |
     |---|---|---|---|
     | `## Unreleased` (always at the top) | **`dev` only** | **Every** dev change, in full: fixes, internals, docs sweeps, dead code, anything a tester on the dev channel would notice or want explained. | On each publishable dev build, as part of the same commit. |
-    | `## X.Y.Z` | **both** branches | **MAJOR changes only** — what a masjid actually needs to know: new capability, changed behaviour, a fix for something they hit. Not internals, not refactors, not doc edits. | At release, by distilling `## Unreleased`. |
+    | `## X.Y.Z` | **both** branches | **MAJOR changes only** — what a masjid actually needs to know: new capability, changed behavior, a fix for something they hit. Not internals, not refactors, not doc edits. | At release, by distilling `## Unreleased`. |
 
     **At release:** distil `## Unreleased` down to the major-only `## X.Y.Z` entry. `main` gets that entry and **no `## Unreleased` section at all** — a stable install must never read notes for code it isn't running. `dev` gets the same `## X.Y.Z` entry *plus* a fresh empty `## Unreleased` above it for the next cycle. The two files differ only by that section, and that difference is deliberate and permanent — do not "fix" it by syncing them.
 
     **Never delete or rewrite a released `## X.Y.Z` section.** They are the notes running installs display. (This has been broken twice: once by merging `main` into a stale branch, which silently dropped twelve of them, and once by an edit whose search text started at the `## Unreleased` heading and whose replacement did not put it back. Check `grep -c '^## ' CHANGELOG.md` before and after any changelog edit.)
+
+7c. **Getting a stable release into the OpenMasjidOS catalog — you go as far as a PR, and no further.** Stable moves only through a **catalog release run by a catalog maintainer**. Our part ends at an open pull request.
+
+    **Step 1 — in THIS repo, in this order. The order is the whole point.**
+
+    1. Bump `manifest.yaml` (and the rest of rule 6b's fields) to the release version.
+    2. Let CI build and publish the image.
+    3. Commit `docker-compose.yml` carrying the **published image's `@sha256` digest**.
+    4. **Tag the digest-pin commit from step 3 — not the commit before it.** The commit before it is the one *called* `release: vX.Y.Z`, the one that bumps every version field and reads like the release. That is the wrong one, and it is the one you will reach for. Its `image:` line has no digest yet (or still carries the last release's), because the digest cannot exist until CI has built from it. Tag it and the tag ships the **previous** release's code under the new version number, for anyone pinning by tag. **This has already happened twice.**
+
+        ```
+        27e322b  release: v0.11.0                          <- version bump. NOT this one.
+        bb56a5e  build: pin 0.11.0 to the digest CI published   <- tag THIS one.
+        ```
+
+        Check before tagging, don't assume: `git show <commit>:docker-compose.yml | grep image:` must print an `@sha256:` that matches the digest CI printed under "What was published".
+
+    **Step 2 — open a PR against `OpenMasjid-Solutions/OpenMasjidAPPS`, base branch `dev`, never `main`.** Change **only our own entry** in `registry.yaml`:
+
+    ```yaml
+      - id: kiosk
+        ref: v0.12.0        # the tag just published — the human label
+        commit: <40-char SHA of the tagged commit>
+    ```
+
+    `commit:` is **what actually gets fetched**; `ref:` is only a label. Get it with `git rev-list -n1 v0.12.0`. Follow step 1 and they are the same commit. **If they ever differ, pin the commit that has the correct digest** — the code that gets installed comes from `commit:`, so that is the one that has to be right.
+
+    **Step 3 — stop.** Do not commit to the catalog's `main`. Do not merge the catalog's `dev` into `main`: the two branches legitimately hold *different builds* of `catalog.json`, and merging them corrupts both channels. A maintainer runs the release that moves `main`.
+
+    **The dev channel needs none of this.** `dev_ref: dev` tracks our `dev` branch automatically and rebuilds hourly. Just keep the prerelease version and its version-tagged image current — and **publish the image before pushing the version bump**, because the dev tag is exact and an entry that lands first is a pull failure on someone's box.
+
+    **The trap that makes `ref:` and `commit:` drift apart here.** `build-image.yml` triggers on `v*` tags, so pushing the tag **rebuilds and republishes** `:X.Y.Z` — moving it off the digest the tagged commit pins. The image is not bit-reproducible, so the new digest genuinely differs. Re-pinning afterwards creates a commit *after* the tag, and that is the commit whose digest matches what `:X.Y.Z` now serves. At v0.10.2 and v0.11.0 both, the release therefore ended with `ref:` and `commit:` pointing at different commits. That is survivable — every digest published stays immutable and pullable, and the source trees are identical because `docker-compose.yml` is in the workflow's `paths-ignore` — but it is exactly the ambiguity step 1 exists to prevent, so **pin the commit whose digest `:X.Y.Z` actually resolves to**, and say plainly in the PR which commit that is and why it is not the tag.
 8. **Re-pin the image line when merging to `main`.** `dev` carries `:X.Y.Z-dev.N`; `main` must always carry `:<version>@sha256:<digest>`. A merge that leaves the dev line on `main` would point every stable install at a development build — check it explicitly, every time. CI enforces both directions (a prerelease version or image reaching stable fails the build), but do not rely on that to notice for you.
 
 ### Update channels (how the two branches reach a masjid)
@@ -89,6 +123,8 @@ Both gaps that used to be listed here are closed. What the path looks like today
 - **Catalog.** `OpenMasjidAPPS/registry.yaml` carries `dev_ref: dev` for `kiosk`, and the catalog build is channel-aware: it publishes a **separate catalog per branch**, and OpenMasjidOS reads `OpenMasjidAPPS/<channel>/catalog.json`. The dev entry serves this branch's `docker-compose.yml` verbatim, so that file's image tag is what a masjid actually installs. Confirm with:
   `curl -s https://raw.githubusercontent.com/OpenMasjid-Solutions/OpenMasjidAPPS/dev/catalog.json`
 - **Never let the catalog entry outrun the image.** The dev tag is exact, so an entry published before its image exists is a pull failure on someone's box. `build-image.yml` dispatches the catalog rebuild *after* the push, which orders it correctly — but OpenMasjidAPPS also rebuilds **hourly**, so a tick landing during the ~7-minute build can still catch a new `version:` before its image. That is why the version bump belongs in the same push as the build that publishes it, and never ahead of it.
+
+    **What the catalog actually does in that window (observed 2026-08-21):** it falls back to our **stable** entry, so a dev box is briefly told the current version is the last release — a silent cross-channel downgrade, not the loud pull failure this section used to predict. It lasted about three minutes and recovered on the next rebuild, and every other app kept its own dev prerelease throughout, so it is the catalog resolving *our* entry and preferring `ref:` over `dev_ref:` when the dev image is not in GHCR yet. Nothing to fix here — the bump and the build are already one push, and the gap is inherent — but worth knowing before someone chases a phantom downgrade, and worth raising with a catalog maintainer: keeping the previous dev entry would be the better fallback.
 - **APK channel identity.** `VERSION` itself now carries the prerelease, and both the APK (`versionName`) and the server (`config.version`) read it — so a dev tablet reports `0.11.0-dev.1` against a dev server saying the same, and the tablet's string comparison stays honest. The old `APP_VERSION_SUFFIX=-dev` mechanism is retired (CI passes an empty suffix): it existed only because `VERSION` used to be identical on both branches, and appending to a prerelease would give the uncomparable `0.11.0-dev.1-dev`. `applyVersionSuffix` now refuses to touch a version that already has a prerelease, so re-enabling it is harmless. `versionCode` stays a hardcoded `1` **on purpose** — equal versionCode is a permitted reinstall, so dev and stable APKs install over each other in both directions; a higher dev versionCode would make the stable APK a genuine downgrade and trap the tablet.
 - **How an update actually lands.** OpenMasjidOS compares the catalog's `version:` with the installed one — the same mechanism on both channels. That is the whole reason dev builds carry `X.Y.Z-dev.N`: with the old scheme (stable version + moving `:dev` tag) a new dev build changed nothing observable, so the platform could not notify and had nothing to install.
 
@@ -134,11 +170,14 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
   ├── CHANGELOG.md             # ships INSIDE the image — the panel's "What's new" (rule 7b)
   ├── server/                  # Node 22 + TypeScript + Fastify + better-sqlite3
   ├── web/                     # React + Vite + Tailwind admin panel (+ /new page)
-  ├── android/                 # Kotlin + Jetpack Compose kiosk app (Gradle)
-  ├── docs/                    # TABLET_SETUP, READER_SETUP, ARCHITECTURE, REMOTE_ADOPTION,
+  ├── android/                 # Kotlin + Jetpack Compose, THREE Gradle modules:
+  │     ├── core/              #   shared: server client, pairing, device store, Terminal, theme
+  │     ├── app/               #   the locked-down wall KIOSK (HOME launcher, Lock Task, exit PIN)
+  │     └── mobile/            #   OpenMasjid Mobile Donations — a volunteer's phone at an event
+  ├── docs/                    # TABLET_SETUP, MOBILE_DONATIONS, READER_SETUP, ARCHITECTURE, REMOTE_ADOPTION,
   │                            #   STUDENTS_INTEGRATION, FABRIC_BILLING_CONTRACT, audit/
   ├── assets/                  # README artwork (not shipped in the image)
-  ├── apk/                     # CI drops the built APK here for the Dockerfile to bundle
+  ├── apk/                     # CI drops BOTH built APKs here for the Dockerfile to bundle
   └── .github/workflows/       # build-image.yml (GHCR multi-arch) + build-apk.yml + cla.yml
   ```
   *(The building guide suggests repos named `openmasjid-<id>`; the shipped apps use the `OpenMasjidX` style. Keep `OpenMasjidKiosk` for consistency with Display/Donations — what must match is the **image name**: the compose references the lowercased repo, `ghcr.io/openmasjid-solutions/openmasjidkiosk`.)*
@@ -177,11 +216,19 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
 - ~~Public/internet exposure~~ — **now supported (v0.9.20+) as opt-in REMOTE ADOPTION** over the OS
   Cloudflare tunnel (manifest `domain: true` + `tunnel: true`). A tablet at another site pairs to
   `https://omos.<domain>/<basePath>` (default `/kiosk`) once the admin turns on Remote access in
-  OpenMasjidOS AND flips "Allow remote adoption" in our admin. **Kiosk-endpoints-only over the tunnel:**
-  the server is base-path aware and 404s `/api/admin` + `/api/fabric` on tunnel-origin requests, so only
-  `/new`, the APK, `/api/app`/appearance, and `/api/kiosk/*` are internet-reachable; the admin panel
-  stays LAN-only. Remote pairing uses the real Cloudflare cert (system trust) — the LAN path still uses
-  self-signed + trust-on-first-use pinning. See `docs/REMOTE_ADOPTION.md`.
+  OpenMasjidOS AND flips "Allow remote adoption" in our admin. **Kiosk-endpoints-only over the tunnel**,
+  and it is an **allowlist, not a denylist** — `blockedOverTunnel` in `tunnel.ts` refuses *every* `/api`
+  path except `/api/app`, `/api/public/*` and `/api/kiosk/*`, plus all of `/fabric/*`. (This used to
+  read "404s `/api/admin` + `/api/fabric`", which understates it in the direction that matters: add a
+  new `/api/…` route for the tablet and it is refused over the tunnel until you allow-list it. And
+  `/fabric` is **not** under `/api`, so it needed its own rule — every non-`/api` path falls through as
+  allowed, which is correct for the SPA, `/new`, `/download` and `/uploads`, and was quietly wrong the
+  day the first `/fabric/*` route shipped.) The admin panel stays LAN-only.
+
+  **The tablet chooses its TLS mode from the ADDRESS TYPED, not from the certificate chain**
+  (`KioskRepository.isPrivateHost`): a private-range IP, `localhost`, `*.local` or `*.lan` gets
+  self-signed + trust-on-first-use pinning; anything else gets ordinary system-CA validation with
+  hostname verification, which is what a Cloudflare hostname needs. See `docs/REMOTE_ADOPTION.md`.
 - ~~refunds in-app (point admins at the Stripe dashboard)~~ — **now supported.** Opening a donation in
   Admin → Donations offers **Refund** (full or partial, with a Stripe reason). The server refunds the
   PaymentIntent, records the running refunded total on the row, emails the donor a branded refund note
@@ -193,7 +240,7 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
 - Play Store distribution (sideload via `/new` is the model; Play listing is a later decision).
 
 ### 🔭 Later (design for, don't build)
-- ~~Per-device amount presets & campaigns~~ — **built.** Campaigns are first-class (own amounts, colours, images, type, Stripe account, thank-you) and each targets chosen kiosks.
+- ~~Per-device amount presets & campaigns~~ — **built.** Campaigns are first-class (own amounts, colors, images, type, Stripe account, thank-you) and each targets chosen kiosks.
 - ~~`domain: true`~~ — **built**, though not as the "public giving link from a kiosk QR" originally imagined. It carries **remote adoption** (pairing a tablet at another site) and the **donor's monthly-cancel link**. A public giving *page* remains unbuilt.
 - Still later: Gift Aid; Terminal offline mode; Play Store / managed provisioning (QR device-owner enrolment); WisePOS-style internet readers; donor accounts; a screen for the `admin_audit` trail (the data and `GET /api/admin/audit` exist; nothing renders them).
 
@@ -232,18 +279,18 @@ Follow BUILDING_AN_APP.md §7 exactly; Donations is the working example.
 - **Manifest flags:** `sso: true`, `stripe: true`, `https: true`, `notifications: true`.
 - **Compose must reference** `${OPENMASJID_BASE_URL:-}`, `${OPENMASJID_APP_ID:-}`, `${OPENMASJID_APP_SECRET:-}` in `environment:` — without these lines the injected values never reach the container and the Fabric silently no-ops (the documented Display trap).
 - **SSO:** on the request that loads the admin panel, forward the `omos_session` cookie (from the request only) server→server to `GET ${OPENMASJID_BASE_URL}/api/auth/session` with `X-OpenMasjid-App-Secret`. Identity assertion only; fail closed; cache ~45 s; mint our own session ≤ 1 h; **always** keep the local admin-password fallback so the panel works standalone and never bricks when the platform is unreachable (distinguish *SSO not configured* from *platform unreachable*).
-- **Stripe account (this is "the Fabric gets the Stripe acc from the OS"):** the admin adds named Stripe accounts once in **OS Settings → Payments**. Our Payments screen lists them via `GET /api/fabric/stripe/accounts` (no keys) and stores only the chosen **account id**. On process start (and on account change) fetch keys via `GET /api/fabric/stripe?account=<id>` with the app secret; hold `publishableKey`/`secretKey` **in memory only**. Show a **TEST MODE** badge for `sk_test_`/`pk_test_`. Keep manual key entry as the **standalone fallback** only (platform absent), clearly labelled.
+- **Stripe account (this is "the Fabric gets the Stripe acc from the OS"):** the admin adds named Stripe accounts once in **OS Settings → Payments**. Our Payments screen lists them via `GET /api/fabric/stripe/accounts` (no keys) and stores only the chosen **account id**. On process start (and on account change) fetch keys via `GET /api/fabric/stripe?account=<id>` with the app secret; hold `publishableKey`/`secretKey` **in memory only**. Show a **TEST MODE** badge for `sk_test_`/`pk_test_`. Keep manual key entry as the **standalone fallback** only (platform absent), clearly labeled.
 - **Restore resilience (required):** read `OPENMASJID_*` from env on every start; never persist them or fetched keys or a "linked" flag; all Fabric calls time out (~4 s) and fail soft to standalone.
-- **Notifications:** after a successful donation, `POST /api/fabric/notify` (`"£20 donation received at the foyer kiosk"`, level `success`). Best-effort; never block or depend on it.
+- **Notifications:** after a successful donation, `POST /api/fabric/notify` (`"$20 donation received at the foyer kiosk"`, level `success`). Best-effort; never block or depend on it.
 
 ---
 
 ## 7. Devices: `/new`, pairing, and transport security
 
 - **`/new`** (public route on the app's port): a friendly one-page setup guide — big "Download the kiosk app" button serving the **APK bundled into the server image at build time** (so the app version always matches the server), sideload instructions ("allow installs from your browser"), and "then enter the **6-digit pairing code** from **Admin → Devices**."
-- **Pairing (6-digit code, no camera):** Admin → Devices → **Add kiosk** generates a **single-use 6-digit pairing code (TTL 10 min)** and shows it next to the server's **HTTPS address** and its certificate fingerprint (for optional out-of-band verification). On the tablet the volunteer **types the server address and the 6-digit code**; the app calls `POST /api/kiosk/pair` over HTTPS and receives a long-lived **device token** (random 256-bit, hashed at rest server-side, shown never again). Because the fingerprint can't ride in a QR, the app **pins the certificate it sees on that first successful pair (trust-on-first-use)**. The code is single-use, short-lived and attempt-limited so a 6-digit space can't be brute-forced.
+- **Pairing (6-digit code, no camera):** Admin → Devices → **Add kiosk** generates a **single-use 6-digit pairing code (TTL 10 min)** and shows it next to the server's **HTTPS address** (with a Copy button, and a warning if you are viewing the panel on localhost, which a tablet cannot reach). **No certificate fingerprint is shown** — this line used to promise one "for optional out-of-band verification", and nothing renders it because nothing *can*: `https: true` means the **platform** terminates TLS with its own certificate, so this container never sees the cert a tablet will be offered. Trust-on-first-use is therefore the whole of the pinning story, not a fallback beside a manual check, and §14 should be read that way. On the tablet the volunteer **types the server address and the 6-digit code**; the app calls `POST /api/kiosk/pair` over HTTPS and receives a long-lived **device token** (random 256-bit, hashed at rest server-side, shown never again). Because the fingerprint can't ride in a QR, the app **pins the certificate it sees on that first successful pair (trust-on-first-use)**. The code is single-use, short-lived and attempt-limited so a 6-digit space can't be brute-forced.
 - **Transport:** the tablet **only ever talks HTTPS** to the server, with the certificate **pinned on the first successful pair (trust-on-first-use)** (custom trust evaluation thereafter accepting exactly that cert/public key — correct for the platform's self-signed LAN certificate; never fall back to plain HTTP; re-pair if the fingerprint changes, with a clear admin-facing explanation). All kiosk API calls carry the device token; the server scopes every route to that device and rate-limits.
-- **Fleet management:** heartbeat every ~45 s (`battery`, `charging`, `readerStatus`, `readerSerial`, `readerBattery`, `appVersion`, `configVersion`) → Devices page shows live status, flags "not charging" (a wall kiosk should always be on power) and "offline". Actions: rename, **revoke** (kills the token; kiosk returns to pairing), show a fresh pairing code, *identify* (kiosk flashes), push config now. Structured device **logs** (payments, reader events, errors) viewable per device.
+- **Fleet management:** heartbeat every **10 s** (`KioskViewModel.HEARTBEAT_INTERVAL_MS`), with the server treating a kiosk as offline after **35 s** (`ONLINE_MS` in `index.ts`, which the WhatsApp `kiosks` command deliberately shares so the two never disagree). Carries `battery`, `charging`, `readerStatus`, `readerSerial`, `readerBattery`, `appVersion`, `configVersion` → Devices page shows live status, flags "not charging" (a wall kiosk should always be on power) and "offline". Actions: rename, **revoke** (kills the token; kiosk returns to pairing), show a fresh pairing code, *identify* (kiosk flashes), push config now. Structured device **logs** (payments, reader events, errors) viewable per device.
 - **Config:** one versioned JSON (amounts, currency symbol, monthly on/off, name/email prompt policy, thank-you message, wallpaper, accent, theme, **kiosk-PIN hash**). Kiosks fetch on heartbeat when the version bumps; applied live with a gentle transition.
 
 ---
@@ -255,8 +302,8 @@ Use the official **Stripe Terminal Android SDK** on the tablet and the **`stripe
 - **Connection tokens:** the app's `ConnectionTokenProvider` calls `POST /api/kiosk/connection-token` (device token auth); the server mints it via Stripe with the secret key. This is the only credential the tablet ever gets, and it's short-lived by design.
 - **Location:** Terminal readers must connect with a `locationId`. On first Payments setup the server ensures a Terminal **Location** exists (named after the masjid, address entered by the admin — remember: the platform injects no profile) and hands its id to kiosks. Admin can pick an existing Location instead.
 - **One-time donation flow:**
-  1. Kiosk → `POST /api/kiosk/payment-intents` `{amountMinor, oneTime, donorName?, donorEmail?}` (server validates against the configured presets/min/max — never trust client amounts, integer minor units only, currency from Payments settings, idempotency key per attempt, metadata: device id, preset vs custom).
-  2. Server creates the PaymentIntent with `payment_method_types: ['card_present']` and returns the client secret.
+  1. Kiosk → `POST /api/kiosk/payment-intents` `{amountMinor, campaignId?, monthly?, manual?, coverFees?, donorName?, donorEmail?, idempotencyKey?}` — the real `PaymentIntentBody` schema in `index.ts`. **There is no `oneTime` field** (this line used to claim one): one-time is simply `monthly` absent, and because zod strips unknown keys, a client written from the old sketch that sent `{oneTime: false}` got a one-time donation *silently* — the donor charged once, no Subscription, and no error to notice. The server validates the amount against **that campaign's** presets/custom bounds (`isAllowedAmountForCampaign` — never trust client amounts, integer minor units only), computes cover-fees itself, and refuses a `tuition` campaign outright so a crafted tablet can't mint a tuition charge as a plain donation.
+  2. Server creates the PaymentIntent on the **campaign's** Stripe account (its own, or the primary) with `payment_method_types: ['card_present']` and `capture_method: 'manual'`, and returns the client secret. **Keyed entry is a second path** — `manual: true` → `createCardPaymentIntent`, `payment_method_types: ['card']`, the card typed into Stripe.js inside `ManualCardWebView` (`assets/kioskpay.html`), never a browser, because a device-owner Lock Task kiosk allow-lists only our package. The tablet falls back to it automatically when no reader is connected.
   3. App: `retrievePaymentIntent` → `collectPaymentMethod` (reader prompts tap/insert/swipe) → `confirmPaymentIntent`.
   4. App → `POST /api/kiosk/payment-intents/:id/complete`; **server retrieves the PI from Stripe**, captures it if `requires_capture`, verifies `succeeded`, records the donation, fires the notification, and returns the outcome the kiosk displays. Failures/cancellations are recorded as such and shown kindly ("Card didn't read — let's try again").
 - **Monthly donations:** require **name + email** (enforced app **and** server). Flow: take the first payment on the reader as above; from the succeeded charge read `payment_method_details.card_present.generated_card` (the reusable card PaymentMethod Stripe derives from a card-present payment); create a **Customer** (name/email), attach it, and create a **Subscription** (monthly `price_data` for the chosen amount, e.g. product "Monthly donation — <Masjid>"). If `generated_card` is absent (some cards/networks can't be reused), the first donation still stands — tell the donor warmly that monthly couldn't be set up with this card and record the attempt. Ongoing renewals are charged by Stripe automatically; we do **not** track renewal events in v1 (no webhooks, LAN-only) — the admin sees subscriptions in Stripe.
@@ -285,20 +332,38 @@ GiveALittle-grade simplicity — a passer-by donates in under 10 seconds without
 - **Launcher:** the app declares `CATEGORY_HOME` + `CATEGORY_DEFAULT`, so the tablet boots straight into it and Home goes nowhere else.
 - **Lock Task Mode:** when the app is **device owner**, use `startLockTask()` for true kiosk (no status bar pulldown, no recents/home escape). Document the one-time provisioning in `docs/TABLET_SETUP.md`: factory-reset tablet, skip accounts, `adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver`. **Fallback** without device owner: **not** screen pinning — that was tried and removed in 0.11.0, because Android forbids a pinned app from launching any other app and says nothing when it refuses, which silently broke Android Settings, the permission prompts and the self-updater. The soft kiosk is: being the HOME launcher, immersive-sticky bars, a bounce-back watchdog, a dead Back button, and an optional accessibility helper that closes the notification shade. Be honest in docs about its limits.
 - **Stay awake:** keep-screen-on flag while in kiosk; recommend "always plugged in" mounts; report charging state so the admin sees a fallen cable.
-- **Unlock:** hidden gesture (10 taps in the top-left corner within 3 s) → PIN pad → verifies against the **PIN set in Admin → Devices** (synced as a **scrypt** hash in config so unlock works offline; rate-limited with backoff; server-side verify when online). Unlock opens the maintenance screen: reader setup (BT/USB discovery, connect, update, battery), server address/re-pair, diagnostics, app version, **Exit kiosk** and **Return to kiosk**.
+- **Unlock:** hidden gesture — **10 taps on the screen background** (`SECRET_TAPS`; unconsumed taps anywhere, *not* a corner: on a multi-appeal kiosk the corner is a campaign tab) → PIN pad → verifies against the **PIN set in Admin → Devices** (synced as a **scrypt** hash in config so unlock works offline; rate-limited with backoff; server-side verify when online). Unlock opens the maintenance screen: reader setup (BT/USB discovery, connect, update, battery), server address/re-pair, diagnostics, app version, **Exit kiosk** and **Return to kiosk**.
 - **Boot & recovery:** BOOT_COMPLETED brings the app up even if not device owner; the app self-heals into the attract screen after crashes (foreground watchdog) and reconnects the reader automatically.
-- **Permissions:** request-and-explain only what Terminal needs — Bluetooth scan/connect (API 31+) or location (older), USB host access — inside the PIN-protected settings, never in the donor flow.
+- **Permissions:** request-and-explain only what Terminal needs — Bluetooth scan/connect (API 31+) or location (older), USB host access — from the PIN-protected maintenance screen, which walks a volunteer through them with a reason for each.
+
+  **One exception, and it is deliberate:** on a tablet that is **not** device owner, `MainActivity.onCreate` asks for `ACCESS_FINE_LOCATION` once at first launch, because Stripe's SDK requires it before it will look for *any* reader — including a USB one, which has no discovery UI to hang a prompt off. So on the soft-kiosk tier a bare Android permission dialog can appear over the giving screen on a cold start until it is granted. On a device-owner tablet `grantReaderPermissions` has already granted it silently and no dialog ever appears. (§10 used to say "never in the donor flow" without qualification, which is the sort of absolute that stops someone believing the rest of the paragraph once they see the prompt.)
 
 ---
 
 ## 11. The admin panel (web/)
 
-Same SSO + design language as Donations. Sections:
-- **Devices** — the fleet (§7): status cards, pairing, rename/revoke/identify, logs, the kiosk **exit PIN** (set/rotate here).
-- **Giving screen** — the designer: 6 preset amounts (+ currency display), custom-amount on/off + min/max, monthly on/off, name/email prompt policy, **custom thank-you message**, **wallpapers/designs** (curated set + upload, like the OS), **accent colour**, dark/light, with a **live preview** of the kiosk screen.
-- **Payments** — Fabric **Stripe account picker** (§6), Terminal **Location**, currency, test-mode badge; standalone key-entry fallback.
-- **Donations** — log (amount, kiosk, time, one-time/monthly, donor if given, status), totals for today/this week/this month and by device, **CSV export**.
-- **About** — version, docs links, **AGPL "Source code"** link.
+Same SSO + design language as Donations. **Six top-level tabs** (`TABS` in `web/src/App.tsx` — this
+list used to name Payments and About as tabs of their own, which would send you to add a screen
+beside one that already exists inside Settings):
+
+| Tab | `id` | What it is |
+|---|---|---|
+| **Dashboard** | `dashboard` | Totals at a glance, plus what needs attention. |
+| **Devices** | `devices` | The fleet (§7): status cards, pairing, rename/revoke/identify/rotate, per-kiosk logs. |
+| **Campaigns** | `giving` | The designer, opening full-page per appeal: amounts, design, type & fees, Stripe account, target kiosks, messages, live preview. |
+| **Donations** | `analytics` | The log, netted totals, per-kiosk breakdown, CSV, and the **refund** action. |
+| **Recurring** | `recurring` | Monthly plans, read live from Stripe: pause/resume, cancel, schedule an end, invoice history. |
+| **Settings** | `settings` | Everything else, as panels **within** this tab (not tabs of their own). |
+
+Note the two `id`s that do not match their labels — `giving` for Campaigns and `analytics` for
+Donations. They are the original slice names and are load-bearing: the tab is reflected in the URL
+hash, so renaming one breaks every bookmark and the profile menu's deep links.
+
+Panels inside **Settings**: Payments (Fabric Stripe account picker §6, Terminal Location, currency,
+test-mode badge, standalone key-entry fallback) · Notifications (per-alert routing, §18) · Email
+receipts (the branded receipt designer) · the masjid address · the kiosk **exit PIN** · remote
+adoption · About (version, docs links, the AGPL **Source code** link) · **What's new**, read from the
+`CHANGELOG.md` shipped inside the image.
 
 ---
 
@@ -326,8 +391,11 @@ Same SSO + design language as Donations. Sections:
 ## 13. Tech stack
 
 - **server/** — Node 22 (`node:22-slim` in the image), TypeScript strict, **Fastify**, **better-sqlite3**, **stripe** SDK, **scrypt** via `node:crypto` for the fallback admin password + PIN hashes (chosen over argon2 by the maintainer, 2026-07-02: zero extra native deps and Pi-friendly — see `docs/ARCHITECTURE.md`), **zod** at every boundary. No WebSocket (heartbeat polling is enough); add SSE for the Devices page if live feel demands it.
-- **web/** — React + Vite + TypeScript + Tailwind, shadcn/ui, **Motion**, lucide-react; tokens + recipes from **DESIGN.md** (Sakīna Glass); inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
-- **android/** — **Kotlin + Jetpack Compose**, minSdk 26 (Terminal SDK floor), **Stripe Terminal Android SDK** (Bluetooth + USB discovery/connect for the M2), DataStore for device config, WorkManager for heartbeats. **No camera/QR** — pairing is a typed 6-digit code (kiosk tablets often have no camera). Recreate the design language natively: same palette tokens, spring motion (`animate*AsState`/`AnimatedContent`), dark default, RTL, reduced-motion.
+- **web/** — React + Vite + TypeScript + Tailwind (preflight off) + **lucide-react**, and that is the whole runtime dependency list. Tokens and recipes come from **DESIGN.md** (Sakīna Glass) as hand-written CSS in `src/styles/`; animation is CSS transitions and keyframes. (This bullet used to name **shadcn/ui** and **Motion** as well — neither was ever imported by a single file, and `motion` sat in `package.json` as an unused runtime dependency until it was removed on 2026-08-17. Prefer plain CSS here: the panel is a handful of screens and the design language is already expressed as tokens.) Inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
+  ├── android/                 # Kotlin + Jetpack Compose, THREE Gradle modules:
+  │     ├── core/              #   shared: server client, pairing, device store, Terminal, theme
+  │     ├── app/               #   the locked-down wall KIOSK (HOME launcher, Lock Task, exit PIN)
+  │     └── mobile/            #   OpenMasjid Mobile Donations — a volunteer's phone at an event
 - **One container** serves API + admin + `/new` + the bundled APK. Multi-stage Dockerfile; CI: `build-apk.yml` builds + signs the APK (keystore in GH secrets, versionName from `VERSION`), `build-image.yml` builds web+server, **copies the freshly built APK into the image**, pushes multi-arch to GHCR, prints the digest to pin.
 
 ---
@@ -339,7 +407,7 @@ Same SSO + design language as Donations. Sections:
 - Amounts validated server-side (presets/min/max, integer minor units); idempotency keys on all Stripe creates; donation recorded only after server-side Stripe verification (+ capture when `requires_capture`).
 - Admin: Fabric SSO as identity assertion only (never call the platform as the admin); fail-closed session check; local-password fallback; signed HTTP-only SameSite cookies; restore-resilience rules (§6) observed to the letter.
 - Kiosk PIN: scrypt hash in synced config; offline verify; exponential backoff on attempts; PIN rotation from admin invalidates old immediately on next heartbeat.
-- Uploads (wallpapers) validated and size-capped; rich text sanitised; every kiosk route authenticated; `/new` and pairing endpoints rate-limited (6-digit pairing codes single-use, 10-min TTL, attempt-limited so the 1M-code space can't be brute-forced).
+- Uploads (wallpapers) validated and size-capped; rich text sanitized; every kiosk route authenticated; `/new` and pairing endpoints rate-limited (6-digit pairing codes single-use, 10-min TTL, attempt-limited so the 1M-code space can't be brute-forced).
 - PCI posture: card data reader→Stripe only (P2PE-style); our code never sees a PAN — state this in the README.
 
 ---
@@ -347,8 +415,8 @@ Same SSO + design language as Donations. Sections:
 ## 15. Build & run
 
 ```bash
-# server
-cd server && npm install && npm run build && npm test
+# server — the third command is NOT optional, see below
+cd server && npm install && npm run build && npm run typecheck:tests && npm test
 # admin web
 cd web && npm install && npm run build
 # android (debug apk)
@@ -356,13 +424,28 @@ cd android && ./gradlew assembleDebug
 # everything the App Store runs
 docker compose up -d
 ```
+
+**`npm run build` does not type-check the tests.** `tsconfig.json` excludes `*.test.ts` (they run
+from source under tsx, which strips types without checking them), so the suite is the one part of
+the tree the ordinary build never sees. `tsconfig.test.json` + `npm run typecheck:tests` cover it;
+four real errors were sitting in the tests, green, when that was added.
+
+**CI runs both, plus the web build, on every push to `dev`/`main` and every pull request**
+(`.github/workflows/test.yml`), and `build-image.yml` publishes nothing unless they pass. Before
+0.12.0 it ran neither: the Dockerfile type-checked the shipping code and that was all, so a red
+suite could not stop a release and a contributor's PR got no CI beyond the CLA bot.
+
 Local dev: Vite proxies `/api` to the server; use Stripe **test keys** + the Terminal **simulated reader** (`isSimulated`) so the whole flow runs without hardware; test on a real M2 before release. `docs/TABLET_SETUP.md` covers tablet provisioning; `docs/READER_SETUP.md` covers M2 pairing/USB cabling.
+
+**Boot it and press the thing.** `tsc` and the suite do not prove a route works: a `415` reached a
+donor's cancel button because it was only reasoned about. `node dist/index.js` with `DATA_DIR` and
+`PORT` set, then `curl` the surface you changed.
 
 ---
 
 ## 16. Definition of done (per feature)
 
-Builds via the commands above and `docker compose up -d`; `tsc`/lint/ktlint clean; installs one-click on a real OpenMasjidOS and opens over the platform's HTTPS URL; SSO works with local fallback; Stripe account picked via the Fabric with **nothing persisted**; a simulated-reader donation completes end-to-end **with the donation recorded only after server verification**; monthly path creates a real Subscription in test mode; kiosk cannot be escaped without the admin PIN; light+dark, RTL, reduced-motion all pass on **both** web and Android; wording is plain and warm; no raw error ever reaches a donor.
+Builds via the commands above and `docker compose up -d`; **`tsc` clean on the server, its tests and the web, and the suite green** — there is no ESLint and no ktlint in this repo, so "lint clean" means nothing here and this line used to ask for it; installs one-click on a real OpenMasjidOS and opens over the platform's HTTPS URL; SSO works with local fallback; Stripe account picked via the Fabric with **nothing persisted**; a simulated-reader donation completes end-to-end **with the donation recorded only after server verification**; monthly path creates a real Subscription in test mode; kiosk cannot be escaped without the admin PIN; light+dark, RTL, reduced-motion all pass on **both** web and Android; wording is plain and warm; no raw error ever reaches a donor.
 
 ---
 
@@ -381,3 +464,351 @@ Builds via the commands above and `docker compose up -d`; `tsc`/lint/ktlint clea
   8. **Giving-screen designer** (amounts, messages, wallpapers, accent, live preview) + live config push.
   9. Donations log + CSV; polish pass (motion, empty states, RTL, reduced-motion); docs; tag `v0.1.0`; APK bundling in CI; registry PR.
 - Never put a Stripe secret anywhere the tablet or browser can see; never record a donation the server hasn't verified with Stripe; never let the kiosk be escapable without the PIN; ask before heavy dependencies or contract deviations.
+
+---
+
+## 18. WhatsApp: admin commands, and the alerts we send
+
+OpenMasjidOS can send WhatsApp on a masjid's behalf through **OpenWA**, a self-hosted gateway the
+masjid installs and links to their own phone, and it can now take **admin commands** back over it.
+We never see the gateway, its credentials, or the number: we POST to the platform, which owns a
+**single serialised queue** shared by every app and by its own alerts.
+
+**Ban risk attaches to the NUMBER**, and the platform no longer manages it for us. It serialises
+sends (one message in flight, ever) and shows a typing indicator; the caps, cooldowns, inter-message
+gap, quiet hours and warm-up ramp it once imposed are **all gone** (0.51.1). PACING IS OURS —
+`WhatsAppPacing` in `alerts.ts`, and the masjid's to set. Do not write "the platform paces it" here
+again: believing that is what left this app with no backstop at all, and `payment-failed` firing per
+refused PaymentIntent turned one Stripe outage into a message per attempted donation.
+`202 { queued: true }` still means accepted, never delivered — and delivery can now take far longer
+than it used to, because a message is HELD while the link is down until an admin releases it.
+**Nothing auth-critical may ever depend on it.** It is an unofficial client and the number can be
+restricted. Email stays the fallback.
+
+### What we implement: `POST /fabric/commands/run`
+
+An admin messages the masjid's number and gets an answer about hardware nobody is standing next to.
+The platform decides who may run what, renders the numbered menu **from our manifest order**, asks
+for confirmation, and formats the reply. **We do not build a menu.** We execute one command.
+
+**The command set is three read-only questions** (`takings`, `kiosks`, `recent`) — declared in
+`manifest.yaml` and implemented in `buildCommands()`. A test parses the manifest and asserts the two
+lists match, because drift shows up as a menu entry that answers "I don't know that one".
+
+**Every command only reads, and that is a design decision rather than a starting point.** It is what
+makes the follow-up conversation safe: see below.
+
+**No donor identity is ever sent** — amounts, times, kiosks and funds only, never a name, an email
+or a card. A WhatsApp thread keeps a copy forever on at least two phones, which is exactly why the
+platform refuses to hand out app logs over this channel. A test feeds the commands a store whose
+rows carry a donor name, email and card digits and asserts none of it reaches any reply.
+
+Code: `server/src/commands.ts` (registry + pure rules), the route in `index.ts`, tests in
+`commands.test.ts`. Rules that will bite if missed:
+
+- **Verify BOTH headers.** `X-OpenMasjid-App-Secret` must equal our own `OPENMASJID_APP_SECRET`,
+  **and** `X-OpenMasjid-Caller-App` must be exactly `omos:platform` — a value no app id can hold,
+  because the colon is outside the app-id charset. It identifies the platform *by construction*,
+  not by an allow-list.
+- **An absent secret fails CLOSED** (`503 not_ready`). A standalone install has an empty
+  `OPENMASJID_APP_SECRET`, and a naive equality check would let empty match empty — anyone on the
+  LAN running admin commands with no credential at all. Pinned by a test.
+- **`/fabric/*` is LAN-only** and must never cross the tunnel. This is *not* covered by the `/api`
+  allowlist — `tunnel.ts` had to learn `/fabric` separately, because every non-`/api` path fell
+  through as allowed. A credential check is the wrong last line of defense for something that can
+  act on hardware.
+- **10 second timeout; the platform also caps the body at 16 KB.** We never approach that cap and
+  do not check it: every reply goes through `tidyReply`, whose `COMMAND_TEXT_MAX` of 1000 characters
+  is the real limit. (A constant restating the 16 KB figure used to sit in `commands.ts` unread —
+  it documented a check that did not exist, and has been removed.) We give up at 8s and answer
+  "still working" so *we*
+  own the message rather than having the connection cut. If a job is long, start it and say so.
+- Reply shapes: `{ok:true,text}` · `{ok:false,error}` · `404 {ok:false,code:'unknown_command'}` ·
+  `503 {ok:false,code:'not_ready'}`. Text is plain, ≤1000 chars, control characters stripped.
+- **Never let an exception reach a phone** — messages here can carry a Stripe id or a file path.
+- Manifest: at most **12** commands; `id` kebab-case, **not all digits** (`!kiosk 2` must only mean
+  "the second option"), never `help`/`yes`/`no`/`cancel`/`stop`; `confirm: true` on anything that
+  changes hardware state (it also puts the command in the admin's audit alert); `argument` must be
+  an **object with a label** — `argument: true` is **rejected** at the catalog build, not coerced.
+- **Never put `commands` in `fabric.provides`.** Reserved: it would expose the same handler to other
+  apps through the app-to-app broker, a different trust boundary sharing a path prefix.
+
+The platform already offers `!os restart <app>`, which restarts our whole container. A kiosk-level
+command is the finer-grained, more useful thing.
+
+### Follow-up questions (platform v0.51.0-dev.11+)
+
+Return `followUp: { token }` beside your text and the platform treats the sender's **next message**
+as an answer — no `!` prefix — and posts it back with `followUpToken` set. Omit `followUp` to finish.
+
+**The token is the only state that survives a turn.** The platform stores it against that one sender
+and keeps nothing else about the flow, so whatever a step needs to remember has to be encoded in it.
+`takings` uses exactly that: `takings:pick` for the first ask and `takings:pick2` for the one retry
+after a typo, so the retry counter lives in the token and this app holds no conversation state at
+all. Charset `A-Za-z0-9._:-`, ≤128 chars.
+
+**Validate a token before echoing it** (`validFollowUpToken`). It lands in a later request body, so
+a malformed one is our bug arriving as a platform error — and the symptom is a conversation that
+silently stops answering, which is near-undiagnosable from a chat window. The route drops an invalid
+token rather than sending it, ending the exchange cleanly instead of half-opening one.
+
+**THE THING THAT WILL BITE: the exchange can end without you.** Three minutes idle, fifteen minutes
+total, twelve turns, the sender typing `exit`/`cancel`/`done`, or starting any new `!` command. You
+just stop receiving answers, with no notification. **Never leave a half-applied change waiting on a
+reply that may not come** — apply on the last answer, or keep your own draft with its own expiry.
+
+This is the strongest argument for the command set being read-only: a question that only reads has
+nothing to half-apply, so an abandoned conversation costs nothing and needs no draft, no expiry and
+no reconciliation. **The day a command starts writing, that stops being free** — and that is the
+moment to add a draft with its own expiry rather than trusting the sender to finish.
+
+Also: **any `ok:false` ends the exchange**, which is why `CommandResult` only permits `followUp` on
+the success side — a failed turn must never leave someone's ordinary conversation being read as
+input. **Ask one thing at a time**; these are WhatsApp messages, not a form. And the sender is
+re-authorised every turn, so a permission removed mid-conversation takes effect immediately.
+
+A stray or unrecognized token must read as a **fresh turn**, never as an answer to a question we did
+not ask — the route blanks anything that is not one of ours, and a test covers it.
+
+### Sending: the recipient list is OURS (`whatsapp: true`)
+
+The platform's alerts matrix has **no WhatsApp column for apps**, on purpose — it routes to the
+admin's single number and the platform cannot know which person a given app's alert is about. So
+recipient choice is ours, and lives in **Settings → Notifications** (`server/src/alerts.ts`,
+`web/src/alerts.tsx`).
+
+**The model is a RECIPIENT LIST crossed with the alert catalogue** (0.12.0-dev.10) — one row per
+person or group, one column per alert, a checkbox at each intersection. This is the shape
+OpenMasjidStudents uses for the same job (`alert_recipients` there), and it replaced a per-alert
+`AlertRoute` that held exactly **one** email and **one** phone: a masjid with a treasurer *and* a
+caretaker had to choose, and the same address had to be retyped into every alert it wanted.
+
+| Recipient field | Notes |
+|---|---|
+| `kind` | `email` · `phone` (one WhatsApp number) · `group` (an approved WhatsApp group) |
+| `address` | lowercased email · digits-only international number · group JID from the platform |
+| `label` | optional display name. **The address is the identity** — a row is an address, not an account, and adding one grants no access to anything |
+| `alerts` | which alert ids this recipient hears about |
+| `includeNames` | carry the donor's name/email? **`false` by default for a group** — see below |
+
+**Only `os` is still per alert** (`AlertRoute { os }`), because the relay has no address of its own.
+`os: true` everywhere remains the load-bearing default: an upgrade changes nothing and nobody has to
+visit the screen to keep the alerts they rely on. `ALERT_META[].defaultOn` decides what a *new*
+recipient starts ticked — the alerts that cost money or hide a problem, and deliberately **not**
+`payment-failed`, which fires per refused PaymentIntent and would teach a new recipient to filter
+the lot to a folder.
+
+**Every channel is ADDITIVE and fails soft independently.** An alert exists to tell someone something
+is wrong, so one channel being broken must never suppress another, and none may disturb the donation,
+refund or reader event that raised it.
+
+**The migration must not lose an address.** `migrateLegacyRoutes` groups the old per-alert boxes by
+address into one recipient per distinct address, subscribed to exactly the alerts it was on. A phone
+whose `whatsapp` toggle was **off** is not migrated on — turning it on would be a change nobody
+asked for, on the one channel that can cost a masjid its number. Runs once, marked by
+`alert_recipients_migrated`, so an admin who deliberately empties the list does not get it back.
+
+**Every alert goes through `raiseAlert`/`alert()` in `index.ts` — never `fabricAlert` directly**, or
+the admin's choices are bypassed. Including the in-app **Send test**, which follows the same routing
+on purpose: a test that took a different path would prove nothing about their configuration.
+
+**A phone number with no country code is REFUSED, not guessed at.** The platform refuses one rather
+than guessing, and so must we — a UK admin typing `07700 900123` means +44, but assuming that would
+one day message a stranger in another country. A refused number does not wipe the saved one (a box
+that empties itself reads as the app losing it, and they retype the same number). The admin panel now
+supplies the country code **structurally**, from a dropdown (`web/src/phone.ts`, whose as-you-type
+mask is ported from Students), so the strict rule never fires in ordinary use — and its rules did
+not soften to achieve that.
+
+`alertDelivery()` reports what an alert will *actually* do, so an alert with the relay off and nobody
+subscribed reads as **"nowhere"** rather than looking covered.
+
+### Groups: one send, many readers — and a privacy rule that is not ours to relax
+
+`GET /api/fabric/whatsapp/groups` → `{groups:[{id,label}]}`, then send with **`group` in place of
+`to`** (both, or neither, is a `400`). `label` is the admin's own nickname and the only name we are
+given — show it as-is. The list is **global to the box**, not per-app, and an id not from it is
+refused `403`, so our admin panel offers a **picker, never a text box**. An empty list means "none
+approved"; a *failed* read means "we could not ask", and the screen must say those differently.
+
+**`fabricWhatsAppGroup` is a SEPARATE function from `fabricWhatsApp`, and that separation is the
+enforcement** — the same wall Students draws. `fabricWhatsApp` has no parameter that could name a
+group, so a per-person message cannot reach one by mistake.
+
+**Why `includeNames` defaults to `false` for a group.** The platform's rule is blunt: *"A group post
+is for genuine announcements. Never use one to tell a family about their own fees: their business is
+not the other 199 members'."* And **everyone in a WhatsApp group can see every other member's phone
+number**. Two of our alerts name a human (`donation-refunded`, `monthly-cancelled`), so a refund
+notice in a parents' group tells the whole group who asked for their money back. A three-person
+trustees group is a different case, which is why this is the admin's switch rather than a hard rule.
+
+**The redacted body is built by the CALL SITE**, passed as `raiseAlert`'s fifth argument, never
+derived by regexing a name back out of finished prose — that is the version that works on the
+examples you tried and leaks on the one you did not. `bodyForRecipient` just picks.
+
+### The platform stopped pacing WhatsApp (OpenMasjidOS 0.51.1) — so we do
+
+**Minimum platform versions:** WhatsApp send **0.51.0+**; message status and the durable queue
+**0.51.1+**; a per-app outcome history and a separate read budget **0.51.1-dev.8+**. Treat an absent
+`outcomes` field as `false` — never assume the status endpoint exists.
+
+**What was broken on the platform, and looked like ours.** Its queue always examined the *first*
+message; if that one could not go yet it slept and looked at the same one again, so a single held-up
+message blocked every message from every app. A failing message paused the whole queue for its retry
+delay — up to 15 minutes, up to 5 attempts. With a 30-minute per-group cooldown, one group image
+could stop all WhatsApp traffic for half an hour. The queue also lived only in memory, so anything
+held for a rate limit or a retry was destroyed on restart, which on the dev channel is often — while
+we had been told `202 { queued: true }` and had no way to learn otherwise. All fixed in 0.51.1.
+
+**What the platform no longer does for us — and this is the part that changes our code.** Quiet
+hours, the hourly and daily caps, the per-recipient 60-second cooldown, the per-group cooldown, the
+group caps, the warm-up ramp on a newly linked number, and the random 6–20 second gap between
+messages are **all gone**. Only a typing indicator remains. A message we hand over goes out in
+seconds.
+
+That deleted a backstop we were relying on without having decided to. **`payment-failed` is the
+alert that made it matter**: it fires on every PaymentIntent Stripe refuses and has no natural bound,
+so expired keys on a Friday meant one message per person who tried to give, for the whole of jummah.
+The 60-second cooldown used to absorb exactly that.
+
+So pacing is ours — but **it is the masjid's to set, not ours to impose** (`WhatsAppPacing` in
+`alerts.ts`, editable in Settings → Notifications). Three knobs, each doing a different job:
+
+| Setting | Default | What it bounds |
+|---|---|---|
+| `maxPerHour` | **20** | the budget that actually protects the number. Counts **messages**, not alerts |
+| `maxPerDay` | **100** | same, over a day |
+| `minGapMinutes` | **2** | a burst of ONE repeating alert, per alert id, so a Stripe outage cannot spend the whole hour in ten seconds while a reader-offline waits behind it |
+
+**The first version of this gate was one message per alert per THIRTY minutes, and that was wrong.**
+Two an hour is below the platform's own retired caps (12/hour, 60/day), and low enough that a
+caretaker watching a reader flap simply would not be told. The platform's contract also says plainly
+that an app is the wrong place for a hard ceiling: *"an app-level limiter cannot see the number's
+total traffic, which is the only number WhatsApp cares about."* So this is a backstop with generous
+defaults, and the numbers are the admin's (maintainer, 2026-08-21). Anything held back is counted and
+carried on the next message that gets through, so suppression is never silent. `test` is exempt from
+all three — an admin pressed a button and is watching the screen.
+
+**The ledger is PERSISTED** (`store.getWhatsAppLedger`), unlike the first version. In-memory was
+defensible for a 30-minute gap — a restart lets one extra through, which is the safe direction to
+fail. It is not defensible for a **daily** cap, which an in-memory ledger resets on every deploy, and
+on the dev channel that is several times an afternoon.
+
+**Ban risk attaches to the NUMBER**, that number is shared by every app on the box, and a blocked
+number cannot be recovered — the masjid loses the number their community reaches them on. It is the
+one failure in this app nobody can undo. Hence: no retry around a `202` (it is already queued;
+retrying just duplicates), and the admin chooses recipients because we know who ours are and the
+platform does not.
+
+**On "one message per call, never a loop over a roster"** — which this section used to state flatly.
+The *platform API* still takes exactly one recipient per call, and that has not changed. What did
+change is that we now fan one alert out to several of them, which is what a recipient list is for. The
+protection moved rather than disappearing: the budget is checked **before** the loop and charged only
+for what actually went out, individual recipients are capped (`MAX_ALERT_RECIPIENTS`), and the UI
+pushes an admin toward a **group** past a couple of numbers — one group send reaching thirty people is
+strictly safer for the number than thirty sends. When the budget cannot cover everyone, groups go
+first for that reason, and the shortfall is reported rather than truncated in silence.
+
+**Refusals are surfaced, not swallowed.** `POST /api/fabric/whatsapp` answers `400`/`403` with a
+plain sentence — an unapproved group, a number with no country code, an empty message, too many
+images queued, or (new in 0.51.1) *the masjid's own gateway number*, which used to be accepted and
+go nowhere. Those used to reach a `log.debug` and nothing else, which is most of why this felt
+mysterious: a refused message and a lost one were indistinguishable. They are now logged at **warn**,
+stored per alert, and shown on the Notifications screen beside the switch that caused them.
+
+**We store the message id and resolve it.** The `202` carries an `id`; `GET /api/fabric/whatsapp/status/<id>`
+says `queued | sent | failed | expired`. `scheduleWhatsAppFollowUp` asks after a minute and again
+after ten for responsiveness; `reconcileWhatsApp` then re-asks every 15 minutes about anything still
+`queued`, until the platform's 24-hour window closes. The record holds no message text and no
+recipient. A 404 means "not ours, or aged out", **never failure** — it also covers a platform too
+old to have the endpoint.
+
+**Why the reconcile exists, since the first version deliberately did without it.** It gave up after
+ten minutes, reasoning that the history was only the most recent 200 records and that polling was not
+worth the traffic. Both premises died in 0.51.1-dev.8: the history is **500 per app for 24 hours**
+(that 200 was one ring *shared by every app*, so a big Students run could evict our reader-offline
+record and every poll came back 404), and **status reads have their own 600/min budget**, separate
+from sending, so a poll can no longer refuse a masjid's alert. Giving up at ten minutes meant a
+message that failed at twenty read as `queued` in the panel for ever, which is the exact
+"accepted and silently lost" state this feature exists to end. At most one read per alert id per
+sweep — six, against six hundred.
+
+**Do not add an `immediate` flag.** It was considered and dropped platform-side, correctly: it could
+only skip the typing indicator (the last thing making the traffic look human) or jump a queue every
+app shares — and every app would set it, so within a week it would mean nothing.
+
+**Unchanged:** `202` means *accepted*, never delivered. There is no delivery receipt from WhatsApp.
+Nothing auth-critical may ever ride on it — no codes, no resets. Email has a real provider; use that.
+
+### A message reported `sent` may never have arrived (OS 0.51.1-dev.12+)
+
+A masjid's WhatsApp session can expire on its own, the way WhatsApp Desktop signs itself out. The
+gateway kept accepting messages and reporting them `sent` for over a day. The platform now spots it
+within ~10 minutes and **holds** messages instead — but the gap before it notices is unrecoverable,
+and the platform cannot resend from it because it deletes message contents on handover.
+
+`GET /api/fabric/whatsapp/suspect` → `{"windows":[{"from","to","count"}]}` (epoch ms, scoped to our
+app id, on the 600/min READ budget so polling never costs a send). `fabricWhatsAppSuspect()`.
+
+**THE WINDOW USED TO VANISH WHEN THE ADMIN FIXED IT**, and that is worth keeping written down
+because it shaped this code twice. The first cut of the platform route answered only while the
+incident was open, and `clearWhatsAppIncident()` fires the moment an admin re-links the phone — so
+the evidence disappeared at precisely the moment someone went looking for what they had missed. We
+reported it; **0.51.1-dev.13 retains windows for seven days after recovery**, and added `cause`,
+`ids`, `truncated` and an explicit `ok`.
+
+So the platform is the source of truth again: we poll **hourly**, hold the answer in memory, and
+persist only the **dismissals** — which are a fact about our own UI that the platform cannot know.
+The earlier 15-minute cadence and the persist-on-sight hoard existed solely to race an admin's
+re-link and are gone.
+
+**Flag by `ids`, not by timestamp.** The platform names the actual message ids in a window, so
+`markWhatsAppSuspectByIds` is exact. **A complete id list is authoritative in both directions: a
+message not named is a message not lost, whatever the timing looks like.** `markWhatsAppSuspect(from,
+to)` remains only as the fallback for a platform too old to send ids, for a window whose id list hit
+the 500 cap (`truncated: true`, which the platform states rather than hides), and for our own records
+with no stored id.
+
+**That fallback flags `sent` ONLY.** It briefly included `queued` and that was wrong twice over: the
+claim being doubted is *"reported sent but may never have arrived"*, and a `queued` record was never
+claimed delivered — plus it is the platform's own documented false positive, because a message queued
+DURING an outage is held, released on re-link, and delivered fine while its record still carries the
+queue-time stamp that lands inside the window.
+
+**A window's `count` never grows.** Everything — `from`, `to`, `cause`, counts and ids — is snapshotted
+once at detection and never revised, because the send queue pauses at that moment. An earlier version
+of this app accumulated windows and widened them on each poll under the opposite assumption; the
+7-day retention made the whole hoard unnecessary and it went, which happens to have removed the wrong
+reasoning with it.
+
+**WE DO NOT RESEND, and that is a domain decision.** Every WhatsApp this app sends is an alert about
+a *moment* — a reader went offline, a payment was refused. Re-sending "the card reader is offline" a
+day late is worse than silence: the reader is probably fine and it sends someone to check working
+hardware. We also store no message body, so a faithful resend is impossible by construction. What we
+do instead is surface the period in Settings → Notifications and point the admin at the Donations and
+Devices pages. Records inside a window are flagged `suspect` so a row stops showing a reassuring
+tick that is known to be unreliable — but only `sent`/`queued` ones: a `refused` was never handed
+over and was reported honestly at the time.
+
+**A `404` from `/status/:id` is still "unknown", never failure.** That has not changed, and the
+temptation to read it as a delivery failure while writing reconciliation logic is the easy mistake.
+
+**A queued message can now sit queued far longer**, because held messages wait for an admin to
+release them — and since 0.51.1-dev.13 a still-queued message **keeps its outcome record for as
+long as it waits**, rather than ageing out at 24h. Our reconcile window is therefore **7 days**, not
+24h: the old cutoff would have given up on a message whose record still existed and could still
+resolve. A `404` past that is still `unknown`, never failure.
+
+### What we deliberately do NOT do
+
+- **No donor phone numbers, and no phone field on the kiosk** (maintainer, 2026-08-16). A donor at a
+  kiosk gave their details for a receipt, not for announcements. WhatsApp here reaches **only the
+  numbers an admin typed into Settings → Notifications**. If that ever changes: receipts one-to-one
+  only, nothing else without a separate explicit opt-in.
+- **Never depend on a WhatsApp send.** `202 { queued: true }` means accepted for later, never
+  delivered, and there is no delivery receipt from WhatsApp. The delay is no longer the platform
+  pacing (it does not, any more — see above); it is the shared serialised queue, and a message may
+  be HELD for as long as the masjid's link is down. Email stays the fallback and nothing
+  auth-critical may ride on it.
+
+Full contract: OpenMasjidOS `docs/WHATSAPP.md` and `docs/APP_MANIFEST_SPEC.md`, **dev** branch.

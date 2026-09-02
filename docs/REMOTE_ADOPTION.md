@@ -32,17 +32,36 @@ When both are true, the kiosk is reachable at `https://omos.<masjid-domain>/<bas
    (from Devices → Add a kiosk → Remote). Same flow as LAN, just the public URL.
 3. The tablet pairs over the **real Cloudflare certificate** (a public CA), so it uses **standard
    system TLS trust + hostname verification** — *not* the LAN self-signed + trust-on-first-use
-   pinning. The app auto-distinguishes the two by whether the cert chains to a public CA.
+   pinning.
+
+   **It decides which of the two to use from the address the volunteer typed, before any handshake
+   happens** — not from the certificate it is offered. `KioskRepository.isPrivateHost()` treats
+   `localhost`, `*.local`, `*.lan`, and private/loopback/link-local IP literals (10/8, 127/8,
+   192.168/16, 172.16–31/12, 169.254/16, `::1`, `fe80:`, `fc`/`fd`) as LAN → TOFU pinning; anything
+   else, including any public hostname, gets system trust. (This section used to say the app
+   "auto-distinguishes the two by whether the cert chains to a public CA", which is the wrong mental
+   model in a way that matters: deciding from the presented chain would mean an attacker could
+   choose which mode you got. Deciding from the typed address means they cannot.)
+
+   The practical consequence: a LAN server reached by a **hostname** rather than an IP — say
+   `kiosk.masjid.example` resolving to 192.168.1.20 — is treated as public and needs a
+   publicly-valid certificate. Type the IP, or a `.local`/`.lan` name, for the pinned LAN path.
 
 ## Security posture
 
 - **Base-path aware, kiosk-endpoints-only.** The OS forwards the full `/<basePath>` prefix without
   stripping it. Fastify `rewriteUrl` strips it before routing (so every route stays root-relative) and
   **flags the request as tunnel-origin** (a LAN-direct hit arrives at the root, with no prefix). An
-  `onRequest` guard then **404s `/api/admin/*` and `/api/fabric/*` for tunnel-origin requests** — the
-  admin panel and all Fabric calls stay LAN-only. Only `/new`, the APK (`/download`), the public
-  bootstrap (`/api/app`, `/api/public/appearance`), and the device API (`/api/kiosk/*`) are reachable
-  over the internet.
+  `onRequest` guard then **404s `/api/admin/*`, `/api/fabric/*` and everything under `/fabric/*` for
+  tunnel-origin requests** — the admin panel, the Fabric relay and the WhatsApp admin-command handler
+  all stay LAN-only. Only `/new`, the APK (`/download`), the public bootstrap (`/api/app`,
+  `/api/public/appearance`), and the device API (`/api/kiosk/*`) are reachable over the internet.
+- **`/fabric/*` is a separate rule, not a special case of the `/api` one.** The allowlist in
+  `tunnel.ts` only ever examined `/api` paths, so every path outside `/api` fell through as
+  *allowed* — correct while that meant the SPA, its assets, `/new`, the APK and `/uploads`, and
+  quietly wrong the moment this app served its first `/fabric/*` route (the WhatsApp command
+  handler, which reports the masjid's takings). Adding any route outside `/api` means checking this
+  guard again; `tunnel.test.ts` pins both halves.
 - **Remote pairing is gated.** Over the tunnel, `POST /api/kiosk/pair` is refused unless "Allow remote
   adoption" is on. LAN pairing is always allowed. The gate runs **before** a pairing code is consumed.
 - **Pairing codes** are single-use, 10-minute TTL, and attempt-limited. Device tokens are 256-bit,

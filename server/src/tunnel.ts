@@ -32,6 +32,23 @@ function isApiPath(p: string): boolean {
   return p === '/api' || p.startsWith('/api/');
 }
 
+/**
+ * Anything under `/fabric` — the platform-to-app surface (admin WhatsApp commands).
+ *
+ * LAN-ONLY, WITH NO EXCEPTIONS, and it needs saying separately because it is NOT under `/api`.
+ * The rule above only ever judged `/api` paths, so every non-`/api` path fell through as allowed —
+ * correct while that meant the SPA, its assets, `/new`, the APK and `/uploads`, and quietly wrong
+ * the moment this app served its first `/fabric/*` route.
+ *
+ * The platform's own contract says `/fabric/*` is never served over the tunnel. The secret check on
+ * the handler would still refuse a stranger, but that is a credential comparison on an
+ * internet-reachable endpoint that can restart hardware — the wrong last line of defense when the
+ * platform calling us is always on the same LAN, so there is no legitimate tunnel request to lose.
+ */
+function isFabricPath(p: string): boolean {
+  return p === '/fabric' || p.startsWith('/fabric/');
+}
+
 /** Every spelling of this path the router might resolve it to: as it arrived, and decoded. The
  *  router decodes once; we go a little further so a double-encoded probe can't out-run us either.
  *  A malformed escape stops the walk — the raw form is still judged. */
@@ -55,5 +72,5 @@ function candidatePaths(rawUrl: string): string[] {
 
 /** True when a request that arrived over the tunnel must be refused (404). */
 export function blockedOverTunnel(rawUrl: string): boolean {
-  return candidatePaths(rawUrl).some((p) => isApiPath(p) && !allowedOverTunnel(p));
+  return candidatePaths(rawUrl).some((p) => isFabricPath(p) || (isApiPath(p) && !allowedOverTunnel(p)));
 }

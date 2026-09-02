@@ -11,7 +11,7 @@
  * (newlines → <br>), and EVERY value — including the donor's own name (which came from the
  * *unauthenticated* tablet at the kiosk) and the masjid contact fields — is escaped. So nothing
  * can inject markup. Images (the masjid logo) and links (website) are only emitted for http(s)
- * URLs; the accent is gated to a hex colour so it can't break out of the inline style.
+ * URLs; the accent is gated to a hex color so it can't break out of the inline style.
  *
  * Mirrors OpenMasjidDonations/server/src/email.ts so both apps send an identical-looking receipt.
  */
@@ -21,7 +21,7 @@ export interface ReceiptTemplate {
   heading: string;
   /** The thank-you paragraph. Supports {name} {amount} {campaign} {masjid}. */
   body: string;
-  /** Accent colour (hex) for the heading + links, or '' for the default emerald. */
+  /** Accent color (hex) for the heading + links, or '' for the default emerald. */
   accent: string;
 }
 
@@ -305,7 +305,7 @@ export interface RefundContext extends ReceiptContext {
  * Unlike the receipt, the wording is NOT admin-editable. A refund note is a factual statement about
  * money being returned and a bank timescale — a template with the wrong tone or a stale {amount}
  * would be actively misleading, and no admin has asked to reword it. The masjid's branding and
- * contact details still come through, which is the part that matters for the donor recognising it.
+ * contact details still come through, which is the part that matters for the donor recognizing it.
  */
 export function renderRefund(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: RefundContext): RenderedEmail {
   const accent = /^#[0-9a-fA-F]{3,8}$/.test((tpl.accent || '').trim()) ? tpl.accent.trim() : ACCENT_DEFAULT;

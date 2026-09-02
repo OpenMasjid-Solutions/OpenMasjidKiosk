@@ -128,6 +128,11 @@ kotlin {
 }
 
 dependencies {
+    // Everything shared with OpenMasjid Mobile Donations: the server client, pairing, the device
+    // store, the Stripe Terminal reader and the design tokens. Exposed as `api` from :core, so the
+    // types those used to provide directly are still on this module's compile classpath.
+    implementation(project(":core"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -137,7 +142,11 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
+    // (`androidx.ui.tooling.preview` used to be an `implementation` here, so it shipped in the
+    // RELEASE apk. It exists to provide `@Preview`, and there is not one `@Preview` in the tree —
+    // the giving screens are laid out against a real tablet, not a preview pane. Removed
+    // 2026-08-17; `debugImplementation(libs.androidx.ui.tooling)` below still covers the debug
+    // build if anyone adds previews later.)
     implementation(libs.androidx.material3)
 
     // --- Slice 4: pairing, pinned-HTTPS networking, kiosk lockdown, heartbeats ---
@@ -151,13 +160,19 @@ dependencies {
     // --- Slice 5: Stripe Terminal SDK (M2 reader over Bluetooth + USB) ---
     implementation(libs.stripe.terminal)
 
-    // --- Manual/keyed card entry: Stripe PaymentSheet (card typed into Stripe's own form; the PAN
-    //     is tokenised on-device and never reaches our server, same posture as the reader). ---
-    //     It transitively pulls bcprov-jdk15to18, which duplicates our bcprov-jdk18on (used for the
-    //     PIN). Drop the older one — jdk18on 1.78.1 provides the same classes for both.
-    implementation(libs.stripe.payments) {
-        exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
-    }
+    // --- Manual/keyed card entry ---
+    // NO Stripe SDK here any more. Keyed entry moved to `ui/ManualCardWebView.kt` + the bundled
+    // `assets/kioskpay.html`, which loads Stripe.js and its Card Element inside a WebView: the card
+    // is tokenised in Stripe's own frame, exactly as before, but without a browser — which matters
+    // because a device-owner Lock Task kiosk allow-lists only our package.
+    //
+    // The `com.stripe:stripe-android` (PaymentSheet) artifact stayed declared long after that
+    // migration, and `grep -r "com.stripe.android" android/` finds no import of it in any source
+    // file — only `com.stripe.stripeterminal`, which is the separate reader SDK above. So a whole
+    // unused payment SDK was being compiled into an APK that volunteers sideload onto public
+    // tablets. Removed 2026-08-17. Its `exclude` of the older `bcprov-jdk15to18` went with it;
+    // `libs.bouncycastle` (bcprov-jdk18on, for the offline PIN) is declared in its own right above
+    // and is unaffected.
 
     // Compose tooling (previews) — debug only.
     debugImplementation(libs.androidx.ui.tooling)

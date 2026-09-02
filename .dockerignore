@@ -14,3 +14,25 @@ android
 # /app/CHANGELOG.md so the notes always describe the version running. It is copied in the
 # last runtime step, so editing it only invalidates that one cheap layer.
 !CHANGELOG.md
+
+# ── Secrets: never let one enter the build context ──────────────────────────────────────────
+# Docker does NOT read .gitignore. These patterns are all in .gitignore, so nothing here can ever
+# be COMMITTED — but an UNTRACKED file sitting in the working tree still enters the context, and
+# `COPY server/ ./` would carry it into the image. That matters more than it looks:
+#
+#   COPY apk/ ./public/download/
+#
+# puts everything in apk/ into the PUBLIC web root, and /download is one of the few paths reachable
+# over the Cloudflare tunnel. A keystore left in apk/ after a local signing experiment would be
+# served to the internet. Cheap to prevent, and impossible to notice if it ever happened.
+**/.env
+**/.env.*
+**/*.jks
+**/*.keystore
+**/*.pem
+**/*.p12
+**/*.key
+# NOT `apk/*.apk`. That is the one artifact that MUST enter the context: CI downloads the freshly
+# built APK into apk/ and `COPY apk/ ./public/download/` is what bundles it. Excluding it would
+# publish an image with no app to install, and the "Confirm APK is present" step would not catch it
+# — that checks the filesystem, which is exactly where the file would still be.

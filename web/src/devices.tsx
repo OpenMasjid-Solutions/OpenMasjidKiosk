@@ -81,7 +81,7 @@ function relativeTime(iso: string): string {
 }
 
 
-/** Turn a raw reader status into plain words, but keep anything we don't recognise. */
+/** Turn a raw reader status into plain words, but keep anything we don't recognize. */
 function readerLabel(s: string): string {
   const map: Record<string, string> = {
     connected: 'connected',
@@ -670,7 +670,7 @@ function DeviceRow({ device, campaigns, serverVersion, onChange }: { device: Dev
   );
 }
 
-/** A modal showing a kiosk's recent activity, newest first, colour-coded by level. */
+/** A modal showing a kiosk's recent activity, newest first, color-coded by level. */
 function LogsModal({ device, onClose }: { device: Device; onClose: () => void }) {
   const [logs, setLogs] = useState<DeviceLog[] | null>(null);
   const [err, setErr] = useState('');
@@ -694,7 +694,7 @@ function LogsModal({ device, onClose }: { device: Device; onClose: () => void })
   }, [onClose]);
 
   // Draggable window: the title bar (traffic lights) is the drag handle; we translate the window
-  // from its centred position. Pointer capture keeps the drag going outside the bar.
+  // from its centered position. Pointer capture keeps the drag going outside the bar.
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const dragRef = useRef<{ sx: number; sy: number; bx: number; by: number } | null>(null);
   const onDragStart = (e: ReactPointerEvent) => {

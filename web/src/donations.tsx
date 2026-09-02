@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { CalendarDays, CheckCircle2, Coins, Download, Loader2, MonitorSmartphone, ReceiptText, TrendingUp, Undo2, X } from 'lucide-react';
 import { fetchDonationsCsv, getDonations, refundDonation, type Donation, type DonationsData, type RefundResult } from './api';
-import { formatMoney } from './money';
+import { decimals as decimalsFor, formatMoney, toMinor } from './money';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
 
@@ -161,6 +161,7 @@ export function DonationsSection() {
         <DonationModal
           d={selected}
           money={money}
+          currency={currency}
           onClose={() => setSelected(null)}
           // Refetch so the row, the badges and above all the TOTALS reflect the refund at once —
           // otherwise the tiles keep showing money the masjid has just given back until the next poll.
@@ -201,11 +202,15 @@ function DonationRow({ d, money, onOpen }: { d: Donation; money: (m: number) => 
 function DonationModal({
   d: initial,
   money,
+  currency,
   onClose,
   onRefunded,
 }: {
   d: Donation;
   money: (m: number) => string;
+  /** The ISO code, not just a formatter. See the decimals note below — deriving the scale from
+   *  formatted output instead of the code is what made partial refunds give back 1/100th. */
+  currency: string;
   onClose: () => void;
   onRefunded: (d: Donation) => void;
 }) {
@@ -227,10 +232,16 @@ function DonationModal({
   const refunded = d.refundedMinor > 0;
   const canRefund = succeeded && remaining > 0;
 
-  // Minor units from what was typed, using the SAME decimal rule as the display formatter — a
-  // zero-decimal currency (JPY) must not be multiplied by 100.
-  const decimals = money(0).replace(/[^0-9.,]/g, '').includes('.') ? 2 : 0;
-  const typedMinor = Math.round(parseFloat(amountText.replace(/[^0-9.]/g, '')) * 10 ** decimals);
+  // Minor units from what was typed. The scale comes from the CURRENCY CODE, via the same helper
+  // the giving designer and the totals use — never from formatted output.
+  //
+  // It used to sniff it: `money(0).…includes('.') ? 2 : 0`. That looked defensive and was wrong for
+  // every currency at once, because `formatMoney` drops the decimals on a whole number — so
+  // `money(0)` is "$0", never "$0.00", and the sniff therefore always answered 0. An admin giving
+  // back $50 of a $100 donation typed 50 and refunded **$0.50**, while the placeholder below (also
+  // computed from this number) told them to type 10000. Three-decimal currencies were out by 1000.
+  const decimals = decimalsFor(currency);
+  const typedMinor = toMinor(amountText.replace(/[^0-9.]/g, ''), currency);
   const wanted = partial ? typedMinor : remaining;
   const amountValid = !partial || (Number.isFinite(typedMinor) && typedMinor > 0 && typedMinor <= remaining);
 

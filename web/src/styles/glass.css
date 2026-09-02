@@ -84,7 +84,7 @@
   opacity: var(--glow-strength);
 }
 
-/* Live status dot — colour conveys state; glow pulses (unless reduced motion). */
+/* Live status dot — color conveys state; glow pulses (unless reduced motion). */
 .status-dot {
   position: relative;
   width: 0.625rem;

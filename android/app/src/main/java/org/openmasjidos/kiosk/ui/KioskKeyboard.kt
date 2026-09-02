@@ -69,7 +69,7 @@ fun KioskKeyboard(
     var symbols by remember { mutableStateOf(false) }
 
     // Tapping shift: single tap = one-shot capital; a quick DOUBLE tap = CAPS LOCK; tapping it while
-    // caps-locked turns caps back off — standard phone-keyboard behaviour. Inert when the field itself
+    // caps-locked turns caps back off — standard phone-keyboard behavior. Inert when the field itself
     // is capitals-only: there is nothing to toggle, and letting it drop to lower case would only
     // produce input the field then re-capitalises.
     val onShift: () -> Unit = {

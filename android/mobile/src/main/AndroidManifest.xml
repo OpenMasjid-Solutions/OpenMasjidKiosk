@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+
+  OpenMasjid Mobile Donations — a volunteer's own phone at a fundraising event.
+
+  WHAT IS DELIBERATELY ABSENT is most of what makes this app different from the kiosk, so it is
+  worth naming rather than leaving as a silence. There is NO `CATEGORY_HOME` (it must never become
+  the phone's launcher), NO `RECEIVE_BOOT_COMPLETED`, NO device-admin receiver, NO Lock Task, and
+  NO `REQUEST_INSTALL_PACKAGES`. Every one of those is right for a tablet bolted to a wall and
+  wrong for somebody's personal phone, which they will use for other things the moment they put it
+  back in their pocket.
+
+  The app is also NOT `android:persistent`, does not keep the screen on globally, and allows the
+  user to leave by pressing Home like any other app.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Talking to the masjid's server (over the Cloudflare tunnel or the LAN) and to Stripe. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
+      Stripe Reader M2 over Bluetooth.
+
+      BLUETOOTH_SCAN carries `neverForLocation`: we are looking for a card reader, not deriving
+      the volunteer's whereabouts, and saying so lets Android skip the location permission on
+      API 31+. ACCESS_FINE_LOCATION is still declared with maxSdkVersion="30" because on Android
+      11 and below the platform genuinely gated BLE discovery behind it and the Terminal SDK will
+      refuse to scan without it.
+
+      Unlike the kiosk, NOTHING here can be granted silently: a volunteer's phone is never device
+      owner, so every one of these is a runtime prompt the app has to ask for and explain.
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <!--
+      NO maxSdkVersion on this one, however tempting it looks beside `neverForLocation` above.
+      `neverForLocation` is a promise about what we do with SCAN RESULTS, and it lets Android skip
+      the location *runtime prompt* for scanning on API 31+. It does not remove Stripe's own
+      requirement: the Terminal SDK refuses to look for ANY reader — Bluetooth or USB — until it
+      holds ACCESS_FINE_LOCATION, on every API level. Capping this at 30 would leave the permission
+      undeclared on every modern phone and reader discovery would simply never find anything, with
+      nothing in the UI to explain why. (CLAUDE.md §10 records the same constraint biting the kiosk.)
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- Both optional: a phone with no BLE, or no USB-host support, can still be paired and used
+         to review what has been collected. `required="false"` also keeps the app installable on
+         the widest range of volunteer hardware. -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.OpenMasjidMobile">
+
+        <!--
+          allowBackup="false" matters more here than on the kiosk. This app holds a device token
+          that can create PaymentIntents against the masjid's Stripe account; letting it ride out
+          to a personal cloud backup and restore onto a different phone would clone that authority
+          silently. Re-pairing takes ten seconds and is the correct way to move it.
+        -->
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name_short"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

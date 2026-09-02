@@ -60,7 +60,7 @@ import org.openmasjidos.kiosk.ui.theme.WarningDark
  * whether it is currently set, and one button per unset item that opens exactly the right dialog or
  * settings page (see kiosk/KioskPermissions.kt for the model).
  *
- * Two behaviours matter as much as the list itself:
+ * Two behaviors matter as much as the list itself:
  *  1. **Every fix button drops kiosk lockdown first.** A permission dialog or a settings screen is
  *     a separate system task, and screen pinning / Lock Task silently suppresses it — the tap would
  *     appear to do nothing at all. [onLeaveLockdown] unpins; this is a temporary excursion, so the

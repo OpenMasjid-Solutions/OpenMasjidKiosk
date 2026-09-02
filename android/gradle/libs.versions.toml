@@ -25,10 +25,10 @@ bouncycastle = "1.78.1"      # SCrypt PIN verification (lightweight crypto API, 
 # Slice 5 (card reader): Stripe Terminal SDK for the M2 over Bluetooth AND USB. The umbrella
 # artifact bundles the core + physical-reader (BT/USB) support. minSdk floor is 26 (we're 26).
 stripeterminal = "5.6.0"
-# Stripe Payments SDK (PaymentSheet) for keyed/manual card entry when there's no reader (or as a
-# fallback). Pinned to a version from the same era as our Compose BOM (1.7 / Kotlin 2.0) so it doesn't
-# drag in a newer Compose our compiler can't build. Validated via CI (no local Android build here).
-stripepayments = "20.44.0"
+# Keyed/manual card entry needs NO Stripe SDK: it runs Stripe.js in the WebView above
+# (androidxWebkit + assets/kioskpay.html). `stripepayments = "20.44.0"` (the PaymentSheet umbrella
+# artifact) was removed on 2026-08-17 — it had outlived that migration and no source file ever
+# imported `com.stripe.android`, so it was being compiled into a sideloaded APK for nothing.
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -40,7 +40,8 @@ androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", versi
 androidx-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
-androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+# (androidx-ui-tooling-preview removed 2026-08-17 — it shipped in the RELEASE apk and there is
+#  no @Preview anywhere in the tree.)
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 # Slice 4 libraries:
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
@@ -51,10 +52,10 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 # Slice 5: Stripe Terminal Android SDK (Bluetooth + USB M2 reader, connection tokens, updates).
 stripe-terminal = { group = "com.stripe", name = "stripeterminal", version.ref = "stripeterminal" }
-# PaymentSheet (prebuilt card-entry sheet) lives in the stripe-android umbrella artifact.
-stripe-payments = { group = "com.stripe", name = "stripe-android", version.ref = "stripepayments" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+# `:core` — the shared library both apps (the kiosk and OpenMasjid Mobile Donations) are built on.
+android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

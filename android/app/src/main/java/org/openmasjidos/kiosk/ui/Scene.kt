@@ -27,7 +27,7 @@ val SceneBrush: Brush
         end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
     )
 
-/** A full-screen box painted with [SceneBrush]. Content is centred by default. */
+/** A full-screen box painted with [SceneBrush]. Content is centered by default. */
 @Composable
 fun SceneSurface(
     modifier: Modifier = Modifier,

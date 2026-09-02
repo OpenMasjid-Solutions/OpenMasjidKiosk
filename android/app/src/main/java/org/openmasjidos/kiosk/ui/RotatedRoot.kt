@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.Constraints
  * rotated is device-independent: it always works, on any tablet, in any mount position. Compose
  * transforms pointer input through the same layer, so taps still land on the right controls.
  *
- * For 90°/270° we measure the content with WIDTH and HEIGHT swapped, then rotate about the centre, so
+ * For 90°/270° we measure the content with WIDTH and HEIGHT swapped, then rotate about the center, so
  * the rotated UI fills the screen exactly (the classic rotate-to-fill layout).
  */
 @Composable
@@ -38,7 +38,7 @@ fun RotatedRoot(degrees: Int, content: @Composable () -> Unit) {
         val childConstraints = if (d == 90 || d == 270) Constraints.fixed(h, w) else Constraints.fixed(w, h)
         val placeables = measurables.map { it.measure(childConstraints) }
         layout(w, h) {
-            // Centre each child so the rotation about the layer centre keeps it on-screen.
+            // Center each child so the rotation about the layer center keeps it on-screen.
             placeables.forEach { it.place((w - it.width) / 2, (h - it.height) / 2) }
         }
     }

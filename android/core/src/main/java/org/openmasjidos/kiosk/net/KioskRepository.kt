@@ -78,7 +78,7 @@ class KioskRepository(context: Context) {
      *  `localhost`, or a `.local`/`.lan` name? Those are where the OS serves a self-signed cert, so we
      *  pair with trust-on-first-use pinning. Anything else — a real public domain OR a public IP — is
      *  treated as REMOTE and validated against the system CA store + hostname verification. Fail CLOSED:
-     *  an empty / unrecognised host returns false (→ system trust), NEVER the weaker accept-any TOFU
+     *  an empty / unrecognized host returns false (→ system trust), NEVER the weaker accept-any TOFU
      *  path. The host is taken from OkHttp's own parser (see pair()) so classification matches the
      *  address actually dialled. */
     private fun isPrivateHost(host: String): Boolean {
@@ -120,7 +120,7 @@ class KioskRepository(context: Context) {
         // https://omos.example.org/kiosk). Validate against the system CA store + hostname — no pin to
         // manage, and the cert may rotate. We do NOT fall back to trust-on-first-use here: a public
         // host that fails to present a valid, matching cert is a cert problem (→ re-pair), never a
-        // silent TOFU downgrade a MITM could exploit. Fail closed: an unrecognised host lands here too.
+        // silent TOFU downgrade a MITM could exploit. Fail closed: an unrecognized host lands here too.
         if (!isPrivateHost(host)) {
             return@withContext try {
                 val resp = KioskApi(PinnedHttp.systemClient()).pair(url, code, name.ifBlank { "Kiosk" })

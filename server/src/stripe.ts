@@ -11,7 +11,7 @@
  *  sensitive) rather than floating with the SDK default. */
 import Stripe from 'stripe';
 
-/** Pinned to the version the installed SDK targets, so behaviour can't silently drift. */
+/** Pinned to the version the installed SDK targets, so behavior can't silently drift. */
 const STRIPE_API_VERSION = '2025-02-24.acacia';
 
 export interface StripeKeys {
@@ -398,7 +398,7 @@ export async function completeCardPresentPaymentIntent(secretKey: string, id: st
  * disturb a donation that has already succeeded and been recorded.
  *
  * (Stripe only actually delivers receipts in live mode; in test mode the call succeeds and no mail
- * is sent, which is Stripe's behaviour and not something this can work around.)
+ * is sent, which is Stripe's behavior and not something this can work around.)
  */
 export async function sendStripeReceipt(secretKey: string, chargeId: string, email: string): Promise<boolean> {
   if (!chargeId || !email.trim()) return false;
@@ -464,7 +464,7 @@ export interface MonthlySubscriptionInput {
    *  with setup_future_usage. */
   paymentMethod: string;
   /** The Customer created BEFORE the payment (see createDonorCustomer) that Stripe attached the saved
-   *  card to. Empty falls back to creating one here — the pre-setup_future_usage behaviour, kept so an
+   *  card to. Empty falls back to creating one here — the pre-setup_future_usage behavior, kept so an
    *  in-flight PaymentIntent from an older build can still complete. */
   customerId?: string;
   name?: string;
@@ -712,7 +712,7 @@ function toPlan(sub: Stripe.Subscription, tally?: PaidTally): StripePlan {
   // A deleted customer keeps only its id — the same guard [retrieveLocation] uses.
   const live = cust && !(cust as { deleted?: boolean }).deleted ? (cust as Stripe.Customer) : undefined;
   const recurring = sub.items.data[0]?.price?.recurring;
-  // Sum the items rather than reading the first one. A kiosk plan is always a single £X/month line,
+  // Sum the items rather than reading the first one. A kiosk plan is always a single $X/month line,
   // but one an admin later edited in the dashboard must not display as a fraction of what the donor
   // is really giving each month.
   const amountMinor = sub.items.data.reduce((sum, it) => sum + (it.price?.unit_amount ?? 0) * (it.quantity ?? 1), 0);
@@ -792,7 +792,7 @@ export async function listPlans(secretKey: string, opts?: { limit?: number }): P
   // Stripe can't filter subscriptions by metadata, so the kiosk's plans are found by scanning the
   // account and filtering here. On an account shared with other apps that scan can fill up entirely
   // with subscriptions that aren't ours — and a screen that then shows nothing, cheerfully, would
-  // read as 'every donor cancelled'. Say when the scan was full so the caller can warn.
+  // read as 'every donor canceled'. Say when the scan was full so the caller can warn.
   const truncated = subs.length >= limit;
   const ours = subs.filter((s) => ((s.metadata ?? {}) as Record<string, string>).app === 'kiosk');
   if (!ours.length) return { plans: [], truncated, totalsCapped: false };
@@ -934,7 +934,7 @@ export async function cancelPlan(secretKey: string, id: string, immediately: boo
   return planAfterWrite(c, updated);
 }
 
-/** Pause or resume collection. 'void' is the only honest behaviour for a masjid: the paused months
+/** Pause or resume collection. 'void' is the only honest behavior for a masjid: the paused months
  *  are never billed at all. The alternatives quietly stack up invoices that all land on the donor
  *  the moment collection resumes, which is not what anyone means by "pause my donation".
  *  pause_collection leaves the subscription's status alone (it does NOT become `paused`), so
@@ -1024,7 +1024,7 @@ export async function schedulePlanEnd(
     // N MORE charges means the boundary AFTER the Nth, not the boundary the Nth falls on.
     //
     // The next charge is raised AT `current_period_end` (call it T0), and the ones after it at
-    // T0+1 interval, T0+2… So charge N happens at T0+(N-1). Cancelling AT that instant is the one
+    // T0+1 interval, T0+2… So charge N happens at T0+(N-1). Canceling AT that instant is the one
     // thing that must not happen: Stripe treats a `cancel_at` landing exactly on a renewal like
     // `cancel_at_period_end` and raises no invoice — so "stop after 1 more charge" would collect
     // nothing at all, and every other N would be one short. Multiplying by N lands the cancel on

@@ -95,7 +95,7 @@ export function parseChangelog(md: string): Release[] {
       releases.push(current);
       continue;
     }
-    if (!current) continue; // the file's title / licence header, above the first release
+    if (!current) continue; // the file's title / license header, above the first release
     const bullet = /^[-*]\s+(.*)$/.exec(line);
     if (bullet) {
       current.items.push(bullet[1]);
@@ -126,7 +126,7 @@ function inline(text: string): React.ReactNode[] {
 }
 
 /** Strip a leading "v" so "## 0.9.34" and a version of "0.9.34" compare equal. */
-const normalise = (v: string) => v.trim().replace(/^v/i, '').split(/\s+/)[0];
+const normalize = (v: string) => v.trim().replace(/^v/i, '').split(/\s+/)[0];
 
 export function WhatsNewModal({ onClose }: { onClose: () => void }) {
   const [md, setMd] = useState<string | null>(null);
@@ -183,7 +183,7 @@ export function WhatsNewModal({ onClose }: { onClose: () => void }) {
           {!md && !err && <p className="muted">Loading…</p>}
           {md && releases.length === 0 && <p className="muted">No release notes shipped with this build.</p>}
           {releases.map((r) => {
-            const current = !!version && normalise(r.version) === normalise(version);
+            const current = !!version && normalize(r.version) === normalize(version);
             return (
               <section className="wn-release" key={r.version}>
                 <h4 className="wn-version">

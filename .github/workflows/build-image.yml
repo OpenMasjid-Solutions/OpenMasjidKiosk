@@ -64,22 +64,42 @@ permissions:
 # :dev is a MOVING tag, so two overlapping dev builds race to own it — and the winner is whichever
 # finishes LAST, not whichever is newer. This build is slow (Gradle APK + two architectures), which
 # makes the overlap window wide, so a lagging older commit could repoint :dev backwards. Superseded
-# dev builds are cancelled so the tag follows the branch tip.
+# dev builds are canceled so the tag follows the branch tip.
 #
-# Scoped to dev deliberately: a release build must never be cancelled. (Tag pushes are each their
+# Scoped to dev deliberately: a release build must never be canceled. (Tag pushes are each their
 # own ref anyway, so they could not cancel one another regardless.)
 concurrency:
   group: build-image-${{ github.ref }}
   cancel-in-progress: ${{ github.ref == 'refs/heads/dev' }}
 
 jobs:
+  # Nothing publishes with a red suite. Until this gate existed, `npm test` was never run in CI at
+  # all: the Dockerfile's `npm run build` type-checked the shipping code, and that was the whole of
+  # it — so every test pinning a bug that has already shipped once (the percent-encoded /api bypass,
+  # the WhatsApp handler's fail-closed auth, the version-suffix pairing) could go red without
+  # stopping a single image from reaching a masjid. Runs in parallel with the APK, and the APK is
+  # much slower, so on a green run this costs no extra wall-clock.
+  test:
+    uses: ./.github/workflows/test.yml
+
   # Build (and sign, if secrets are set) the APK, exposed as the `kiosk-apk` artifact.
+  #
+  # Only the four signing secrets are passed. This used to be `secrets: inherit`, which handed the
+  # APK job every repo secret — including CATALOG_PUSH_TOKEN, a PAT with write access to a DIFFERENT
+  # repository — to a job whose whole purpose is to run Gradle against the public plugin and
+  # dependency ecosystem. Nothing here can go wrong quietly: if a signing secret fails to arrive the
+  # build falls back to a debug APK, and the collect step in build-apk.yml fails the run rather than
+  # publishing a key-mismatched app to the fleet.
   apk:
     uses: ./.github/workflows/build-apk.yml
-    secrets: inherit
+    secrets:
+      SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+      SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+      SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+      SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
 
   image:
-    needs: apk
+    needs: [test, apk]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -124,6 +144,41 @@ jobs:
             echo 'TAGS_EOF'
           } >> "$GITHUB_OUTPUT"
           echo "publishing the $channel channel"
+
+      # CLAUDE.md rule 6b says "bump all six together" and promises "CI fails the build on drift".
+      # It did not — the only check was the compose tag against the manifest, two of seven fields.
+      #
+      # The gap is not cosmetic, because `server/package.json` is where `config.version` is READ
+      # FROM. Bump the manifest and the compose but forget it, and the build is green, the image
+      # publishes, and the server reports the PREVIOUS version — which the heartbeat then sends to
+      # every tablet as `latestAppVersion`. The tablet compares that against its own versionName by
+      # plain string inequality, so the whole fleet shows "Update available" for ever and installing
+      # never clears it. That exact failure has already shipped twice, by two different routes.
+      #
+      # Both lockfiles carry the version twice (top level and `packages[""]`); the check reads the
+      # first two `"version":` lines of each and requires them to agree with each other and with the
+      # manifest, so a half-applied `npm version` is caught too.
+      - name: Check every version field agrees
+        run: |
+          ver='${{ steps.meta.outputs.version }}'
+          fail=0
+          check() {
+            if [ "$2" != "$ver" ]; then
+              echo "::error file=$1::$1 says '$2', manifest.yaml says '$ver' — rule 6b: bump all of them together"
+              fail=1
+            else
+              echo "ok  $1 = $2"
+            fi
+          }
+          check VERSION "$(tr -d ' \r\n' < VERSION)"
+          for f in server/package.json web/package.json; do
+            check "$f" "$(sed -nE 's/^[[:space:]]*"version":[[:space:]]*"([^"]+)".*/\1/p' "$f" | head -1)"
+          done
+          for f in server/package-lock.json web/package-lock.json; do
+            n=$(sed -nE 's/^[[:space:]]*"version":[[:space:]]*"([^"]+)".*/\1/p' "$f" | head -2 | sort -u | tr -d ' \n')
+            check "$f" "$n"
+          done
+          exit $fail
 
       # docker-compose.yml is what the catalog serves to installers (it fetches the file from the
       # ref its registry entry pins), so this file IS a shipped artifact and the channel invariant
@@ -181,29 +236,55 @@ jobs:
                 *:dev|*:dev@*) echo "::error file=docker-compose.yml::stable must never reference the moving :dev image — that would point every stable install at a development build. Re-pin to <version>@sha256:<digest>."; exit 1 ;;
                 *-dev.*|*-dev@sha256:*) echo "::error file=docker-compose.yml::stable must not reference a development prerelease image ('$img')."; exit 1 ;;
               esac
+              # THE VERSION IN THE TAG MUST MATCH THE MANIFEST, and until now nothing on the stable
+              # side checked it — only "not a prerelease", "not :dev", and (on tags) "is pinned". So a
+              # main compose left on the PREVIOUS release's digest passed green, and the vX.Y.Z tag
+              # then shipped the previous release's code under the new version number to anyone
+              # pinning by tag. That is exactly the trap rule 7c exists to prevent, and it had no
+              # enforcement. CLAUDE.md records it happening twice.
+              #
+              # Graded the same way the digest check is, and for the same reason: on a TAG both the
+              # version and the digest must be exact, because the tagged commit is what the catalog
+              # pins. On a main BRANCH push it can only be a warning — the runbook's order is bump ->
+              # build -> pin the digest CI just printed, so the first main build necessarily still
+              # carries the old reference. Erroring there would make the release impossible to start.
               case "$GITHUB_REF" in
                 refs/tags/v*)
                   case "$img" in
-                    *@sha256:*) echo "ok — release is digest-pinned" ;;
+                    *:"$ver"@sha256:*) echo "ok — release is $ver and digest-pinned" ;;
+                    *@sha256:*) echo "::error file=docker-compose.yml::this tag builds manifest version '$ver' but the compose pins '$img'. The tag would ship a DIFFERENT release's code under $ver. Tag the digest-pin commit for THIS version, not the version-bump commit before it."; exit 1 ;;
                     *) echo "::error file=docker-compose.yml::a release compose must digest-pin the image (@sha256:…), got '$img'. Did a dev merge land without re-pinning?"; exit 1 ;;
                   esac ;;
                 *)
                   case "$img" in
-                    *@sha256:*) echo "ok — main is digest-pinned" ;;
+                    *:"$ver"@sha256:*) echo "ok — main is $ver and digest-pinned" ;;
+                    *@sha256:*) echo "::warning file=docker-compose.yml::main's compose is digest-pinned but names '$img' while the manifest says '$ver' — expected during a release, between the version bump and the digest re-pin. It MUST be re-pinned before tagging; the tag build will refuse it." ;;
                     *) echo "::warning file=docker-compose.yml::main's compose is not digest-pinned yet — pin the digest before tagging the release" ;;
                   esac ;;
               esac ;;
           esac
 
-      # Pull the freshly built APK into the build context so the Dockerfile bundles it.
-      - name: Fetch built APK
+      # Pull the freshly built APKs into the build context so the Dockerfile bundles them. BOTH land
+      # in ./apk/, which the Dockerfile copies wholesale into /app/public/download — so /new can
+      # hand out the wall KIOSK app and the handheld OpenMasjid Mobile Donations app.
+      - name: Fetch built kiosk APK
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: kiosk-apk
           path: apk
 
-      - name: Confirm APK is present
-        run: ls -la apk && test -f apk/openmasjidkiosk.apk
+      - name: Fetch built mobile APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mobile-apk
+          path: apk
+
+      # Both, by exact filename. The server checks each independently and /new offers only what is
+      # actually there, so a missing one would degrade quietly rather than fail — which is the wrong
+      # failure here: an image that silently ships without the app someone is standing there waiting
+      # to install is worse than a red build.
+      - name: Confirm both APKs are present
+        run: ls -la apk && test -f apk/openmasjidkiosk.apk && test -f apk/openmasjidmobile.apk
 
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -281,9 +362,28 @@ jobs:
       #
       # It does not close the window entirely: OpenMasjidAPPS also rebuilds hourly, so a tick that
       # lands during this workflow (~7 min) can still catch the new manifest version before the
-      # image is pushed. That resolves itself on the next dispatch or tick, and a missing tag fails
-      # loudly rather than silently — but it is the reason not to bump the version until the build
-      # that will publish it is the one being pushed.
+      # image is pushed.
+      #
+      # WHAT ACTUALLY HAPPENS IN THAT WINDOW, observed 2026-08-21 and NOT what this comment used to
+      # claim. It said "a missing tag fails loudly rather than silently". It does not fail at all:
+      # the catalog quietly falls back to our STABLE entry, so for the length of the window a
+      # dev-channel box is told the current version is the last release. Timeline from that day:
+      #
+      #   15:55:52Z  dev push; manifest on the branch already says 0.12.0-dev.9
+      #   16:00:12Z  catalog rebuild -> kiosk 0.11.0     (image not in GHCR yet)
+      #   16:01:48Z  catalog rebuild -> kiosk 0.11.0
+      #   16:02:59Z  this workflow finishes; :0.12.0-dev.9 pushed
+      #   16:03:15Z  catalog rebuild -> kiosk 0.12.0-dev.9   (recovered on its own)
+      #
+      # Every other app kept its own dev prerelease throughout, so this is the catalog resolving
+      # OUR entry specifically and choosing `ref:` over `dev_ref:` when the dev image is missing.
+      # Self-healing, roughly three minutes, and it has never been seen to strand anything — but a
+      # silent cross-channel DOWNGRADE is a worse shape than a loud pull failure, because nothing
+      # anywhere reports it. Keeping the previous dev entry would be the better fallback; that is a
+      # catalog-side decision, not ours.
+      #
+      # None of this is avoidable from here: the bump and the build are already the same push, and
+      # the gap between the manifest landing on the branch and the image existing is inherent.
       - name: Notify catalog to rebuild
         if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/dev'
         continue-on-error: true

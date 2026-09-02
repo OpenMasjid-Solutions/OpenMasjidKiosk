@@ -16,7 +16,7 @@ protected by the exit PIN — donors never see any of it.
 ## 1. Get the reader ready
 
 - **Charge it.** Hold the M2's power button until the light comes on.
-- **Bluetooth:** just power it on and keep it within a metre of the tablet. No pairing in Android
+- **Bluetooth:** just power it on and keep it within a meter of the tablet. No pairing in Android
   Settings — the kiosk app finds it directly.
 - **USB:** plug the M2 into the tablet with a USB-C/USB cable. Android will ask for permission to
   use the USB device the first time — tap **OK**.
@@ -30,11 +30,18 @@ protected by the exit PIN — donors never see any of it.
 
 ## 3. Connect
 
-1. Choose **Bluetooth**, **USB**, or **Test reader**.
-   - **Test reader** is Stripe's built-in simulator — use it to try the whole donation flow with
-     no hardware and no real charges (test mode).
+1. **A USB reader needs nothing here — plug it in and it connects itself.** The rest of this
+   section is for a **Bluetooth** reader, which is the only option the picker offers.
+
+   (There is no three-way "Bluetooth / USB / Test reader" chooser; this step used to describe one.
+   USB connects on its own, and the simulated reader was taken out of the shipped app — it is a
+   development tool, and a "Test reader" button on a wall kiosk is a way for a real donation to be
+   silently not taken. Simulated readers are still available in local development.)
+
+   **No reader at all?** The kiosk offers typed card entry automatically. Donations keep working.
 2. Tap **Find a reader**. The first time, Android asks for Bluetooth/Location permission — allow it
-   (Location must also be turned on in the tablet's quick settings; the SDK needs it to scan).
+   (Location must also be turned on in the tablet's quick settings; the SDK needs it to scan, even
+   for a USB reader).
 3. When your reader appears, tap **Connect**.
 4. If the reader needs a firmware update, the app installs it automatically — **keep it powered and
    nearby**; this can take a few minutes. Don't unplug it.
@@ -55,7 +62,7 @@ disconnected reader remotely.
 - **No readers found (USB)** — reseat the cable and accept the Android USB permission prompt. Some
   cheap cables are charge-only; use a data cable.
 - **Keeps disconnecting** — charge the reader; a low battery drops the connection. Keep it within a
-  metre for Bluetooth.
+  meter for Bluetooth.
 - **Reader problem / won't connect** — disconnect, then find and connect again. If it still fails,
   restart the reader (hold power ~8 seconds) and retry.
 

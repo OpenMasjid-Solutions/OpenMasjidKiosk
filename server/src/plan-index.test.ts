@@ -47,7 +47,7 @@ test('THE REGRESSION: a plan the scan misses is still listed, because we recorde
   assert.deepEqual(r.listed, ['sub_live1'], 'the plan must appear — it is cancellable only if visible');
   assert.equal(r.unconfirmed, 0);
   // Under the old rule the index WAS the scan, so this was the empty state.
-  assert.deepEqual([], [], 'old behaviour: scanned=[] meant "No recurring plans yet"');
+  assert.deepEqual([], [], 'old behavior: scanned=[] meant "No recurring plans yet"');
 });
 
 test('the healthy case costs no extra Stripe calls', () => {
@@ -75,7 +75,7 @@ test('no duplicates when a plan is both scanned and recorded', () => {
 });
 
 test('a recorded plan Stripe cannot confirm is COUNTED, never silently dropped', () => {
-  // Either it was cancelled in the dashboard (the row is stale — fine, but say so) or it lives on an
+  // Either it was canceled in the dashboard (the row is stale — fine, but say so) or it lives on an
   // account we can no longer reach (a donor is being charged somewhere this screen cannot cancel).
   // Both deserve a sentence; neither deserves the cheerful empty state.
   const r = buildIndex({ scanned: [], recorded: ['sub_gone'], inStripe: [] });
@@ -94,7 +94,7 @@ test('a Stripe error is not the same as a missing plan', () => {
   assert.equal(classify('network'), 'failure');
 });
 
-test('ownership: a local row beats the metadata tag, for reading AND for cancelling', () => {
+test('ownership: a local row beats the metadata tag, for reading AND for canceling', () => {
   // metadata.app=kiosk is a DISCOVERY filter for accounts we may share with other apps — it is not
   // what makes a plan ours. A local row is: we wrote it when we created the subscription. Gating on
   // metadata alone made a plan created before the tag existed (v0.10.0) invisible AND uncancellable.

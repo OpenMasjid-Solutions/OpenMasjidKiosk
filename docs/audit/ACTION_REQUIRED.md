@@ -3,9 +3,138 @@
 
 # Action required — things only you can do
 
-From the 2026-08-04 security audit. Everything here is outside what I should decide or do on my own.
+From the 2026-08-04 security audit, plus §§9–12 from the 2026-08-17 repo-wide sweep. Everything here
+is outside what I should decide or do on my own.
 
 ---
+
+## From the 2026-09-01 pre-release sweep — one thing needs a tablet
+
+### 13. A monthly gift can still be downgraded to a one-off silently, on ONE remaining path — HIGH
+
+Found in the 0.12.0 pre-flight. **Half of it is fixed in this release; the other half needs hardware.**
+
+Keyed entry always creates a ONE-OFF charge (`startManualCollect` passes `monthly = false`) but never
+cleared `giving.monthly` — so the thank-you screen still rendered `"$X / month"`
+(`GivingScreen.kt:1497`) and `monthlyOutcome` stayed `None`, so the honest "we couldn't set up monthly
+giving" note did not appear either. The donor leaves believing a standing order exists. It does not.
+That is the failure v0.11.0 headlined, reached through a different door, and it is **pre-existing —
+`v0.11.0` has the identical shape**, so it is not a regression in this release.
+
+**Fixed here:** the donor-initiated route. The "enter card by hand" button is no longer offered for a
+monthly gift (`manualOnCard && !isTuition && !giving.monthly`). That makes the card step agree with a
+guard the flow already had — `startGiving` refuses a monthly gift with no reader, saying "Monthly
+giving needs the card reader" — and its failure mode is benign: the donor uses the reader, which is
+what monthly requires anyway.
+
+**NOT fixed, and this is the bit for you.** The automatic fallback at `KioskViewModel.kt:788` still
+calls `startManualCollect()` when `ReaderManager.registerFor` fails to move the reader onto a
+campaign's own Stripe account. For a MONTHLY gift that silently downgrades and still says "/ month".
+
+**Why I left it.** The fix touches the donation state machine — clearing `monthly` and setting
+`monthlyOutcome = NotSupported` at the top of `startManualCollect`, and stopping the success path at
+`KioskViewModel.kt:931` clobbering it back to `None`. There is no Android SDK on this machine, so CI
+compiling is the only check that code gets, and an unverified edit to the flow every donation runs
+through is a far worse risk than a rare pre-existing edge case. It needs a tablet, a campaign on a
+second Stripe account, and a forced `registerFor` failure.
+
+**What I would do:** make that branch route to the SAME error the existing guard uses rather than
+downgrading at all — a monthly gift genuinely needs the reader, so falling back to keyed is wrong
+regardless of what the screen then says.
+
+---
+
+## From the 2026-08-17 sweep — four decisions, in the order I would take them
+
+Fixed and shipped in that sweep (listed so you know what is *not* waiting on you): the partial-refund
+scale bug, refunds failing after 7 days on a campaign's own Stripe account, refunds missing from the
+audit trail, `/complete` swallowing exceptions, the email circuit breaker ignoring "unreachable", CI
+never running the tests, and a batch of dead code and stale documentation. The four below are left
+because each needs a judgement that is yours, and I have said plainly why rather than guessing.
+
+### 9. A kiosk with no exit PIN gives any passer-by Android Settings — HIGH
+
+**No exit PIN is the default state.** `pinHash` is empty until an admin sets one in Devices, and
+nothing requires it. On such a kiosk, `KioskViewModel.kt:1250` deliberately opens the maintenance
+screen without a PIN prompt — the comment explains why, and the reasoning is sound as far as it goes:
+*"so a fresh kiosk isn't bricked for reader setup/diagnostics"*. `exitAllowed` is correctly withheld,
+so **Exit kiosk** stays hidden.
+
+But two other controls on that screen are escapes, not diagnostics, and neither is gated:
+
+- **Open Android Settings** — whose own comment says it "drops kiosk lockdown so Settings can open".
+  From Settings, the tablet is entirely open.
+- **Re-pair** — which can point the tablet at a different server.
+
+Ten taps on the background of the giving screen is all it takes. The fix the audit proposes is small
+and obvious — gate those two on `exitAllowed` as well — but it changes the kiosk lockdown on a path
+that **cannot be compiled or run on the dev machine**, and it interacts with first-run setup, which is
+exactly what the current behavior exists to protect. Getting it wrong strands a volunteer at a
+tablet with no way into Settings to join Wi-Fi.
+
+**What I would do:** set an exit PIN on every kiosk today (Devices → the kiosk → exit PIN) — that
+alone closes it completely. Then make the change deliberately, with a tablet in hand. Worth
+considering alongside it: the admin panel could simply refuse to leave the PIN unset, or warn on the
+Devices page, which is a web-only change that can be tested here.
+
+**`README.md` was also wrong about this** and has been corrected: it described the gesture as always
+leading to "your exit PIN", which is only true once one is set.
+
+### 10. Keyed-card donations are captured on the tablet, not by the server — HIGH
+
+`createCardPaymentIntent` (`stripe.ts`) sets no `capture_method`, so keyed intents **auto-capture** on
+confirm. The reader path sets `capture_method: 'manual'` and the server captures only after
+re-checking with Stripe — which is the invariant the whole app is built on ("never trust the
+tablet's word"). The keyed path does not have it.
+
+The consequence: if the tablet's `/complete` call is lost — a dropped connection, a crash, a server
+restart at the wrong second — **Stripe has taken the money and this app has no record of it**, and the
+donor is shown *"That didn't complete. If your card was charged it will be refunded."* Nothing
+refunds it, because nothing knows. Keyed entry is not a rare path: the tablet falls back to it
+automatically whenever no reader is connected.
+
+**Why I did not just fix it.** The one-line change (`capture_method: 'manual'`) is almost certainly
+right, and the server already handles `requires_capture` on this route. But it changes the
+**semantics of a live payment path** that I cannot compile, run, or put a card through from here. If
+the WebView's confirm treats a non-`succeeded` status as failure, every keyed donation breaks — and
+keyed entry is the fallback that keeps a masjid taking money when its reader dies. The blast radius
+of being wrong is much larger than the bug.
+
+**What I would do:** make the change, then put one real card through a kiosk with the reader
+unplugged, on test keys, before it ships. It is a fifteen-minute check that can only be done with
+hardware. Consider a reconciliation sweep too — PaymentIntents we created that never completed —
+since that closes the class rather than this instance.
+
+### 11. The local admin password can never be changed
+
+There is **no route and no UI** to change it. `setAdmin` is called from exactly one place —
+`POST /api/setup` — which refuses once an admin exists.
+
+This matters most because **§1 of this very document tells you to rotate it**, as the response to a
+possible exposure. That instruction cannot be carried out. If you only ever sign in through
+OpenMasjidOS SSO there is nothing to rotate and this is moot; if a local password was set at first
+run, it is currently fixed for the life of the install.
+
+**What I would do:** add `PUT /api/admin/password` behind `requireAdmin`, requiring the current
+password when one is set, and skipping that check for an SSO-minted session so an SSO admin can set a
+recovery password. Small and testable — I left it out because it is a feature, not a fix, and adding
+an auth route is not something to slip into a sweep unannounced.
+
+### 12. Two smaller ones I judged were yours
+
+- **Donor names and email addresses go to WhatsApp verbatim** when an admin switches that channel on
+  for `donation-refunded` or `monthly-cancelled` (`raiseAlert` sends one identical body to all three
+  channels). `CLAUDE.md` §18 forbids donor identity in WhatsApp **commands** and says why — a thread
+  keeps a copy forever on at least two phones — but says nothing about alerts, and an admin arguably
+  needs the name to act on "a donor stopped their monthly donation". Email carries the same content
+  and is on by default. **So this may be exactly what you intended**; it is only worth flagging
+  because the same reasoning was applied so carefully one paragraph away. If you want it changed, the
+  shape is a WhatsApp-specific rendering that keeps the amount, kiosk and fund and drops the person.
+- **The Gradle wrapper downloads its distribution unverified** (no `distributionSha256Sum`), in the
+  job that has just decoded the APK signing keystore to disk. Adding the checksum is the right fix
+  and I did not, because I cannot obtain the published hash from here in a way worth trusting — and a
+  wrong one breaks every Android build. It is two minutes with the checksum from
+  `services.gradle.org`.
 
 ## 1. Decide whether KIOSK-001 was ever live, and for how long
 
@@ -24,16 +153,20 @@ What I need you to do, in order:
 
 ---
 
-## 2. Merge the PR
+## 2. ~~Merge the PR~~ — DONE, shipped in v0.10.0. Nothing to do.
 
-Autonomous push was disabled — see the top of `REMEDIATION.md`. Everything is on **`audit/security-2026-08-04`** with a PR open. Nothing has been merged and nothing has been published.
+Kept as a record rather than deleted, because the paragraph that used to be here told a reader to go
+and merge a branch that no longer exists, and that instruction outlived its truth by two releases.
 
-Merging to `main` will trigger `build-image.yml`, which pushes a new multi-arch image to GHCR tagged **`0.10.0` and `latest`** — and that moves the `0.10.0` tag off the `@sha256:4c0c09e8…` digest currently pinned in `docker-compose.yml` and in the OpenMasjidAPPS registry. Masjids pull by digest, so nobody gets these fixes until you re-pin. The normal release flow applies:
+The audit branch `audit/security-2026-08-04` was merged and released as **v0.10.0**; the fixes have
+since been carried through v0.10.2, v0.11.0 and the current cycle. The release runbook it described
+now lives in `CLAUDE.md` rules 7 and 7c, which is the version to follow — it has been corrected
+twice since (tag the digest-pin commit, not the release commit; and open a PR against the catalog's
+`dev`, never push its `main`).
 
-1. Merge the PR.
-2. Let `Build image` finish; take the printed `@sha256` digest.
-3. Bump `VERSION`, `manifest.yaml`, both `package.json`s and `CHANGELOG.md` (I have deliberately **not** touched the version — picking a release number is yours).
-4. Commit the digest pin, tag, and bump the OpenMasjidAPPS registry entry.
+**Autonomous push is no longer disabled.** `REMEDIATION.md`'s header still describes the audit-run
+policy of 2026-08-04; the standing policy is `CLAUDE.md` §0 — all work lands on `dev` freely, and
+`main` moves only when the maintainer says "merge to main".
 
 ---
 
@@ -105,8 +238,8 @@ I did not guess at this because picking a masjid's timezone for them is exactly 
 
 ## 7. Two small product decisions I left alone
 
-- ~~**`consumeTuitionSession` is dead code**~~ ([KIOSK-014](SECURITY_AUDIT.md#kiosk-014)) — **deleted 2026-08-13.** It was never called, so removing it changed no behaviour, and it took its misleading "single-use" comment with it. `getTuitionSession` now documents the truth: a session is **reusable until it expires**, deliberately, so a parent whose card is declined doesn't have to type the Student ID and re-confirm the child again. Wiring single-use *on* remains the open product question ("should a declined tuition card force a fresh lookup?") and is still nobody's call but yours. Not a vulnerability either way: every mint recomputes the amount server-side and re-checks the device binding.
-- **Android has no unit tests at all.** `KioskViewModel.backoffUntil` and `ScryptPin.verify` are pure functions guarding a public terminal, and neither can be tested today. A `test/` source set with a handful of JVM tests would have caught KIOSK-002 outright. Worth an issue — and it is the only compile-and-behaviour gap left, since the dev machine has no Android SDK and CI's `build-apk` job proves compilation but nothing else.
+- ~~**`consumeTuitionSession` is dead code**~~ ([KIOSK-014](SECURITY_AUDIT.md#kiosk-014)) — **deleted 2026-08-13.** It was never called, so removing it changed no behavior, and it took its misleading "single-use" comment with it. `getTuitionSession` now documents the truth: a session is **reusable until it expires**, deliberately, so a parent whose card is declined doesn't have to type the Student ID and re-confirm the child again. Wiring single-use *on* remains the open product question ("should a declined tuition card force a fresh lookup?") and is still nobody's call but yours. Not a vulnerability either way: every mint recomputes the amount server-side and re-checks the device binding.
+- **Android has no unit tests at all.** `KioskViewModel.backoffUntil` and `ScryptPin.verify` are pure functions guarding a public terminal, and neither can be tested today. A `test/` source set with a handful of JVM tests would have caught KIOSK-002 outright. Worth an issue — and it is the only compile-and-behavior gap left, since the dev machine has no Android SDK and CI's `build-apk` job proves compilation but nothing else.
 
 ---
 
@@ -116,6 +249,6 @@ Stated so you can check them rather than inherit them:
 
 1. **That percent-decoding is the only canonicalisation Fastify's router applies to static path segments.** I tested duplicate slashes, dot segments, encoded dot segments, encoded slashes, case, trailing slashes and null bytes (all correctly 404) alongside the encoding that worked. The fix does not depend on this being an exhaustive list — it fails closed on the raw form *and* the decoded forms — but the list itself came from probing, not from the router's source.
 2. **That `kioskpay.html` is the only page ever loaded in the card WebView.** True in the current code; the KIOSK-005 allowlist would need widening if that changes.
-3. **That the reusable `build-apk.yml` compiling successfully means the Kotlin changes are correct.** It means they *compile*. KIOSK-002 and KIOSK-015 are pure functions I reasoned about carefully; KIOSK-005 changes runtime navigation behaviour and **should get one real keyed-card payment as a smoke test** before you rely on it.
+3. **That the reusable `build-apk.yml` compiling successfully means the Kotlin changes are correct.** It means they *compile*. KIOSK-002 and KIOSK-015 are pure functions I reasoned about carefully; KIOSK-005 changes runtime navigation behavior and **should get one real keyed-card payment as a smoke test** before you rely on it.
 4. **That "50 wrong pairing codes in 10 minutes across the whole network" is comfortably above legitimate use.** A volunteer types one code, correctly or once wrong. If a masjid ever bulk-pairs a large fleet with a lot of mistyping, they would see a 429 and have to wait — recoverable, and the admin can re-issue codes.
 5. **That the audit trail's `actor` is best-effort by necessity.** Our session cookie asserts that *someone* signed in, not who. When the platform can name the SSO user we record that; otherwise the row says so plainly. If you want reliable attribution, the session cookie needs to carry an identity — a bigger change than an audit run should make.

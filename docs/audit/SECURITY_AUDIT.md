@@ -12,13 +12,17 @@
 > were all re-checked and are sound; every SQL statement is still parameterised; no secret, key or
 > `.env` has entered the tree.
 >
-> Two items closed and two recorded:
+> Two items closed and two recorded. (**Numbering note, corrected 2026-08-17:** the cancel-page
+> finding below was first written up as KIOSK-016, which the 2026-08-04 audit had already used for
+> "no Android unit tests" — the base audit ran to KIOSK-016, so the two new ones should have started
+> at 017. It is **KIOSK-018** here and everywhere. `ACTION_REQUIRED.md` links these ids as anchors,
+> so a duplicate silently points at the wrong finding.)
 >
 > | | Item | Outcome |
 > |---|---|---|
 > | ✅ | **Clickjacking** (left open as [ACTION_REQUIRED §4](ACTION_REQUIRED.md)) | **Fixed.** The open question was whether OpenMasjidOS iframes apps. It does not — `openApp()` uses `window.open(…, '_blank')` and `iframe` appears nowhere in its source. `frame-ancestors 'none'` + `X-Frame-Options: DENY` now ship on every response, verified against a running server. |
 > | ✅ | **KIOSK-014** `consumeTuitionSession` dead code | **Deleted**, along with the comment claiming a single-use property the code never had. |
-> | 🆕 | **KIOSK-016 (Low)** — the donor cancel page could amplify to Stripe | `GET /m/:token` asks Stripe whether the plan is still live. A real token in the wrong hands (or a mailbox-scanning bot) turned unlimited page loads into unlimited Stripe API calls against the masjid's own rate limit. An unknown token was always a cheap hash lookup that 404s first, so only valid tokens were affected. **Fixed** with a 120/min global lookup budget that **fails open** — when spent, the page shows the button rather than refusing anyone, and the POST always checks properly. Pinned by two tests. |
+> | 🆕 | **KIOSK-018 (Low)** — the donor cancel page could amplify to Stripe | `GET /m/:token` asks Stripe whether the plan is still live. A real token in the wrong hands (or a mailbox-scanning bot) turned unlimited page loads into unlimited Stripe API calls against the masjid's own rate limit. An unknown token was always a cheap hash lookup that 404s first, so only valid tokens were affected. **Fixed** with a 120/min global lookup budget that **fails open** — when spent, the page shows the button rather than refusing anyone, and the POST always checks properly. Pinned by two tests. |
 > | 🆕 | **KIOSK-017 (Info)** — cover-fees applies to monthly on fee-forcing appeals | A Zakat appeal forces the fee, and nothing excludes monthly, so the recurring amount is the grossed-up one. The tablet **displays** the grossed-up figure correctly, so nobody is charged a surprise — but the details step only explains the fee for one-time gifts, so a monthly Zakat donor sees the higher number unexplained. Not a defect in the arithmetic and arguably correct for zakat (it must arrive whole). **Left as-is deliberately** — changing what donors are charged is not an audit's call. Documented in `README.md`. |
 >
 > Also swept: three more unused exports removed (`cachedFabricStripe`, `cachedStudentsInfo`,
@@ -55,7 +59,7 @@ Confirmed by running the server locally and probing it. Any masjid that has turn
 
 Second is **KIOSK-003**, four high advisories on an outdated `@fastify/static` — two of which are the *same class of defect* as KIOSK-001, which is what moved it up.
 
-**A correction to my own first read.** I initially rated KIOSK-002 (an integer-shift overflow in the Android exit-PIN lockout) as High, on the assumption that it collapsed the throttle entirely. Then I modelled the arithmetic properly: it allows 13.5 guesses/hour against an intended 12.0, and a 4-digit PIN still needs ~31 days of continuous attack instead of ~35. It is a real defect producing a negative duration and worth the free fix, but it is a degraded rate limiter, not a way past the PIN. **Re-rated Low.** The numbers are in the finding.
+**A correction to my own first read.** I initially rated KIOSK-002 (an integer-shift overflow in the Android exit-PIN lockout) as High, on the assumption that it collapsed the throttle entirely. Then I modeled the arithmetic properly: it allows 13.5 guesses/hour against an intended 12.0, and a 4-digit PIN still needs ~31 days of continuous attack instead of ~35. It is a real defect producing a negative duration and worth the free fix, but it is a degraded rate limiter, not a way past the PIN. **Re-rated Low.** The numbers are in the finding.
 
 Nothing found suggests any donor has been mischarged or any amount miscounted. The payment arithmetic (presets, custom bounds, cover-fees gross-up, zero-decimal currencies, tuition line sums, recurring end-date maths) was reviewed specifically for that and is sound.
 
@@ -106,7 +110,7 @@ There are no webhooks, no message consumers, no cron, no deep links.
 - **A member of the public standing at the kiosk.** Wants free access to the tablet, or to see whose children owe money. Unlimited attempts, no tooling. → *the exit PIN, session bleed between donors, idle timeouts.* (KIOSK-002, KIOSK-005)
 - **Someone on the masjid Wi-Fi.** Guest networks are common. → *unauthenticated LAN endpoints, pairing brute force.* (KIOSK-006)
 - **An internet attacker, once remote adoption is on.** → *anything reachable through the tunnel.* (KIOSK-001)
-- **A curious or disgruntled volunteer with the admin password.** → *donor data export, cancelling standing orders with no trace.* (KIOSK-004)
+- **A curious or disgruntled volunteer with the admin password.** → *donor data export, canceling standing orders with no trace.* (KIOSK-004)
 - **A supply-chain attacker.** The APK signing keystore is the crown jewel; whoever holds it can push a signed update to every tablet. → *unpinned third-party GitHub Actions.* (KIOSK-007)
 
 **Not in the model:** a compromised OpenMasjidOS host (game over regardless), and Stripe itself.
@@ -130,7 +134,7 @@ There are no webhooks, no message consumers, no cron, no deep links.
 | KIOSK-011 | HTTPS-upgrade redirect port is influenced by an untrusted header | Low | Likely | `server/src/index.ts:112-127` | **Deferred** |
 | KIOSK-012 | Container runs as root | Low | Confirmed | `Dockerfile:33` | **Deferred** |
 | KIOSK-013 | "Today / this week / this month" totals use the container's timezone | Info | Confirmed | `server/src/store.ts:1422-1453` | **Deferred** |
-| KIOSK-014 | `consumeTuitionSession` is dead code; its doc comment describes behaviour that does not happen | Info | Confirmed | `server/src/students.ts:536` | **Deferred** |
+| KIOSK-014 | `consumeTuitionSession` is dead code; its doc comment describes behavior that does not happen | Info | Confirmed | `server/src/students.ts:536` | **Deferred** |
 | KIOSK-015 | `ScryptPin` accepts an unbounded cost parameter | Low | Likely | `android/…/security/ScryptPin.kt:51` | Fixed |
 | KIOSK-016 | No Android unit tests exist, so pure security-relevant functions can't be tested | Info | Confirmed | `android/app/build.gradle.kts` | **Deferred** |
 
@@ -269,7 +273,7 @@ Will install @fastify/static@10.1.2, which is a breaking change
 
 `POST /api/admin/plans/:id/cancel`, `/pause` and `/schedule` each stop or alter a real donor's standing order at Stripe. They are behind `requireAdmin` and they log nothing. `log.warn` fires only on failure; the success path writes no record at all — not to the container log, not to the database.
 
-**Impact.** A masjid with a shared admin password (the standalone fallback is a single password, and SSO sessions are minted into the same cookie) has no way to answer "who cancelled Fatima's £50/month, and when?". Stripe's own dashboard shows the subscription was cancelled by API key, which is the same key for every admin. This is the one class of action in the app that reaches out and changes something in a donor's life, and it is unattributable.
+**Impact.** A masjid with a shared admin password (the standalone fallback is a single password, and SSO sessions are minted into the same cookie) has no way to answer "who canceled Fatima's $50/month, and when?". Stripe's own dashboard shows the subscription was canceled by API key, which is the same key for every admin. This is the one class of action in the app that reaches out and changes something in a donor's life, and it is unattributable.
 
 **Reachability:** requires an admin session; the concern is insider action and post-incident reconstruction, not external attack.
 
@@ -285,7 +289,7 @@ The `WebViewClientCompat` overrides only `shouldInterceptRequest`. `shouldOverri
 
 **Impact.** This WebView is full-screen, donor-facing and inside a locked kiosk. If anything ever drives a main-frame navigation, the kiosk becomes an unrestricted browser — the classic kiosk escape.
 
-**Reachability: theoretical today.** I read `android/app/src/main/assets/kioskpay.html` in full: it performs no top-level navigation, `stripe.confirmCardPayment` with the Card Element renders 3-D Secure in an iframe, and the only external script is `https://js.stripe.com/v3/`. So there is no live path to this. It is defence-in-depth against a future change to that page, a Stripe.js behaviour change, or a compromised `js.stripe.com`. Given the engagement's explicit focus on kiosk escape at a public terminal, it is worth closing rather than noting.
+**Reachability: theoretical today.** I read `android/app/src/main/assets/kioskpay.html` in full: it performs no top-level navigation, `stripe.confirmCardPayment` with the Card Element renders 3-D Secure in an iframe, and the only external script is `https://js.stripe.com/v3/`. So there is no live path to this. It is defense-in-depth against a future change to that page, a Stripe.js behavior change, or a compromised `js.stripe.com`. Given the engagement's explicit focus on kiosk escape at a public terminal, it is worth closing rather than noting.
 
 The bridge itself is *not* a money risk: a spoofed `onResult('completed', …)` cannot invent a donation, because the ViewModel's completion always goes back to the server, which retrieves the PaymentIntent from Stripe before recording anything.
 
@@ -399,7 +403,7 @@ Not a security issue, but it is exactly the domain-correctness class the engagem
 
 ### KIOSK-014 — Dead code with a misleading contract — Info, Confirmed — **DEFERRED**
 
-[`server/src/students.ts:536`](../../server/src/students.ts#L536): `consumeTuitionSession` is exported and never called anywhere in the repo. Its doc comment — *"Drop a session once it has been used to mint a PaymentIntent (single-use for the pay step)"* — describes behaviour that does not happen: a tuition session survives until its 15-minute TTL and can mint several PaymentIntents.
+[`server/src/students.ts:536`](../../server/src/students.ts#L536): `consumeTuitionSession` is exported and never called anywhere in the repo. Its doc comment — *"Drop a session once it has been used to mint a PaymentIntent (single-use for the pay step)"* — describes behavior that does not happen: a tuition session survives until its 15-minute TTL and can mint several PaymentIntents.
 
 That is not itself a vulnerability. Every mint recomputes the amount server-side from the session, re-checks the device binding, and re-applies the floor; re-minting is also genuinely useful when a card is declined and the parent retries. But a comment asserting a security property the code does not have is how a future change gets made on a false premise. Left for the maintainer to decide between deleting the function and wiring it up, since "should a declined tuition card force a fresh lookup?" is a product question, not an audit one.
 
@@ -429,9 +433,9 @@ Stating these explicitly, because "not mentioned" and "not looked at" are differ
 - **Idempotency and partial-transaction state.** Per-attempt Stripe idempotency keys; `recordDonation` uses `ON CONFLICT` and deliberately does not update the amount on replay; the monthly path derives `trial_end` from the PaymentIntent's own `created` so a retry reproduces an identical body; the tuition outbox is keyed on the PaymentIntent with `DO NOTHING`; the receipt outbox has an explicit minimum age to close the double-send race with the inline send. This is careful work.
 - **Currency and rounding.** Zero-decimal and three-decimal currencies are handled and unit-tested. Amounts are integer minor units throughout; no float ever reaches Stripe.
 - **PCI scope.** Confirmed: no card data path touches this code. Tap-to-pay goes reader → Stripe Terminal SDK → Stripe. Keyed entry goes into Stripe.js's own iframe inside the WebView and is tokenised on device. The server sees only brand and last four.
-- **Webhooks.** There are none, by design, so there is no signature verification to get wrong and no replay window. Confirmed no `/api/fabric` route is served (probed: 404).
-- **Refund and chargeback authorization.** Neither exists in the app; admins are pointed at the Stripe dashboard. That is the right call and closes the whole class.
-- **Object-level authorization.** Single-tenant by design. Device routes re-derive the device from its token and never trust an id in the body; tuition pay checks `session.deviceId !== d.id`; plan reads and writes both refuse any subscription whose Stripe metadata is not `app: kiosk`, which is what stops an admin screen from cancelling the masjid's own unrelated subscriptions.
+- **Webhooks.** There are none, by design, so there is no signature verification to get wrong and no replay window. Confirmed no `/api/fabric` route is served (probed: 404). **Updated 2026-08-17:** still true of `/api/fabric`, but the app now serves **one** inbound route, `POST /fabric/commands/run` (WhatsApp admin commands, 0.12.0). It is not a webhook — no signature scheme, no third party — and it authenticates on two independent facts (our own app secret plus a caller header no app id can hold), fails closed when this install holds no secret, and is refused over the tunnel. See `CLAUDE.md` §18.
+- ~~**Refund and chargeback authorization.** Neither exists in the app; admins are pointed at the Stripe dashboard.~~ **Out of date — refunds shipped in 0.11.0, after this list was written and before the 2026-08-13 addendum above, which did not catch it.** Re-reviewed 2026-08-17: `POST /api/admin/donations/:id/refund` sits behind `requireAdmin`, refuses anything but a `succeeded` donation, clamps the amount to what is left (`amount - refunded`), keys its Stripe idempotency on the running refunded total so a double-click replays but a genuine second partial does not, records only what Stripe confirms, and nets every total in SQL. Two defects were found and fixed in that pass, both recorded in `## Unreleased`: the admin panel sent **1/100th** of the typed partial amount, and a refund on a campaign's own Stripe account failed permanently once the donation was more than 7 days old. Refunds are now also written to the audit trail. Chargebacks are still Stripe-dashboard-only, which remains the right call.
+- **Object-level authorization.** Single-tenant by design. Device routes re-derive the device from its token and never trust an id in the body; tuition pay checks `session.deviceId !== d.id`; plan reads and writes both refuse any subscription whose Stripe metadata is not `app: kiosk`, which is what stops an admin screen from canceling the masjid's own unrelated subscriptions.
 - **Anonymous donations.** Name and email are optional unless the admin requires them or the donor chooses monthly; nothing derives an identity when they are absent.
 - **Recurring-plan arithmetic.** The `scheduledEndSec` off-by-one (a `cancel_at` landing on a renewal boundary makes Stripe cancel instead of charging) is correctly handled and covered by tests, as is the month-end clamp, in UTC.
 - **Path traversal / uploads.** Upload filenames are `crypto.randomBytes(8)` hex with an extension chosen from a MIME allowlist; the client filename is never used. SVG is correctly refused.
@@ -445,7 +449,7 @@ Stating these explicitly, because "not mentioned" and "not looked at" are differ
 
 ## Coverage and gaps
 
-**Covered with runtime evidence:** the tunnel path guard (booted and probed), server build, typecheck and the full 88-test suite, `npm audit` on both packages, git history secret scan, HTTP response headers and CORS behaviour.
+**Covered with runtime evidence:** the tunnel path guard (booted and probed), server build, typecheck and the full 88-test suite, `npm audit` on both packages, git history secret scan, HTTP response headers and CORS behavior.
 
 **Covered by reading only:**
 

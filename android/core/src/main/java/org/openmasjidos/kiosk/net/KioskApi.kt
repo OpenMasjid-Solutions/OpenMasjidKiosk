@@ -34,6 +34,15 @@ data class CreatedPaymentIntent(
     val publishableKey: String? = null,
     val chargeMinor: Long = 0L,
     val coverFees: Boolean = false,
+    /** TUITION ONLY (students/billing 0.51.0). When a madrasah has chosen to pass Stripe's cut to the
+     *  payer, [chargeMinor] is the gross and these two say how it splits. Both 0 on a donation, and
+     *  both 0 on a tuition payment at a school that absorbs the fee — which is almost all of them.
+     *
+     *  These come from the SERVER and are the only fee numbers the tablet ever shows. It deliberately
+     *  holds no rate and does no gross-up of its own: the total a parent is shown then cannot differ
+     *  from the total the reader takes, which is the one property that matters here. */
+    val tuitionMinor: Long = 0L,
+    val feeMinor: Long = 0L,
 )
 
 /** Parsed result of `POST /api/kiosk/payment-intents/{id}/complete` (server-verified).
@@ -60,8 +69,8 @@ data class TuitionInfo(
     val minAmountMinor: Long = 100L,
 )
 
-/** One LINE of a bill (contract 0.43.0 §11.0b) — "Monthly tuition £200", "Book fee £50", "Bursary −£30".
- *  [kind] is `tuition` | `charge` | `credit` and is an OPEN set: an unrecognised kind is still rendered,
+/** One LINE of a bill (contract 0.43.0 §11.0b) — "Monthly tuition $200", "Book fee $50", "Bursary −$30".
+ *  [kind] is `tuition` | `charge` | `credit` and is an OPEN set: an unrecognized kind is still rendered,
  *  because dropping one would make the lines stop adding up to the bill. [amountMinor] is signed (a
  *  credit line is negative); [balanceMinor] is what is still payable — 0 for a settled or credit line. */
 data class TuitionItem(
@@ -456,7 +465,17 @@ class KioskApi(private val client: OkHttpClient) {
         }
         val body = JSONObject().put("session", session).put("selection", selection).put("idempotencyKey", idempotencyKey)
         val json = post(baseUrl, "/api/kiosk/tuition/payment-intents", body, token)
-        return CreatedPaymentIntent(json.getString("paymentIntentId"), json.getString("clientSecret"), null, json.optLong("chargeMinor", 0L), false)
+        val charge = json.optLong("chargeMinor", 0L)
+        return CreatedPaymentIntent(
+            json.getString("paymentIntentId"),
+            json.getString("clientSecret"),
+            null,
+            charge,
+            false,
+            // Older servers send neither; then the tuition IS the charge and there is no fee to show.
+            json.optLong("tuitionMinor", charge),
+            json.optLong("feeMinor", 0L),
+        )
     }
 
     /** `POST /api/kiosk/tuition/payment-intents/{id}/complete` — verify with Stripe + record to Students. */

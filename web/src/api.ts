@@ -18,6 +18,12 @@ export interface AppInfo {
   apkDownloadPath: string;
   /** Suggested download filename (versioned). */
   apkFilename: string;
+  /** Whether the handheld "OpenMasjid Mobile Donations" app is bundled in this image. Checked
+   *  separately from the kiosk APK, so a build carrying one and not the other offers exactly the
+   *  one it can hand over instead of showing a dead button. */
+  mobileApkAvailable: boolean;
+  mobileApkDownloadPath: string;
+  mobileApkFilename: string;
 }
 
 export interface Session {
@@ -129,6 +135,167 @@ export const logout = () => request<{ ok: true }>('/api/logout', { method: 'POST
 
 export const sendTestNotification = () => request<NotifyTestResult>('/api/admin/notify-test', { method: 'POST' });
 
+// ── Notifications: who gets told what ──────────────────────────────────
+// The platform's own alerts matrix stays underneath this (that is the `os` flag, per alert). On top
+// of it sits a RECIPIENT LIST crossed with the alert catalogue — one row per person or group, one
+// column per alert — because "the reader is offline" and "a donation was refunded" are usually two
+// different people, and before this there was nowhere to put the second one.
+
+export type RecipientKind = 'email' | 'phone' | 'group';
+
+/** What became of the last WhatsApp to one RECIPIENT. `refused` is the platform rejecting the
+ *  message outright with a reason; the rest are its own delivery states. Null until one was tried. */
+export interface WhatsAppSendRecord {
+  state: 'queued' | 'sent' | 'failed' | 'expired' | 'refused';
+  at: number;
+  messageId: string;
+  reason: string;
+  /** How many alerts of this kind our own pacing held back before this one went. */
+  suppressed: number;
+  /** Which alert the message was about. */
+  alertId: string;
+  /** The platform later reported the masjid's WhatsApp link was dead when this went, so "sent"
+   *  cannot be believed for it. */
+  suspect?: boolean;
+}
+
+export interface AlertRecipient {
+  id: string;
+  kind: RecipientKind;
+  /** Lowercased email, digits-only international number, or an approved WhatsApp group id. */
+  address: string;
+  label: string;
+  /** The alert ids this recipient hears about. */
+  alerts: string[];
+  /** Include the donor's name and email in the body? Groups start with this OFF — see the tooltip
+   *  on the screen, and `AlertRecipient.includeNames` on the server for the reasoning. */
+  includeNames: boolean;
+  lastWhatsApp: WhatsAppSendRecord | null;
+}
+
+/** What one alert will ACTUALLY do, once unusable addresses are discounted. */
+export interface AlertDelivery {
+  os: boolean;
+  emails: number;
+  phones: number;
+  groups: number;
+  /** Relay off and nobody subscribed — worth saying out loud on the screen. */
+  silent: boolean;
+}
+
+export interface AlertSetting {
+  id: string;
+  label: string;
+  description: string;
+  /** This alert's body names a donor, so the per-group "include names" switch is relevant to it. */
+  carriesDonorIdentity: boolean;
+  os: boolean;
+  delivery: AlertDelivery;
+}
+
+/** A WhatsApp group the admin approved in OpenMasjidOS. `label` is their own nickname for it and is
+ *  the only name we are given — show it as-is. */
+export interface WhatsAppGroup {
+  id: string;
+  label: string;
+}
+
+/** How hard we may lean on the masjid's WhatsApp number. Theirs to set. */
+export interface WhatsAppPacing {
+  /** Minimum minutes between two WhatsApps for the SAME alert. 0 = no burst gap. */
+  minGapMinutes: number;
+  maxPerHour: number;
+  maxPerDay: number;
+}
+
+export interface PacingLimits {
+  minGapMinutes: { min: number; max: number };
+  maxPerHour: { min: number; max: number };
+  maxPerDay: { min: number; max: number };
+}
+
+export interface PacingUsage {
+  lastHour: number;
+  lastDay: number;
+  maxPerHour: number;
+  maxPerDay: number;
+}
+
+export interface WhatsAppAvailability {
+  available: boolean;
+  reason: 'ready' | 'not-configured' | 'not-linked' | 'unreachable';
+  /** The platform can tell us what became of a message (OpenMasjidOS 0.51.1+). Absent on an older
+   *  one, and absent must read as false. */
+  outcomes?: boolean;
+}
+
+/** Why the link was down. Each needs a different thing done about it, so the admin wording is
+ *  driven from this rather than guessed. An unrecognised value reads as `unknown` — the platform
+ *  says more may be added. */
+export type LinkFailureCause = 'session-expired' | 'needs-relink' | 'key-rejected' | 'unknown';
+
+/** A period when the masjid's WhatsApp link was dead but messages were still reported as sent. */
+export interface SuspectWindow {
+  from: number;
+  to: number;
+  cause: LinkFailureCause;
+  /** How many of this app's messages the platform reported sent inside it. */
+  count: number;
+  ids: string[];
+  /** The platform's 500-id cap bit, so `ids` is incomplete and `count` is the real number. */
+  truncated: boolean;
+}
+
+export interface AlertsView {
+  alerts: AlertSetting[];
+  recipients: AlertRecipient[];
+  maxRecipients: number;
+  groups: WhatsAppGroup[];
+  /** Why the group list is empty, when it is. '' means we asked and none are approved — which is a
+   *  different thing from not having been able to ask, and the screen says so. */
+  groupsProblem: string;
+  pacing: WhatsAppPacing;
+  pacingLimits: PacingLimits;
+  suspectWindows: SuspectWindow[];
+  usage: PacingUsage;
+  whatsapp: WhatsAppAvailability;
+  embedded: boolean;
+  emailStatus: string;
+}
+
+export const getAlerts = () => request<AlertsView>('/api/admin/alerts');
+
+/** The platform relay for one alert — the only setting still held per alert. */
+export const setAlertRelay = (id: string, os: boolean) =>
+  request<AlertsView>(`/api/admin/alerts/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ os }) });
+
+export const addAlertRecipient = (kind: RecipientKind, address: string, label: string) =>
+  request<AlertsView>('/api/admin/alerts/recipients', { method: 'POST', body: JSON.stringify({ kind, address, label }) });
+
+export const updateAlertRecipient = (id: string, patch: { label?: string; alerts?: string[]; includeNames?: boolean }) =>
+  request<AlertsView>(`/api/admin/alerts/recipients/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+
+export const removeAlertRecipient = (id: string) =>
+  request<AlertsView>(`/api/admin/alerts/recipients/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+export const setWhatsAppPacing = (patch: Partial<WhatsAppPacing>) =>
+  request<AlertsView>('/api/admin/alerts/pacing', { method: 'PUT', body: JSON.stringify(patch) });
+
+export const refreshWhatsApp = () => request<AlertsView>('/api/admin/alerts/whatsapp/refresh', { method: 'POST' });
+
+export const dismissSuspectWindow = (from: number) =>
+  request<AlertsView>(`/api/admin/alerts/suspect/${from}`, { method: 'DELETE' });
+
+export interface AlertTestResult {
+  os: boolean;
+  /** How many emails actually went. */
+  email: number;
+  /** How many WhatsApps were accepted for delivery. */
+  whatsapp: number;
+  reasons: string[];
+  delivered: boolean;
+}
+export const sendTestAlert = () => request<AlertTestResult>('/api/admin/test-alert', { method: 'POST' });
 // ── Payments (in-app Stripe setup) ────────────────────────────────────────────
 // The Stripe SECRET key never reaches the browser: the server holds it in memory (fetched
 // from the OpenMasjidOS Fabric per process start) and only ever tells us *about* it
@@ -275,9 +442,8 @@ export const getEmailReceipt = () => request<EmailReceipt>('/api/admin/email-rec
 export const saveEmailReceipt = (patch: Partial<Pick<EmailReceipt, 'enabled' | 'subject' | 'heading' | 'body' | 'accent'>>) =>
   request<EmailReceipt>('/api/admin/email-receipt', { method: 'PUT', body: JSON.stringify(patch) });
 
-/** Fire the declared `test` alert — the platform delivers it to the ADMIN's own email/webhook. */
-export const sendTestAlert = () =>
-  request<{ delivered: boolean; reason?: string; email?: boolean; webhook?: boolean }>('/api/admin/test-alert', { method: 'POST' });
+// `sendTestAlert` lives with the other notification calls above — it now follows the SAME per-alert
+// routing a real alert does, so what it proves is the admin's actual configuration.
 
 export const listLocations = () => request<{ locations: TerminalLocation[] }>('/api/admin/payments/locations');
 
@@ -454,7 +620,7 @@ export const saveGiving = (body: GivingPatch) =>
   request<GivingSettings>('/api/admin/giving', { method: 'PUT', body: JSON.stringify(body) });
 
 // ── Campaigns (giving appeals shown as kiosk tabs) ────────────────────────────────
-// Each appeal is its own giving screen: its amounts, colour, images, thank-you, monthly /
+// Each appeal is its own giving screen: its amounts, color, images, thank-you, monthly /
 // cover-fees, and (optionally) its own Stripe account. The MAIN campaign is always shown on
 // the kiosk (even when `live` is off) and can't be deleted. Amounts are integer MINOR units.
 export interface Campaign {
@@ -463,7 +629,7 @@ export interface Campaign {
   /** Required campaign type — drives the card-fee rule (see coverFees/forceCoverFees). */
   type: CampaignType;
   description: string;
-  /** '#rrggbb' background colour for this tab, or '' to inherit. Drives the giving-screen gradient. */
+  /** '#rrggbb' background color for this tab, or '' to inherit. Drives the giving-screen gradient. */
   primaryColor: string;
   /** '#rrggbb', or '' to inherit the default accent. Drives the tiles' "Donate" band + buttons. */
   accentColor: string;

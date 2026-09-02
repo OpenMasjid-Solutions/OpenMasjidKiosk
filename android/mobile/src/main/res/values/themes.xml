@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+
+  DayNight app theme (light here; dark in values-night/). This XML theme only governs the brief
+  pre-Compose window — background and system bars — so the app does not flash white on a dark
+  phone before Compose takes over. All real theming is SakinaTheme, shared from :core.
+-->
+<resources>
+    <style name="Theme.OpenMasjidMobile" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/surface_light</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

@@ -16,8 +16,14 @@ import android.view.accessibility.AccessibilityEvent
  * It does NOTHING unless (1) the volunteer has enabled it in Accessibility settings AND (2) the
  * kiosk is actively locked ([ShadeGuard.active] — set true only while a PAIRED kiosk is running, and
  * false during a maintenance excursion / update / exit), so it never fights the shade on the pairing
- * screen or after the maintainer has left the kiosk. Screen pinning already blocks the shade when
- * it's active; this is belt-and-braces for the windows where it isn't (and where pinning is off).
+ * screen or after the maintainer has left the kiosk.
+ *
+ * ON A NON-DEVICE-OWNER TABLET THIS IS THE ONLY THING THAT CLOSES THE SHADE. The comment here used
+ * to call it "belt-and-braces", on the grounds that screen pinning already blocked the shade — but
+ * pinning was removed in 0.11.0 (it silently forbade launching Android Settings, the permission
+ * prompts and the self-updater). Android gives an ordinary app no way to remove the status bar, so
+ * on the soft tier the choice is this service or a shade that opens. Device owner (Lock Task) still
+ * removes the bar outright and does not need it.
  *
  * We request NO window content and keep the service scope minimal (window-state events only) so it
  * has no more capability than it needs.

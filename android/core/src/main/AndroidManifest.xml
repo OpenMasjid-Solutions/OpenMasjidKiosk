@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+
+  Deliberately empty.
+
+  A library module's manifest is merged into every app that depends on it, so anything declared
+  here is imposed on BOTH the kiosk and OpenMasjid Mobile Donations. The two want genuinely
+  different permission sets — the kiosk asks for BOOT_COMPLETED, REQUEST_INSTALL_PACKAGES and a
+  device-admin receiver that would be wrong to force onto a volunteer's personal phone — so each
+  app declares its own, and this file states nothing.
+
+  The reader permissions (Bluetooth, location, USB host) are the one set both genuinely need, and
+  they could reasonably be hoisted here later. They are not, yet, only because the two apps already
+  declare them with specific `maxSdkVersion` attributes and a merge conflict on those is the sort
+  of thing this repo cannot compile locally to check. Worth revisiting once there is a green build
+  to iterate from; there is no behavioural difference either way.
+
+  AGP 8 forbids a `package` attribute here — the namespace lives in build.gradle.kts.
+-->
+<manifest />

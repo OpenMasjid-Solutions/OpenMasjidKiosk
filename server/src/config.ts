@@ -92,10 +92,20 @@ export const config = {
   host: env('HOST', '0.0.0.0'),
   dataDir: env('DATA_DIR', path.resolve(process.cwd(), 'data')),
   publicDir: env('PUBLIC_DIR', path.resolve(__dirname, '..', 'public')),
-  /** The bundled Android APK, served from the setup page (/new). Copied into the image
+  /** The bundled Android KIOSK apk, served from the setup page (/new). Copied into the image
    *  at /app/public/download/openmasjidkiosk.apk; absent in local dev (then /new shows a
    *  friendly "coming after the first build" note). */
   apkPath: env('APK_PATH', path.resolve(__dirname, '..', 'public', 'download', 'openmasjidkiosk.apk')),
+  /**
+   * The bundled **OpenMasjid Mobile Donations** apk — the handheld app a volunteer carries at a
+   * fundraising event, as opposed to the locked-down wall kiosk.
+   *
+   * Served the same way and from the same folder, so the Dockerfile's existing `COPY apk/` picks
+   * both up with no change. Its presence is checked independently of the kiosk's: /new only offers
+   * an app it can actually hand over, which is the same rule that stops the kiosk button appearing
+   * on a build that has no APK in it.
+   */
+  mobileApkPath: env('MOBILE_APK_PATH', path.resolve(__dirname, '..', 'public', 'download', 'openmasjidmobile.apk')),
   /** The release notes this build shipped with (admin panel → "What's new"). */
   changelogPath: findChangelog(),
   /** This build's version, read from the package.json shipped beside the runtime — "0.11.0" on a

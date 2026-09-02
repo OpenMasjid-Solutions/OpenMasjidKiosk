@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-only
+  Copyright (C) 2026 OpenMasjid-Solutions
+-->
+<resources>
+    <string name="app_name">OpenMasjid Mobile Donations</string>
+    <!-- Shown in the launcher, where the full name is too long to read. -->
+    <string name="app_name_short">Mobile Donations</string>
+</resources>

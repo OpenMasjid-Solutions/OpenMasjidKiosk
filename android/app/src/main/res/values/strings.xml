@@ -7,10 +7,12 @@
 <resources>
     <string name="app_name">OpenMasjid Kiosk</string>
 
-    <!-- Attract screen (placeholder until the giving flow lands in a later slice) -->
-    <string name="attract_tagline">A simple, beautiful way to give at the masjid</string>
-    <string name="attract_cta">Tap to donate</string>
-    <string name="attract_scaffold_note">Setup in progress — this kiosk is not ready to take donations yet.</string>
+    <!-- (Three slice-1 scaffold strings lived here — attract_tagline, attract_cta and
+         attract_scaffold_note, "placeholder until the giving flow lands in a later slice".
+         The giving flow landed, nothing ever referenced them, and one of them read "this kiosk is
+         not ready to take donations yet" — a sentence worth being certain can never render on a
+         working kiosk. Removed 2026-08-17. The real headline and tagline come from the admin panel
+         via the kiosk config, not from here.) -->
 
     <!-- Loading -->
     <string name="loading">Getting things ready…</string>
@@ -55,7 +57,12 @@
     <string name="reader_transport_bluetooth">Bluetooth</string>
     <string name="reader_transport_usb">USB</string>
     <string name="reader_transport_simulated">Test reader</string>
-    <string name="reader_usb_auto">A USB card reader connects on its own — just plug it in. Use the button below only for a Bluetooth reader. No reader at all? Turn on “Allow manual card entry” in Admin → Giving screen and donors can type their card.</string>
+    <!-- This used to end: "No reader at all? Turn on 'Allow manual card entry' in Admin → Giving
+         screen and donors can type their card." There is no such control — `manualEntryEnabled` is
+         stored but never read, and typed entry is ALWAYS offered when no reader is connected. So it
+         sent a volunteer standing at a tablet with a dead reader hunting through the admin panel for
+         a toggle that does not exist, to switch on something already working. -->
+    <string name="reader_usb_auto">A USB card reader connects on its own — just plug it in. Use the button below only for a Bluetooth reader. No reader at all? Donors can still give: the kiosk offers typed card entry automatically whenever no reader is connected.</string>
     <string name="reader_scan">Find a reader</string>
     <string name="reader_stop_scan">Stop looking</string>
     <string name="reader_scanning">Looking for readers nearby…</string>
@@ -159,4 +166,21 @@
     <!-- The two system bars Android will not let an ordinary app remove. -->
     <string name="kiosk_bars_note">To finish locking the tablet down, hide the system bars in the tablet\'s own Settings. The wording differs by manufacturer:\n\n• BOTTOM NAVIGATION BAR — Settings → Display → Navigation bar (or System → Gestures), and choose \"Gesture navigation\" / \"Swipe gestures\". That removes the Back, Home and Recents buttons. Some tablets also offer a small pin icon that keeps the bar hidden until you swipe.\n\n• TOP NOTIFICATION BAR — Android gives an ordinary app no way to remove this, and no tablet setting hides it. The optional shade lock above closes it the moment it is pulled down. Removing the bar completely needs the one-time device-owner setup in docs/TABLET_SETUP.md, which the kiosk then does for you automatically.</string>
     <string name="kiosk_bars_note_owner">This tablet is device owner, so the kiosk already removes the status bar and blocks Home and Recents itself whenever the giving screen is showing — there is nothing to turn off in Settings. If you would also like the navigation bar gone outside the kiosk, set Settings → Display → Navigation bar to \"Gesture navigation\".</string>
+
+    <!-- ── Tuition: who pays the card processing fee (students/billing 0.51.0, §11.4) ──
+         Shown ONLY when the madrasah has chosen to pass Stripe's cut to the payer. Almost every
+         school absorbs it and never sees this screen.
+
+         THE EXPLAINER IS A REQUIREMENT, NOT A NICETY. A parent who believes the madrasah added 3%
+         to their child's tuition will say so, to other parents, and they will be wrong. Say plainly
+         that the money is not the school's, name who it does go to, and give the way to avoid it.
+         Keep it short enough to read standing at a wall. -->
+    <string name="tuition_fee_title">Before you pay</string>
+    <string name="tuition_fee_line_tuition">Tuition</string>
+    <string name="tuition_fee_line_fee">Card processing fee</string>
+    <string name="tuition_fee_line_total">Total charged</string>
+    <string name="tuition_fee_explainer">This fee does not go to the madrasah — it is what Visa, Mastercard and American Express charge to accept a card, and it goes straight to the payment processor. Paying by cash or check at the office avoids it.</string>
+    <!-- %1$s is the total, so the button says exactly what pressing it will take. -->
+    <string name="tuition_fee_pay">Pay %1$s</string>
+    <string name="tuition_fee_cancel">Cancel</string>
 </resources>
