@@ -3,10 +3,6 @@
 
 # Changelog
 
-## Unreleased
-_Development builds ahead of 0.12.0. This section is on the `dev` branch only and carries the full
-detail of every change — it is distilled into a major-changes-only entry when 0.13.0 is released._
-
 ## 0.12.0
 **Two big things: you can now choose exactly who hears about what, and there is a second app for
 taking donations on a phone at events. Also a serious refund fix — please read that one.
