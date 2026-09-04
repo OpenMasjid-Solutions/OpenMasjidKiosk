@@ -44,7 +44,7 @@ If it prints anything else, `git checkout dev` first. If you are on `main`, you 
     **CI now genuinely checks all of them** (`build-image.yml` → "Check every version field agrees"), plus the `:dev` line and the prerelease shape. Until 0.12.0 this sentence was a promise the workflow did not keep: it compared the compose tag against the manifest and nothing else. That gap mattered because **`server/package.json` is where `config.version` is read from** — forget it and the build is green, the image publishes, and the server tells every tablet the *previous* version is the latest, which is a permanent false "Update available" that installing cannot clear.
 
     The `-dev.N` **shape is load-bearing**: the platform compares dotted-numeric parts, so `N` must sit in its own dotted position. `0.11.0-dev1` collapses to `0.11.0` and is silently never offered. Pinned by `server/src/config.test.ts`.
-7. **That merge is a release.** When told, run the full runbook: set the release version (drop the `-dev.N`) in `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and write the `CHANGELOG.md` release entry (rule 7b) → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → **open a PR against OpenMasjidAPPS `dev` and stop there** (rule 7c — you cannot and must not push the catalog yourself) → start the next dev cycle at `X.Y+1.0-dev.1`. `VERSION` moves on `dev` too (rule 6b), and so does `CHANGELOG.md` (rule 7b).
+7. **That merge is a release.** When told, run the full runbook: set the release version (drop the `-dev.N`) in `VERSION` + `manifest.yaml` + `server/package.json` + `web/package.json` (and their lockfile `version` fields) and write the `CHANGELOG.md` release entry (rule 7b) → merge to `main` → let CI publish the stable image → copy the printed `@sha256` digest into `docker-compose.yml` → tag `vX.Y.Z` on that pin commit → **verify the tag and the pin name the same build** (rule 7d) → **publish the GitHub release** (rule 7e — a tag is not a release) → **open a PR against OpenMasjidAPPS `dev` and stop there** (rule 7c — you cannot and must not push the catalog yourself) → **confirm what actually shipped** (rule 7f) → start the next dev cycle at `X.Y+1.0-dev.1`. `VERSION` moves on `dev` too (rule 6b), and so does `CHANGELOG.md` (rule 7b).
 
 7b. **`CHANGELOG.md`: two audiences, one file.** The changelog ships *inside the image* — the admin panel's "What's new" reads it from disk — so it is a product surface, not a git artefact, and it has to serve a masjid admin reading release notes and a developer tracking `dev` at the same time. It therefore has two kinds of section, and both branches carry the file:
 
@@ -88,6 +88,57 @@ If it prints anything else, `git checkout dev` first. If you are on `main`, you 
     **The dev channel needs none of this.** `dev_ref: dev` tracks our `dev` branch automatically and rebuilds hourly. Just keep the prerelease version and its version-tagged image current — and **publish the image before pushing the version bump**, because the dev tag is exact and an entry that lands first is a pull failure on someone's box.
 
     **The trap that makes `ref:` and `commit:` drift apart here.** `build-image.yml` triggers on `v*` tags, so pushing the tag **rebuilds and republishes** `:X.Y.Z` — moving it off the digest the tagged commit pins. The image is not bit-reproducible, so the new digest genuinely differs. Re-pinning afterwards creates a commit *after* the tag, and that is the commit whose digest matches what `:X.Y.Z` now serves. At v0.10.2 and v0.11.0 both, the release therefore ended with `ref:` and `commit:` pointing at different commits. That is survivable — every digest published stays immutable and pullable, and the source trees are identical because `docker-compose.yml` is in the workflow's `paths-ignore` — but it is exactly the ambiguity step 1 exists to prevent, so **pin the commit whose digest `:X.Y.Z` actually resolves to**, and say plainly in the PR which commit that is and why it is not the tag.
+7d. **Verify the tag and the digest pin name the SAME build — before anything else.** A tag is a
+    claim about which build a release is. Prove it:
+
+    ```bash
+    docker buildx imagetools inspect ghcr.io/openmasjid-solutions/openmasjidkiosk:0.12.0       | grep -q "$(grep -oE 'sha256:[0-9a-f]{64}' docker-compose.yml | head -1)"       || { echo "the tag does not point at the digest the compose pins"; exit 1; }
+    ```
+
+    **This is not hypothetical.** `v0.12.0` failed it for eleven days. `build-image.yml` triggered
+    on `tags: ['v*']`, and **`paths-ignore` is silently inert on a tag push** — GitHub does not
+    evaluate path filters for tags — so pushing the tag rebuilt and republished `:0.12.0` at a new
+    digest, on both architectures, over the pin that had just been committed. The label and the
+    thing masajid install were two different builds, and a catalog maintainer refused the PR because
+    nobody could say which one the release was. The workflow now VERIFIES on a tag instead of
+    building (`Tag: verify, do not rebuild`), so CI enforces this — but run it yourself too, because
+    the whole failure mode is a mechanism that looked like it was covering this and was not.
+
+    The ORDER is what prevents it: bump the manifest → CI publishes the image → commit the
+    `@sha256` digest → tag *that* commit. Never tag the version-bump commit; its `image:` line has
+    no digest yet, so the tag would ship the previous release's image.
+
+7e. **Publish the GitHub release.** A tag is **not** a release.
+
+    ```bash
+    gh release create vX.Y.Z --title "vX.Y.Z — <the headline>" --notes-file notes.md
+    ```
+
+    **OpenMasjidOS shows an admin your GitHub release notes as "What's new"** after it updates the
+    app in the background. With no release, a masjid gets new software and no explanation of what
+    changed — which is the whole reason the platform surfaces them. This repo had **zero** releases
+    published through v0.12.0 while shipping twelve versions.
+
+    Write for a **masjid volunteer**, not a changelog: what they can now do that they could not,
+    what got fixed, and what needs no action from them. Plain language. No bullet list of commit
+    subjects. The distilled `## X.Y.Z` changelog entry (rule 7b) is the right raw material — it is
+    already written for that reader — but the release notes lead with the one or two things that
+    matter most, not all of it.
+
+7f. **Confirm what actually shipped.** Two checks, both required:
+
+    - `gh release view vX.Y.Z` prints your notes.
+    - ```bash
+      curl -fsSL https://raw.githubusercontent.com/OpenMasjid-Solutions/OpenMasjidAPPS/main/catalog.json | grep '"kiosk"' -A3
+      ```
+      reports the new version.
+
+    **A merged PR against the catalog's `dev` is not shipped.** The catalog's `main` moves only when
+    a catalog maintainer cuts a release. If that `curl` still shows the old version, our part is
+    done and we are waiting on them — **say so plainly rather than reporting the release as live**.
+    Being a version behind on the stable channel while believing otherwise is exactly how v0.11.0
+    stayed the installed release for eleven days after v0.12.0 was tagged.
+
 8. **Re-pin the image line when merging to `main`.** `dev` carries `:X.Y.Z-dev.N`; `main` must always carry `:<version>@sha256:<digest>`. A merge that leaves the dev line on `main` would point every stable install at a development build — check it explicitly, every time. CI enforces both directions (a prerelease version or image reaching stable fails the build), but do not rely on that to notice for you.
 
 ### Update channels (how the two branches reach a masjid)

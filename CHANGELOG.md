@@ -7,6 +7,11 @@
 _Development builds ahead of 0.12.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.13.0 is released._
 
+- **Internal, release plumbing.** Pushing a `vX.Y.Z` tag used to rebuild and republish the release
+  image, moving the version tag off the digest the release had just pinned — so the tag named a
+  different build from the one masajid install. A tag now verifies that the two agree instead of
+  building, and CI fails the tag if they do not. Nothing about the app changes.
+
 ## 0.12.0
 **Two big things: you can now choose exactly who hears about what, and there is a second app for
 taking donations on a phone at events. Also a serious refund fix — please read that one.

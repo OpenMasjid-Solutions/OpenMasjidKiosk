@@ -41,6 +41,14 @@ on:
     branches: [main, dev]
     tags: ['v*']
     # Changes that don't affect the image — skip the (slow) multi-arch build.
+    #
+    # `paths-ignore` APPLIES TO BRANCH PUSHES ONLY. GitHub does not evaluate path filters for a
+    # TAG push, so every rule below is silently inert on `v*` — which is why pushing v0.12.0
+    # rebuilt and republished `:0.12.0`, moving it off the digest the compose had just pinned and
+    # leaving the tag naming a different build from the one masajid install. The comment here used
+    # to claim this list prevented exactly that; it never could. A tag now VERIFIES instead of
+    # building — see `Tag: verify, do not rebuild` in the image job.
+    #
     # docker-compose.yml is NOT in the image build context, so re-pinning the @sha256
     # digest there must not trigger a rebuild that would move the tag off that digest.
     # CHANGELOG.md is deliberately NOT ignored: it ships in the image (the admin panel's
@@ -301,8 +309,13 @@ jobs:
       # dev branch. Multi-arch is not optional on either channel — masajid run this on Raspberry
       # Pis (arm64) as well as amd64 hosts, and the dev channel is precisely where a Pi-only
       # regression should surface.
+      # NOT ON A TAG. A tag exists to name a build that already happened; rebuilding from it
+      # republishes the version tag at a fresh digest (the image is not bit-reproducible), so the
+      # label stops matching the digest the compose pins and nobody can tell which build the
+      # release is. The tag step below verifies that instead.
       - name: Build and push
         id: build
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -324,7 +337,38 @@ jobs:
       # docker-compose.yml. On dev the compose already names this build's own version tag, which is
       # immutable in its own right, so there is nothing further to pin; a digest there is allowed
       # but not required. :dev-<sha> is how you identify or roll back one specific dev build.
+      # THE CHECK THAT WOULD HAVE CAUGHT v0.12.0. A tag is a claim about which build a release
+      # is; this proves the claim by asking the registry. `:X.Y.Z` must resolve to the exact
+      # digest this commit's compose pins — if they differ, the label and the thing masajid
+      # install are two different builds and nobody can tell which the release was. That was
+      # true of v0.12.0 for eleven days, on both architectures, and it blocked the catalog PR.
+      #
+      # Reads the registry rather than trusting the build, because the failure being caught is
+      # precisely a tag that moved AFTER the pin was committed.
+      - name: 'Tag: verify, do not rebuild'
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -eu
+          pinned=$(grep -oE 'sha256:[0-9a-f]{64}' docker-compose.yml | head -1 || true)
+          if [ -z "$pinned" ]; then
+            echo "::error file=docker-compose.yml::this tag's compose pins no @sha256 digest. Tag the digest-pin commit, not the version-bump commit before it."
+            exit 1
+          fi
+          served=$(docker buildx imagetools inspect             "ghcr.io/${{ steps.meta.outputs.owner }}/${{ steps.meta.outputs.name }}:${{ steps.meta.outputs.version }}"             --format '{{.Manifest.Digest}}' 2>/dev/null || true)
+          echo "compose pins : $pinned"
+          echo "tag serves   : ${served:-<could not read>}"
+          if [ -z "$served" ]; then
+            echo "::warning::could not read the registry to compare — not failing the tag on a network problem"
+            exit 0
+          fi
+          if [ "$served" != "$pinned" ]; then
+            echo "::error::':${{ steps.meta.outputs.version }}' serves $served but this commit pins $pinned — the tag and the release name DIFFERENT builds. Re-pin the compose to the digest the tag serves (or re-point the tag), then move the tag to that commit."
+            exit 1
+          fi
+          echo "ok — the tag and the compose pin name the same build"
+
       - name: What was published
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
           echo "channel: ${{ steps.meta.outputs.channel }}"
           echo "version: ${{ steps.meta.outputs.version }}"
