@@ -7,6 +7,22 @@
 _Development builds ahead of 0.12.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.13.0 is released._
 
+- **Manage Kiosk from outside the masjid (0.13.0-dev.3).** Pressing **Open** on the OpenMasjidOS
+  remote dashboard used to ask for Kiosk's password — and then refuse it, because the password only
+  works on the masjid's network. It now signs you straight in, and every section of the admin panel
+  works from there. Needs OpenMasjidOS 0.51.2 or newer with remote access turned on.
+  - How it is kept safe: from outside, the panel answers only when OpenMasjidOS says, on that very
+    request, that you signed in to its remote dashboard with two-step sign-in. Kiosk keeps no session
+    of its own there. The password sign-in and first-run setup still answer only on the masjid's
+    network, however the address is spelled — so the password can never be guessed from the internet.
+  - If Kiosk started while OpenMasjidOS was still starting up, opening it from outside could show a
+    page that never loaded; it now finds its address and loads. A brief refusal from OpenMasjidOS no
+    longer takes the app offline from outside for a minute.
+  - From outside, the Devices page no longer shows the dashboard's internet address as the one to
+    type on a tablet at the masjid.
+  - Internal: the tunnel guard also judges every path with its `..` segments resolved;
+    `remote-access.test.ts` boots the real server against a stand-in OpenMasjidOS to pin all of it.
+
 - **Internal, release plumbing.** Pushing a `vX.Y.Z` tag used to rebuild and republish the release
   image, moving the version tag off the digest the release had just pinned — so the tag named a
   different build from the one masajid install. A tag now verifies that the two agree instead of
