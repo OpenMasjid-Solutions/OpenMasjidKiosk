@@ -23,6 +23,10 @@ detail of every change — it is distilled into a major-changes-only entry when 
   - Internal: the tunnel guard also judges every path with its `..` segments resolved;
     `remote-access.test.ts` boots the real server against a stand-in OpenMasjidOS to pin all of it.
 
+- **Internal, CI.** The APK build stopped at Android SDK setup: the default package list asks for
+  `tools`, which the runners' newer command-line tools no longer have. It now asks for
+  `platform-tools` only.
+
 - **Internal, release plumbing.** Pushing a `vX.Y.Z` tag used to rebuild and republish the release
   image, moving the version tag off the digest the release had just pinned — so the tag named a
   different build from the one masajid install. A tag now verifies that the two agree instead of
