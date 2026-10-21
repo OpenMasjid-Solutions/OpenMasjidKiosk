@@ -31,18 +31,27 @@ test('non-API paths (the SPA, /new, the APK, uploads) are reachable over the tun
   }
 });
 
-test('the admin surface is refused over the tunnel', () => {
+// Remote administration (OpenMasjidOS 0.51.2+). These pass the PATH guard; what lets a request in
+// is OpenMasjidOS vouching for it on every call (requireAdmin), pinned end to end against a running
+// server in remote-access.test.ts.
+test('the remote admin surface passes the path guard', () => {
+  for (const p of ['/api/session', '/api/logout', '/api/admin/plans', '/api/admin/donations.csv', '/api/admin/upload']) {
+    assert.equal(blockedOverTunnel(p), false, `${p} must be reachable`);
+  }
+});
+
+test('everything that turns a password into a session, the Fabric and unlisted /api stay refused', () => {
   for (const p of [
-    '/api/admin/plans',
-    '/api/admin/donations.csv',
-    '/api/admin/devices',
-    '/api/admin/payments',
     '/api/login',
-    '/api/logout',
     '/api/setup',
-    '/api/session',
     '/api/fabric/anything',
     '/api',
+    '/api/',
+    '/api/admin', // only the routes UNDER it are allowed
+    '/api/sessions',
+    '/api/session/x',
+    '/api/logout/x',
+    '/api/something-new',
   ]) {
     assert.equal(blockedOverTunnel(p), true, `${p} must be refused`);
   }
@@ -55,19 +64,39 @@ test('the admin surface is refused over the tunnel', () => {
 // while /kiosk/api/login correctly 404'd.
 test('percent-encoded spellings of /api cannot slip the guard', () => {
   for (const p of [
-    '/%61pi/admin/plans', // 'a'
-    '/a%70i/admin/plans', // 'p'
-    '/ap%69/admin/plans', // 'i'
-    '/%61%70%69/admin/plans', // all three
-    '/%61pi/login',
-    '/%61pi/session',
+    '/%61pi/login', // 'a'
+    '/a%70i/login', // 'p'
+    '/ap%69/login', // 'i'
+    '/%61%70%69/login', // all three
     '/%61pi/setup',
-    '/%61pi/admin/donations.csv',
-    '/api/%61dmin/plans', // this one the raw check already caught — keep it caught
-    '/%2561pi/admin/plans', // double-encoded
+    '/api/%6cogin',
+    '/%61pi/fabric/stripe',
+    '/api/%61dmin/plans', // raw form is an unlisted /api path — fail closed
+    '/%2561pi/login', // double-encoded
   ]) {
     assert.equal(blockedOverTunnel(p), true, `${p} must be refused`);
   }
+});
+
+// Allowing /api/admin/* made a prefix that is allowed AS WRITTEN and the password login once `..` is
+// resolved. Every resolved spelling is judged too.
+test('dot-segment spellings cannot reach the password routes', () => {
+  for (const p of [
+    '/api/admin/../login',
+    '/api/admin/%2e%2e/login',
+    '/api/admin/%2E%2E/setup',
+    '/api/kiosk/../login',
+    '/api/kiosk/../../api/setup',
+    '/api/admin/./../../api/login',
+    '/x/../api/login',
+    '//api/login',
+    '/api//login',
+    '/api/admin/../fabric/stripe',
+  ]) {
+    assert.equal(blockedOverTunnel(p), true, `${p} must be refused`);
+  }
+  // …while an admin path that resolves to another admin path is still just an admin path.
+  assert.equal(blockedOverTunnel('/api/admin/../admin/plans'), false);
 });
 
 test('an encoded spelling of an ALLOWED path is still allowed (no false positives)', () => {
@@ -79,15 +108,15 @@ test('an encoded spelling of an ALLOWED path is still allowed (no false positive
 });
 
 test('query strings and fragments never smuggle a path past the guard', () => {
-  assert.equal(blockedOverTunnel('/api/admin/plans?x=1'), true);
-  assert.equal(blockedOverTunnel('/%61pi/admin/plans?x=1'), true);
+  assert.equal(blockedOverTunnel('/api/login?x=1'), true);
+  assert.equal(blockedOverTunnel('/%61pi/login?x=1'), true);
   assert.equal(blockedOverTunnel('/api/kiosk/config?v=3'), false);
-  // A query value that merely LOOKS like an admin path must not block a legitimate call.
-  assert.equal(blockedOverTunnel('/api/kiosk/config?next=/api/admin/plans'), false);
+  // A query value that merely LOOKS like a refused path must not block a legitimate call.
+  assert.equal(blockedOverTunnel('/api/kiosk/config?next=/api/login'), false);
 });
 
 test('a malformed percent-escape still gets the raw check, and never throws', () => {
-  assert.equal(blockedOverTunnel('/api/admin/%zz'), true);
+  assert.equal(blockedOverTunnel('/api/setup/%zz'), true);
   assert.equal(blockedOverTunnel('/api/kiosk/%zz'), false);
   assert.equal(blockedOverTunnel('/%'), false); // not an /api path in any reading
 });

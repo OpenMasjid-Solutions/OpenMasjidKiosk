@@ -3,10 +3,14 @@
 
 /** Which paths may be reached over the OpenMasjidOS Cloudflare tunnel (manifest `domain: true`).
  *
- *  Only the public KIOSK surface is internet-reachable when a masjid turns on remote adoption:
- *  the device API, the public bootstrap, the appearance relay, and everything that isn't `/api`
- *  (the SPA + its assets, `/new`, the APK, uploaded images — the setup page needs them). The admin
- *  panel, its login/session/setup routes and the Fabric relay stay LAN-only.
+ *  Over the tunnel: the public KIOSK surface (the device API, the public bootstrap, the appearance
+ *  relay, and everything that isn't `/api` — the SPA + its assets, `/new`, the APK, uploaded images),
+ *  plus what a REMOTE ADMIN needs: `/api/session`, `/api/logout` and `/api/admin/*`. Those answer
+ *  only to a request OpenMasjidOS vouches for, asked afresh on each one (index.ts `requireAdmin`):
+ *  the platform hands us an access token only while the admin is signed in to its remote dashboard
+ *  with two-step sign-in. Everything that turns a PASSWORD into a session — `/api/login`,
+ *  `/api/setup` — stays LAN-only, so the local password is never guessable from the internet. So
+ *  does the Fabric relay, and so does any `/api` route nobody has listed here.
  *
  *  WHY THIS IS ITS OWN MODULE. The rule used to live inline as `path.startsWith('/api/')` against
  *  the RAW url — and Fastify's router percent-decodes path segments BEFORE matching, so encoding a
@@ -21,10 +25,18 @@
  *  `/api` path. Fail closed: an ambiguous path is refused rather than guessed at.
  *
  *  Pure and exported so the rule is unit-tested rather than asserted in a comment. */
+import path from 'node:path';
 
-/** The kiosk surface, and only it. */
+/** The kiosk surface, plus the remote admin's routes (gated by the platform, see above). */
 function allowedOverTunnel(p: string): boolean {
-  return p === '/api/app' || p.startsWith('/api/public/') || p.startsWith('/api/kiosk/');
+  return (
+    p === '/api/app' ||
+    p.startsWith('/api/public/') ||
+    p.startsWith('/api/kiosk/') ||
+    p === '/api/session' ||
+    p === '/api/logout' ||
+    p.startsWith('/api/admin/')
+  );
 }
 
 /** Anything routed under our JSON API. */
@@ -49,9 +61,13 @@ function isFabricPath(p: string): boolean {
   return p === '/fabric' || p.startsWith('/fabric/');
 }
 
-/** Every spelling of this path the router might resolve it to: as it arrived, and decoded. The
- *  router decodes once; we go a little further so a double-encoded probe can't out-run us either.
- *  A malformed escape stops the walk — the raw form is still judged. */
+/** Every spelling of this path the router might resolve it to: as it arrived, decoded, and with its
+ *  dot segments resolved. The router decodes once; we go a little further so a double-encoded probe
+ *  can't out-run us either. A malformed escape stops the walk — the raw form is still judged.
+ *
+ *  Dot segments matter now that `/api/admin/*` is allowed: `/api/admin/../login` starts with an
+ *  allowed prefix as written, and is the password login to anything that resolves `..`. Its
+ *  resolved spelling is judged as well, and refused. */
 function candidatePaths(rawUrl: string): string[] {
   const raw = (rawUrl || '/').split('?')[0].split('#')[0];
   const forms = [raw];
@@ -66,6 +82,10 @@ function candidatePaths(rawUrl: string): string[] {
     if (next === cur) break;
     cur = next;
     forms.push(cur);
+  }
+  for (const f of [...forms]) {
+    const resolved = path.posix.normalize(f); // resolves "." and "..", and collapses "//"
+    if (!forms.includes(resolved)) forms.push(resolved);
   }
   return forms;
 }
