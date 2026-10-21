@@ -7,6 +7,16 @@
 _Development builds ahead of 0.12.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.13.0 is released._
 
+- **Security updates (0.13.0-dev.4).** Kiosk's web server, Fastify, moves from 5.9.0 to 5.12.7,
+  which fixes several flaws — among them one that could let a malformed address slip past a check.
+  Four smaller libraries it relies on (fast-uri, busboy, brace-expansion, qs) move to fixed
+  versions too. Nothing should look or behave differently.
+  - Internal: the admin panel's build tools move as well — Vite 6.4.3 → 6.4.5 (a flaw in its
+    editor-launching helper, which only runs on a developer's machine), browserslist 4.28.4 →
+    4.29.4 and source-map-js 1.2.1 → 1.2.2. None of them ship in the app a masjid installs.
+    Still flagged and left alone: the `braces` chain under Tailwind 3, which only Tailwind 4 (a
+    breaking change) clears.
+
 - **Manage Kiosk from outside the masjid (0.13.0-dev.3).** Pressing **Open** on the OpenMasjidOS
   remote dashboard used to ask for Kiosk's password — and then refuse it, because the password only
   works on the masjid's network. It now signs you straight in, and every section of the admin panel
