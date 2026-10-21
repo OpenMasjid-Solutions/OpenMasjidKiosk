@@ -33,6 +33,9 @@ export interface Session {
   authed: boolean;
   /** A local admin password exists. */
   hasPassword: boolean;
+  /** Opened from outside the masjid, over the OpenMasjidOS tunnel. Only the dashboard's own sign-in
+   *  counts there — the local password and first-run setup work only on the masjid's network. */
+  remote?: boolean;
   /** SSO via OpenMasjidOS. `reachable` is false only when SSO is configured but the platform
    *  couldn't be contacted (down / migrated) — the UI then offers the local-password
    *  recovery instead of looping on "open from the dashboard". */

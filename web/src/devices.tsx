@@ -47,7 +47,7 @@ import {
   type PairCode,
   type RemoteInfo,
 } from './api';
-import { withBase } from './base';
+import { BASE, withBase } from './base';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
 
@@ -133,6 +133,21 @@ function ServerAddress() {
   const host = typeof window !== 'undefined' ? window.location.hostname : '';
   const port = typeof window !== 'undefined' ? window.location.port : '';
   const isLocal = /^(localhost|127\.0\.0\.1|::1|\[::1\])$/i.test(host);
+  // Opened from outside the masjid (only the tunnel serves us under a base path): this page's own
+  // origin is the OpenMasjidOS dashboard's public hostname, and a tablet that typed it would pair
+  // with nothing. The masjid's own address is one this browser cannot see from here.
+  if (BASE) {
+    return (
+      <div className="field" style={{ marginBlockEnd: '0.9rem' }}>
+        <span className="label">Server address <span className="faint">(type this on the tablet)</span></span>
+        <p className="note-amber">
+          You're managing Kiosk from outside the masjid, so this page can't show its address on the masjid's
+          network. On the tablet, type the <code>https://</code> address you open Kiosk at when you're at the
+          masjid — or choose <strong>Remote (another site)</strong> to pair it over the internet instead.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="field" style={{ marginBlockEnd: '0.9rem' }}>
       <span className="label">Server address <span className="faint">(type this on the tablet)</span></span>
@@ -312,9 +327,10 @@ function RemoteAdopt() {
         <span className="toggle-text">
           <span className="toggle-label">Allow remote adoption</span>
           <span className="hint">
-            Off keeps the internet address inactive. Turn it on to let a tablet at another site pair over your
-            Cloudflare tunnel — only the setup page and the device connection are exposed; your admin panel
-            stays on your own network.
+            Off, no tablet can pair over the internet. Turn it on to let a tablet at another site pair over your
+            Cloudflare tunnel. Only the setup page and the device connection are open to anyone there; this
+            admin panel answers only to someone signed in to OpenMasjidOS from outside, and its own password
+            works only on your network.
           </span>
         </span>
         <button
