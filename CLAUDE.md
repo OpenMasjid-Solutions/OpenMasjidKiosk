@@ -267,14 +267,38 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
 - ~~Public/internet exposure~~ — **now supported (v0.9.20+) as opt-in REMOTE ADOPTION** over the OS
   Cloudflare tunnel (manifest `domain: true` + `tunnel: true`). A tablet at another site pairs to
   `https://omos.<domain>/<basePath>` (default `/kiosk`) once the admin turns on Remote access in
-  OpenMasjidOS AND flips "Allow remote adoption" in our admin. **Kiosk-endpoints-only over the tunnel**,
-  and it is an **allowlist, not a denylist** — `blockedOverTunnel` in `tunnel.ts` refuses *every* `/api`
-  path except `/api/app`, `/api/public/*` and `/api/kiosk/*`, plus all of `/fabric/*`. (This used to
-  read "404s `/api/admin` + `/api/fabric`", which understates it in the direction that matters: add a
-  new `/api/…` route for the tablet and it is refused over the tunnel until you allow-list it. And
-  `/fabric` is **not** under `/api`, so it needed its own rule — every non-`/api` path falls through as
-  allowed, which is correct for the SPA, `/new`, `/download` and `/uploads`, and was quietly wrong the
-  day the first `/fabric/*` route shipped.) The admin panel stays LAN-only.
+  OpenMasjidOS AND flips "Allow remote adoption" in our admin. The tunnel rule is an **allowlist, not
+  a denylist** — `blockedOverTunnel` in `tunnel.ts` refuses *every* `/api` path except `/api/app`,
+  `/api/public/*`, `/api/kiosk/*` and the remote admin's three (below), plus all of `/fabric/*`. (This
+  used to read "404s `/api/admin` + `/api/fabric`", which understates it in the direction that
+  matters: add a new `/api/…` route for the tablet and it is refused over the tunnel until you
+  allow-list it. And `/fabric` is **not** under `/api`, so it needed its own rule — every non-`/api`
+  path falls through as allowed, which is correct for the SPA, `/new`, `/download` and `/uploads`, and
+  was quietly wrong the day the first `/fabric/*` route shipped.) Every spelling is judged — raw,
+  percent-decoded (twice) and with dot segments resolved — and any one refused refuses the request.
+
+  **The admin panel works from outside too (0.13.0-dev.3), but only on OpenMasjidOS's word.** Since
+  OpenMasjidOS 0.51.2 the admin can manage the box from its remote dashboard, and **Open** there hands
+  the browser an `omos_session` access token for this app alone, valid only while their
+  two-step-verified remote session lives. So `/api/session`, `/api/logout` and `/api/admin/*` are on
+  the tunnel allowlist, and over the tunnel `requireAdmin` accepts **only the platform vouching for
+  this request** (`platformUser` → `/api/auth/session`, cached 45 s). Rules that must not regress:
+  - **Nothing of ours is minted over the tunnel**, and our own cookie is **ignored** there. Every app
+    and the dashboard share that one hostname and the platform strips only its own cookies, so a
+    session of ours set there would reach every other app's server; and a LAN session — above all a
+    password one — must never count from the internet. Logout there clears both `/` and the base path.
+  - **`/api/login` and `/api/setup` stay LAN-only in every spelling**, so the local password is never
+    guessable from the internet. `remote-access.test.ts` boots the real server against a stand-in
+    platform and pins all of this, encoded and dot-segment spellings included.
+  - A request is the tunnel's if it carries our base path **or** `cf-ray` — a LAN client sending
+    `cf-ray` only buys itself the stricter rules.
+  - Over the tunnel a non-GET admin call with a foreign `Origin` is refused: a sibling subdomain is
+    same-SITE, so the platform's `SameSite=Lax` token would ride its form posts.
+  - **A cold base path must not serve a broken page.** If we started while the platform was down (or
+    it answered `/api/fabric/site` with a refusal, which used to be cached as "remote access off" for a
+    minute), a tunnel request is not stripped. The not-found handler re-asks (at most every 2 s) and
+    307s to the same address, or answers 503 — never the panel unprefixed, whose paths would all reach
+    the OpenMasjidOS dashboard at the root of that hostname.
 
   **The tablet chooses its TLS mode from the ADDRESS TYPED, not from the certificate chain**
   (`KioskRepository.isPrivateHost`): a private-range IP, `localhost`, `*.local` or `*.lan` gets

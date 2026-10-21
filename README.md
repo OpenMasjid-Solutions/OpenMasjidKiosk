@@ -390,6 +390,9 @@ Six sections — **Dashboard · Devices · Campaigns · Donations · Recurring �
 
 - **Single sign-on** with your OpenMasjidOS account, and a **local admin password** that can
   never brick the panel if the platform is unreachable.
+- **Manage it from anywhere** — with Remote access on in OpenMasjidOS, press **Open** on its remote
+  dashboard and you are signed straight in, every section working. The local password stays a
+  masjid-network-only fallback.
 - The panel **inherits the dashboard's** light/dark, accent color and wallpaper, with a
   per-session light/dark override of your own.
 - **"What's new"** in the account menu — the release notes that shipped inside the running
@@ -424,9 +427,10 @@ code only ever sees connection tokens, PaymentIntent client secrets and the publ
 - **Device tokens are hashed at rest** and revocable; the tablet pins the server's certificate
   on first pair (trust-on-first-use) on the LAN, and uses real system-CA validation with
   hostname checking for remote sites. It never falls back to plain HTTP.
-- Over the tunnel, **only the kiosk surface is reachable** — the admin panel, sign-in and
-  session routes, the Fabric relay and the WhatsApp command handler are all refused on internet
-  requests.
+- Over the tunnel, **only the kiosk surface is open to anyone**. The admin panel answers there only
+  to an admin OpenMasjidOS vouches for — press **Open** on its remote dashboard, after two-step
+  sign-in — while the password sign-in, first-run setup, the Fabric relay and the WhatsApp command
+  handler are all refused on internet requests.
 - The **WhatsApp command handler** is the one route OpenMasjidOS calls on *us*, so it is the one
   place this app checks a credential rather than presenting one. It requires two independent facts:
   the app secret the platform issued us, and a caller header that no app id can hold. Holding no

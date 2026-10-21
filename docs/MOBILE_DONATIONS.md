@@ -55,7 +55,9 @@ address on their own phone and completes every step over it.
 
 That works because `/new`, the APK download, pairing and the payment endpoints are all reachable
 over the OS Cloudflare tunnel (`server/src/tunnel.ts` allow-lists `/api/kiosk/*`; `/download` is not
-under `/api` and falls through). The admin panel is **not** reachable — that stays LAN-only.
+under `/api` and falls through). The admin panel answers there only to an admin signed in to
+OpenMasjidOS from outside, and its password works only on the masjid's network
+([`REMOTE_ADOPTION.md`](REMOTE_ADOPTION.md)).
 
 The app picks its TLS mode from the address typed, not from a setting: a private-range address gets
 self-signed trust-on-first-use pinning, and anything public gets ordinary system-CA validation with
