@@ -7,6 +7,10 @@
 _Development builds ahead of 0.12.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.13.0 is released._
 
+- **Security update to Node.js (0.13.0-dev.5).** Kiosk now runs on Node.js 22.23.4, the release
+  that fixes ten security problems published on 21 October, one of them serious. If Stripe emailed you about your Node.js version, this is the update it means.
+  Nothing looks or works any differently.
+
 - **Security updates (0.13.0-dev.4).** Kiosk's web server, Fastify, moves from 5.9.0 to 5.12.7,
   which fixes several flaws — among them one that could let a malformed address slip past a check.
   Four smaller libraries it relies on (fast-uri, busboy, brace-expansion, qs) move to fixed
