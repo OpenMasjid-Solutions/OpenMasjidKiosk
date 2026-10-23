@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { X } from 'lucide-react';
 import { errorText, getChangelog } from './api';
-import { inlineSpans, parseChangelog, type InlineSpan } from './changelog';
+import { inlineSpans, parseChangelog, versionNewer, type InlineSpan } from './changelog';
 import { Modal } from './modal';
 import { ResultLine, Skeleton } from './primitives';
 
@@ -32,17 +32,6 @@ function writeSeen(v: string): void {
   }
 }
 
-/** Compare two dotted versions numerically ("0.9.9" < "0.9.34" — a string compare gets this
- *  exactly backwards, which is how a "new!" dot ends up lying). */
-export function versionNewer(a: string, b: string): boolean {
-  const parts = (v: string) => v.split('.').map((n) => Number.parseInt(n, 10) || 0);
-  const [x, y] = [parts(a), parts(b)];
-  for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    const d = (x[i] ?? 0) - (y[i] ?? 0);
-    if (d !== 0) return d > 0;
-  }
-  return false;
-}
 
 /** True when this build is newer than the notes the admin last opened. */
 export function useUnreadRelease(version: string | undefined): boolean {

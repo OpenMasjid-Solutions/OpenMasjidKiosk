@@ -11,7 +11,9 @@ import com.stripe.stripeterminal.external.models.AllowRedisplay
 import com.stripe.stripeterminal.external.models.CollectPaymentIntentConfiguration
 import com.stripe.stripeterminal.external.models.PaymentIntent
 import com.stripe.stripeterminal.external.models.TerminalException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -46,7 +48,11 @@ object PaymentController {
     suspend fun collectAndConfirm(clientSecret: String, savingCard: Boolean = false): String {
         val pi = retrieve(clientSecret)
         val collected = collect(pi, savingCard)
-        val confirmed = confirm(collected)
+        // Once the card is read, confirm runs to the end: cancelling the coroutine here (a late cancel,
+        // a tab switch) did not stop the SDK confirming, it only stopped the app from finishing — an
+        // authorised card the server was never told about. The caller completes it, as its own
+        // NonCancellable block intends.
+        val confirmed = withContext(NonCancellable) { confirm(collected) }
         // The SDK types the id as nullable; a confirmed PI always has one. Treat a null as failure
         // (the caller runCatching { … } maps the thrown error to the "try again" path).
         return confirmed.id ?: error("Confirmed payment has no id")

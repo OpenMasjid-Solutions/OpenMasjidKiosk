@@ -147,7 +147,6 @@ export const GIVING_FIELD_WORDS: FieldWords = {
   largeAmountNote: 'Keep the large-donation note under 600 characters.',
   largeAmountImage: IMAGE_TOO_LONG,
   celebrateThresholdMinor: AMOUNTS,
-  attractTitle: 'Keep the welcome title under 120 characters.',
   masjidName: 'Keep the masjid name under 160 characters.',
   allowCustom: SWITCH,
   monthlyEnabled: SWITCH,

@@ -220,7 +220,7 @@ export function DonationsSection() {
           <div className="kv">
             {totals.byDevice.map((d) => (
               <div className="kv-row" key={d.deviceId}>
-                <span className="kv-k">{d.deviceName || 'Kiosk'} <span className="faint">· {d.count}</span></span>
+                <span className="kv-k">{d.deviceName || 'Kiosk'} <span className="faint">· <span className="num">{d.count}</span></span></span>
                 <span className="kv-v num">{money(d.amountMinor)}</span>
               </div>
             ))}
@@ -377,7 +377,7 @@ function DonationModal({
   // back $50 of a $100 donation typed 50 and refunded **$0.50**, while the placeholder below (also
   // computed from this number) told them to type 10000. Three-decimal currencies were out by 1000.
   const decimals = decimalsFor(currency);
-  const typedMinor = toMinor(amountText.replace(/[^0-9.]/g, ''), currency);
+  const typedMinor = toMinor(amountText, currency);
   const wanted = partial ? typedMinor : remaining;
   const amountValid = !partial || (Number.isFinite(typedMinor) && typedMinor > 0 && typedMinor <= remaining);
 
@@ -534,12 +534,12 @@ function DonationModal({
               <p className="plan-act__title">Refund</p>
               <p className="hint">
                 {refunded
-                  ? `${money(d.refundedMinor)} of this donation has already been given back.`
+                  ? figures(`${money(d.refundedMinor)} of this donation has already been given back.`)
                   : 'Gives the money back to the donor’s card.'}
               </p>
               <div className="plan-act__row">
                 <button ref={refundBtnRef} type="button" className="btn btn--sm device-danger" onClick={openConfirm}>
-                  <Undo2 size={14} className="rtl-flip" aria-hidden="true" /> {refunded ? `Refund the remaining ${money(remaining)}` : 'Refund this donation'}
+                  <Undo2 size={14} className="rtl-flip" aria-hidden="true" /> {refunded ? figures(`Refund the remaining ${money(remaining)}`) : 'Refund this donation'}
                 </button>
               </div>
             </div>
@@ -558,7 +558,7 @@ function DonationModal({
               </p>
               <Toggle
                 label="Refund only part of it"
-                hint={`Otherwise the whole ${money(remaining)} goes back.`}
+                hint={figures(`Otherwise the whole ${money(remaining)} goes back.`)}
                 checked={partial}
                 onChange={(v) => {
                   setPartial(v);
@@ -567,7 +567,7 @@ function DonationModal({
               />
               {partial && (
                 <div className="field">
-                  <label className="label" htmlFor="refund-amt">Amount to refund (up to {money(remaining)})</label>
+                  <label className="label" htmlFor="refund-amt">Amount to refund (up to <span className="num">{money(remaining)}</span>)</label>
                   <input
                     id="refund-amt"
                     className="input"
@@ -616,7 +616,7 @@ function DonationModal({
                       <Loader2 size={14} className="spin" aria-hidden="true" /> Refunding…
                     </>
                   ) : (
-                    `Refund ${money(amountValid ? wanted : remaining)}`
+                    figures(`Refund ${money(amountValid ? wanted : remaining)}`)
                   )}
                 </button>
               </div>

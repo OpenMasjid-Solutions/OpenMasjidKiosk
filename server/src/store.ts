@@ -2,10 +2,11 @@
 // Copyright (C) 2026 OpenMasjid-Solutions
 
 /** Durable store for all app state, kept in the data volume as a single SQLite file
- *  (better-sqlite3, WAL). Everything goes through this thin repository. Slice 2 persists
- *  the admin credential + the session-signing secret in a small key/value table; later
- *  slices add proper tables (Stripe account choice, devices, pairing codes, donations,
- *  config, device logs) alongside it.
+ *  (better-sqlite3, WAL). Everything goes through this thin repository: a small key/value
+ *  table for settings (the admin credential, the session-signing secret, the Stripe account
+ *  choice, the giving and receipt settings, alert recipients), and proper tables beside it for
+ *  devices, pairing codes, campaigns, donations, recurring plans, device logs, the audit trail
+ *  and the tuition outbox.
  *
  *  RESTORE-RESILIENCE: nothing derived from the OpenMasjidOS Fabric (base URL, app secret,
  *  fetched Stripe keys, a "linked" flag) is EVER written here — those are read from the
@@ -40,7 +41,7 @@ import {
 } from './alerts';
 import type { Cred } from './auth';
 import { isValidTimeZone, localeForCountry, startOfDay, startOfMonth, type ClockSettings } from './dates';
-import { currencyDecimals } from './stripe';
+import { currencyDecimals, minorStep } from './stripe';
 
 const log = makeLog('store');
 
@@ -320,7 +321,10 @@ export function feeFixedMinorFor(currency: string): number {
 export function grossUpForFees(baseMinor: number, currency: string): number {
   if (!Number.isInteger(baseMinor) || baseMinor <= 0) return baseMinor;
   const fixed = feeFixedMinorFor(currency);
-  const total = Math.ceil((baseMinor + fixed) / (1 - FEE_BPS / 10000));
+  // Up to the next amount Stripe can charge (minorStep) — never down, so the fee is always covered.
+  // The tablet's estimate (GivingScreen.kt feeExtra) is this same arithmetic, operation for operation.
+  const step = minorStep(currency);
+  const total = Math.ceil((baseMinor + fixed) / (1 - FEE_BPS / 10000) / step) * step;
   return Math.max(baseMinor, total);
 }
 
@@ -486,9 +490,9 @@ export interface Device {
    *  tablet rotates its own content by this angle (works even where the device ignores orientation
    *  requests). Legacy named values are normalized to degrees on read. */
   orientation: string;
-  /** Which side of the tablet the card reader sits on, so the kiosk can point donors to it during the
-   *  card step: 'off' (no hint) | 'left' | 'right'. Left/right are in the app's LOGICAL landscape
-   *  space, so RotatedRoot maps them to top/bottom when the device is rotated to portrait. */
+  /** Which side of the giving screen the card reader sits on, as the donor sees it, so the kiosk can
+   *  point donors to it during the card step: 'off' (no hint) | 'left' | 'right' | 'top' | 'bottom'
+   *  (DEVICE_NFC_SIDES). */
   nfcSide: string;
 }
 
@@ -514,8 +518,6 @@ export function normalizeOrientation(v: unknown): DeviceOrientation {
   return LEGACY_ORIENTATION[s] ?? '0';
 }
 
-/** Valid NFC-reader sides — where the reader sits relative to the kiosk's LOGICAL landscape screen,
- *  so it can point donors to it. 'off' = show no hint (the default; existing kiosks are unchanged). */
 // Where the reader physically sits, relative to the giving screen as the donor sees it. Left/right
 // suit a landscape mount; TOP/BOTTOM exist because a portrait-mounted tablet usually has the reader
 // above or below the screen, and "left" on a tall narrow screen points at a bezel nobody's card is
@@ -544,9 +546,9 @@ export class Store {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
-    // A small key/value table for singletons (admin credential, signing secret, and — in
-    // later slices — the chosen Stripe account id, config version, kiosk PIN hash, Terminal
-    // location id). Structured data gets its own tables as those slices land.
+    // A small key/value table for singletons (the admin credential, signing secret, chosen Stripe
+    // account id, config version, kiosk PIN hash, Terminal locations and the other settings).
+    // Structured data has its own tables below.
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -670,18 +672,6 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_tuition_outbox ON tuition_outbox(pay_status, record_status);
 
-      -- Recurring plans (monthly donations). Stripe is the SOURCE OF TRUTH for a plan's status,
-      -- next charge, card and renewals — we hold no copy of any of that, and the Recurring screen
-      -- reads it live. This table exists only for the three things Stripe cannot tell us:
-      --   1. WHICH CAMPAIGN the donor was giving to. Nothing on a Stripe subscription knows about
-      --      our campaigns unless we put it there, and metadata we set today can't be backfilled
-      --      onto plans created before this feature existed.
-      --   2. THE FIRST PAYMENT. Month one is the card-present charge taken on the reader — a
-      --      PaymentIntent, not an invoice — so "total collected on this plan" is short by that
-      --      amount if you only add up invoices.
-      --   3. WHICH ACCOUNT the subscription lives on, since a campaign may use its own.
-      -- A plan with no row here still shows; it just can't name its campaign and says its total is
-      -- partial rather than quietly under-reporting.
       -- Admin audit trail. Append-only, and deliberately narrow: the actions recorded here are the
       -- ones that reach out and change something outside this app — ending or altering a real
       -- donor's standing order, cutting a kiosk off, rotating the exit PIN. Everything else the
@@ -703,6 +693,18 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_admin_audit_ts ON admin_audit(id DESC);
 
+      -- Recurring plans (monthly donations). Stripe is the SOURCE OF TRUTH for a plan's status,
+      -- next charge, card and renewals — we hold no copy of any of that, and the Recurring screen
+      -- reads it live. This table exists only for the three things Stripe cannot tell us:
+      --   1. WHICH CAMPAIGN the donor was giving to. Nothing on a Stripe subscription knows about
+      --      our campaigns unless we put it there, and metadata we set today can't be backfilled
+      --      onto plans created before this feature existed.
+      --   2. THE FIRST PAYMENT. Month one is the card-present charge taken on the reader — a
+      --      PaymentIntent, not an invoice — so "total collected on this plan" is short by that
+      --      amount if you only add up invoices.
+      --   3. WHICH ACCOUNT the subscription lives on, since a campaign may use its own.
+      -- A plan with no row here still shows; it just can't name its campaign and says its total is
+      -- partial rather than quietly under-reporting.
       CREATE TABLE IF NOT EXISTS plans (
         subscription_id TEXT PRIMARY KEY,
         customer_id TEXT NOT NULL DEFAULT '',
@@ -798,6 +800,19 @@ export class Store {
     // Ensure a main campaign always exists (seeded from the giving defaults on first run, or
     // migrating an existing single-giving install into its first campaign).
     this.ensureMainCampaign();
+    this.migrateUgxScale();
+  }
+
+  /**
+   * UGX was zero-decimal here until 0.14.0, but Stripe takes it as two-decimal (stripe.ts), so an
+   * existing Ugandan install's amounts are scaled by 100 once — a USh 10,000 tile still means USh
+   * 10,000. Recorded donations are left alone on purpose: their minor units are what Stripe actually
+   * charged, and with the right scale they now read as that.
+   */
+  private migrateUgxScale(): void {
+    if (this.getRaw('ugx_two_decimal')) return;
+    if (this.getCurrency().toUpperCase() === 'UGX') this.rescaleAllAmounts(2, 'UGX');
+    this.setRaw('ugx_two_decimal', new Date().toISOString());
   }
 
   private getRaw(key: string): string | null {
@@ -912,6 +927,13 @@ export class Store {
   rescaleAmountsForCurrency(oldCurrency: string, newCurrency: string): boolean {
     const delta = currencyDecimals(newCurrency || 'USD') - currencyDecimals(oldCurrency || 'USD');
     if (delta === 0) return false;
+    return this.rescaleAllAmounts(delta, newCurrency || 'USD');
+  }
+
+  /** Every stored amount — campaigns and the saved giving settings — moved by `delta` decimal places,
+   *  and onto `currency`'s step. The currency is passed rather than read, so the result does not
+   *  depend on whether the caller saved the new currency first. */
+  private rescaleAllAmounts(delta: number, currency: string): boolean {
     const scale = (n: number) => rescaleMinor(n, delta);
     // Scaling down can merge two tiles (0.500 and 1.000 KWD both become ¥1) — keep one of each.
     const scaleList = (list: unknown): number[] =>
@@ -930,7 +952,7 @@ export class Store {
           next.customMaxMinor !== c.customMaxMinor ||
           next.presetsMinor.join(',') !== c.presetsMinor.join(',')
         ) {
-          this.writeCampaign(this.sanitizeCampaign(next));
+          this.writeCampaign(this.sanitizeCampaign(next, currency));
           changed = true;
         }
       }
@@ -1111,13 +1133,17 @@ export class Store {
     const saved = this.getJson<{ list?: unknown[] }>('alert_recipients', {});
     const list = Array.isArray(saved.list) ? saved.list : [];
     const out: AlertRecipient[] = [];
+    // One row per address. Repairing a stored number on read (normalisePhone's trunk 0) can make it
+    // equal to one already listed, and two rows for one number would send everything twice.
+    const seen = new Set<string>();
     for (const raw of list) {
       if (!raw || typeof raw !== 'object') continue;
       const r = raw as Partial<AlertRecipient>;
       if (typeof r.id !== 'string' || !r.id) continue;
       if (!isRecipientKind(r.kind)) continue;
       const address = canonicalAddress(r.kind, typeof r.address === 'string' ? r.address : '');
-      if (!address) continue;
+      if (!address || seen.has(`${r.kind}:${address}`)) continue;
+      seen.add(`${r.kind}:${address}`);
       const base: AlertRecipient = {
         id: r.id.slice(0, 40),
         kind: r.kind,
@@ -1431,16 +1457,6 @@ export class Store {
     this.setRaw('remote_adoption', on ? '1' : '0');
   }
 
-  getAttractTitle(): string {
-    return this.getRaw('attract_title') ?? '';
-  }
-  /** The headline on the attract screen (kiosks refetch when the config version bumps). */
-  setAttractTitle(title: string): void {
-    this.setRaw('attract_title', title.slice(0, 120));
-    this.bumpConfigVersion();
-  }
-
-  // ── Giving config (the amounts/messages the kiosk shows; designer UI is a later slice) ──
   /** GIVING_DEFAULTS in the CURRENT currency's scale — the only form in which anything reads them. For
    *  a 2-decimal currency this is GIVING_DEFAULTS exactly. */
   private givingDefaults(): GivingConfig {
@@ -1549,7 +1565,7 @@ export class Store {
   }
 
   /** Clamp/normalize campaign fields (server-authoritative — never trust the client). */
-  private sanitizeCampaign(c: Campaign): Campaign {
+  private sanitizeCampaign(c: Campaign, currency = this.getCurrency()): Campaign {
     const hex = (v: string): string => (/^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : '');
     const img = (v: string): string => {
       const s = String(v ?? '').trim().slice(0, 500);
@@ -1558,12 +1574,20 @@ export class Store {
       if (/^https?:\/\/[^"'\\\s]+$/i.test(s)) return s; // external URL (no quotes/space)
       return '';
     };
-    const presets = (Array.isArray(c.presetsMinor) ? c.presetsMinor : [])
-      .map((n) => Math.round(Number(n)))
-      .filter((n) => Number.isFinite(n) && n > 0)
-      .slice(0, 6);
-    const min = Math.max(1, Math.round(Number(c.customMinMinor) || this.givingDefaults().customMinMinor));
-    const max = Math.max(min, Math.round(Number(c.customMaxMinor) || this.givingDefaults().customMaxMinor));
+    // Every amount lands on one Stripe can charge (minorStep): whole shillings and krónur, a last 0 for
+    // the dinars. A preset is rounded to the nearest; the custom bounds move inward-safe (min up).
+    const step = minorStep(currency);
+    const onStep = (n: number) => Math.max(step, Math.round(n / step) * step);
+    const presets = Array.from(
+      new Set(
+        (Array.isArray(c.presetsMinor) ? c.presetsMinor : [])
+          .map((n) => Math.round(Number(n)))
+          .filter((n) => Number.isFinite(n) && n > 0)
+          .map(onStep),
+      ),
+    ).slice(0, 6);
+    const min = Math.max(step, Math.ceil(Math.max(1, Math.round(Number(c.customMinMinor) || this.givingDefaults().customMinMinor)) / step) * step);
+    const max = Math.max(min, Math.floor(Math.round(Number(c.customMaxMinor) || this.givingDefaults().customMaxMinor) / step) * step);
     // Device targeting: unique non-empty strings (which kiosks show this campaign; [] = all). Capped.
     const deviceIds = Array.from(new Set((Array.isArray(c.deviceIds) ? c.deviceIds : []).map((s) => String(s).trim()).filter((s) => s.length > 0 && s.length <= 60))).slice(0, 200);
     // The campaign TYPE is the single source of truth for the fee rule (so a hand-crafted API body
@@ -1771,6 +1795,7 @@ export class Store {
    *  is one of the campaign's presets, or — when custom is enabled — within its [min,max]. */
   isAllowedAmountForCampaign(c: Campaign, amountMinor: number): boolean {
     if (!Number.isInteger(amountMinor) || amountMinor <= 0) return false;
+    if (amountMinor % minorStep(this.getCurrency()) !== 0) return false; // e.g. 5.125 KWD, USh 100.50
     if (c.presetsMinor.includes(amountMinor)) return true;
     return c.allowCustom && amountMinor >= c.customMinMinor && amountMinor <= c.customMaxMinor;
   }
@@ -2286,12 +2311,13 @@ export class Store {
     };
   }
 
-  /** The versioned config a paired kiosk pulls: the PIN, currency, location, masjid name, the
-   *  masjid's clock (zone, 12/24-hour, Hijri adjustment, locale), the global giving settings (manual-entry policy, name/email prompts, default thank-you, cover-fee
-   *  estimate), and the ordered list of live CAMPAIGNS (main first) it shows as tabs. Each campaign
-   *  carries `readerCapable` — whether the physical reader (locked to the primary account) can take
-   *  it, or it must use keyed entry (a cross-account campaign). Pass the primary account id so this
-   *  can be computed; '' treats every campaign as reader-capable (single-account kiosks). */
+  /** The versioned config a paired kiosk pulls: the PIN, currency, location, masjid name and the
+   *  locale amounts are written in, the global giving settings (name/email prompts, default
+   *  thank-you, cover-fee estimate), and the ordered list of live CAMPAIGNS (main first) it shows as
+   *  tabs. Each campaign carries `readerCapable` — whether it settles to the primary account — which
+   *  only OLDER tablets act on (they route a cross-account campaign to keyed entry; current ones
+   *  re-register the reader), and the phone app, which never re-registers. Pass the primary account
+   *  id so it can be computed; '' treats every campaign as reader-capable. */
   getKioskConfig(primaryAccountId = '', deviceId = ''): { version: number; config: Record<string, unknown> } {
     const g = this.getGiving();
     const main = this.getMainCampaign();

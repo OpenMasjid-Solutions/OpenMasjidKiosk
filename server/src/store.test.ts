@@ -132,7 +132,7 @@ test('per-device: campaign targeting filters getKioskConfig, and orientation is 
   s.setDeviceOrientation(a.id, 'nonsense');
   assert.equal(s.getDevice(a.id)!.orientation, '0'); // invalid → no rotation
 
-  // Reader side (NFC hint): per-device, defaults off, only left/right/off are kept, reaches the config.
+  // Reader side (NFC hint): per-device, defaults off, only the known sides are kept, reaches the config.
   assert.equal(s.getKioskConfig('', a.id).config.nfcSide, 'off'); // default
   s.setDeviceNfcSide(a.id, 'left');
   assert.equal(s.getKioskConfig('', a.id).config.nfcSide, 'left');
@@ -574,7 +574,8 @@ test('the fixed card fee is scaled to the currency — and unchanged, to the uni
     assert.equal(grossUpForFees(base, 'USD'), flat, 'dollars are byte-identical');
     assert.equal(grossUpForFees(base, 'EUR'), flat);
   }
-  assert.equal(grossUpForFees(5_000, 'KWD'), Math.ceil((5_000 + 300) / (1 - FEE_BPS / 10000)));
+  // Rounded UP to a last 0, which is all a three-decimal dinar can be charged in.
+  assert.equal(grossUpForFees(5_000, 'KWD'), Math.ceil((5_000 + 300) / (1 - FEE_BPS / 10000) / 10) * 10);
   assert.equal(grossUpForFees(5_000, 'JPY'), Math.ceil(5_000 / (1 - FEE_BPS / 10000)));
 
   const s = freshStore();

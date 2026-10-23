@@ -280,6 +280,11 @@ test('a number without a country code is REFUSED, not guessed at', () => {
   assert.equal(normalisePhone('07700 900123'), '');
   assert.equal(phoneLooksValid('07700 900123'), false);
   assert.equal(normalisePhone('0044 7700 900123'), '447700900123', 'an explicit 00 prefix is fine');
+  // A trunk 0 after a known country code is the national habit, never part of the number: dropped.
+  assert.equal(normalisePhone('+44 (0)7700 900123'), '447700900123');
+  assert.equal(normalisePhone('4407700900123'), '447700900123', 'what the panel stored before 0.14.0');
+  assert.equal(normalisePhone('9203001234567'), '923001234567');
+  assert.equal(normalisePhone('+39 06 1234 5678'), '390612345678', 'Italy keeps its 0 — not in the list');
 });
 
 test('the usual ways of writing an international number all work', () => {
@@ -539,7 +544,7 @@ test('only the dismissals are ours to remember', () => {
   // recovery, so the platform is the source of truth and this is all that is left on our side.
   const s = mem();
   // A REAL epoch, not a small synthetic one: these are pruned by age, so `1000` would be read as
-  // 1970 and dropped on the way back out. (The same shape of trap `whatsappGate` documents, from
+  // 1970 and dropped on the way back out. (The same shape of trap `whatsappPermit` documents, from
   // the other direction — there a small clock breaks a subtraction, here it breaks a cutoff.)
   const from = Date.now() - 60_000;
   assert.deepEqual(s.getDismissedSuspectWindows(), []);

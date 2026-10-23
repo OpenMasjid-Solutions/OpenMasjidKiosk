@@ -2,7 +2,7 @@
 // Copyright (C) 2026 OpenMasjid-Solutions
 
 /** The Devices (fleet) screen for the admin panel. A volunteer pairs a tablet by generating
- *  a short code, then sees each kiosk's live status (online, battery, reader, app version),
+ *  a short code, then sees each kiosk's live status (online, reader, app version),
  *  renames or removes them, flashes one to spot it, reads its recent activity, and sets the
  *  PIN staff use to leave the giving screen. Polls every ~10s. Every call fails soft to a
  *  friendly inline message — the page never crashes. Matches the admin design language
@@ -694,7 +694,17 @@ function DeviceRow({
               </button>
             </div>
           ) : (
-            <button ref={nameBtnRef} className="device-name" onClick={() => setEditing(true)} title="Rename this kiosk">
+            <button
+              ref={nameBtnRef}
+              className="device-name"
+              // From the name as it is NOW: renamed elsewhere since this card mounted, the box opened on
+              // the old name, and pressing Enter quietly put it back.
+              onClick={() => {
+                setName(device.name);
+                setEditing(true);
+              }}
+              title="Rename this kiosk"
+            >
               {device.name || 'Unnamed kiosk'} <Pencil size={13} aria-hidden="true" />
             </button>
           )}
@@ -705,7 +715,7 @@ function DeviceRow({
               <>
                 Offline · last seen{' '}
                 <time dateTime={device.lastSeen} title={formatDateTime(device.lastSeen, clock)}>
-                  {lastSeen}
+                  {figures(lastSeen)}
                 </time>
               </>
             ) : (
@@ -981,7 +991,7 @@ function LogsModal({ device, onClose }: { device: Device; onClose: () => void })
                     {/* Relative, because "5 min ago" is what someone checking on a kiosk wants; the
                         exact moment, in the masjid's time and with the Hijri date, on hover. */}
                     <time className="log-time faint" dateTime={l.ts} title={formatDateTime(l.ts, clock)}>
-                      {relativeTime(l.ts)}
+                      {figures(relativeTime(l.ts))}
                     </time>
                   </div>
                   {l.detail && (

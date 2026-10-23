@@ -719,7 +719,7 @@ function ReaderLocation({ status, refresh }: { status: PaymentsStatus; refresh: 
         </button>
       </div>
       {!canCreate && (
-        <p className="hint" style={{ marginBlockStart: '0.5rem' }}>Add your masjid's address line 1 and country above first.</p>
+        <p className="hint" style={{ marginBlockStart: '0.5rem' }}>Save your masjid’s address (line 1 and country) above first.</p>
       )}
 
       {existing && (

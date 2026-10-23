@@ -200,7 +200,7 @@ function LastWhatsApp({ rec }: { rec: WhatsAppSendRecord | null }) {
       <span className={`mx-last${tone === 'bad' ? ' text-warn' : ''}`} title={formatDateTime(rec.at, clock)}>
         <Icon size={12} aria-hidden="true" /> {text}
         {rec.suppressed > 0
-          ? ` (${plural(rec.suppressed, 'earlier one', 'earlier ones')} held back by your WhatsApp limits)`
+          ? figures(` (${plural(rec.suppressed, 'earlier one', 'earlier ones')} held back by your WhatsApp limits)`)
           : ''}
       </span>
       {/* The compact disclosure the activity log uses, because this sits inside a table cell. */}
@@ -255,9 +255,9 @@ function SuspectBanner({ w, busy, onDismiss }: { w: SuspectWindow; busy: boolean
             {/* dir="ltr" on the two times: a date is a run of Latin letters, digits and commas, and
                 under an Arabic or Urdu page the bidi algorithm would otherwise put the time before
                 the date and the comma at the wrong end. */}
-            {because} It was down between <b dir="ltr">{formatDateTime(w.from, clock)}</b> and{' '}
-            <b dir="ltr">{oneDay ? formatTime(w.to, clock) : formatDateTime(w.to, clock)}</b>, and OpenMasjidOS
-            didn’t notice straight away. <b>{w.count}</b> message{w.count === 1 ? '' : 's'} sent in that time
+            {because} It was down between <b dir="ltr">{figures(formatDateTime(w.from, clock))}</b> and{' '}
+            <b dir="ltr">{figures(oneDay ? formatTime(w.to, clock) : formatDateTime(w.to, clock))}</b>, and OpenMasjidOS
+            didn’t notice straight away. <b className="num">{w.count}</b> message{w.count === 1 ? '' : 's'} sent in that time
             {w.count === 1 ? ' was' : ' were'} recorded as sent but may never have been delivered.
           </p>
         </div>
@@ -704,7 +704,11 @@ function PacingPanel({
     setGap(String(view.pacing.minGapMinutes));
     setHour(String(view.pacing.maxPerHour));
     setDay(String(view.pacing.maxPerDay));
-  }, [view.pacing.minGapMinutes, view.pacing.maxPerHour, view.pacing.maxPerDay]);
+    // On every answer, not only when a number changed: a save the server clamped (500 → 200), or an
+    // emptied box it kept at 200, returns the SAME numbers, and keying on them left the box showing
+    // a value that was never saved. Each save answers with a new object, so this re-syncs; it never
+    // fights typing, because the boxes commit on blur, before any other control can be pressed.
+  }, [view.pacing]);
 
   const num = (s: string) => (s.trim() === '' ? undefined : Number(s));
   const commit = () => onSave({ minGapMinutes: num(gap), maxPerHour: num(hour), maxPerDay: num(day) });
@@ -901,7 +905,10 @@ export function NotificationsSection() {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      setView(await refreshWhatsApp());
+      const v = await refreshWhatsApp();
+      setView(v);
+      // Ready now: the note goes, and this button with it — keep focus in the section, not the page.
+      if (!whatsappNote(v.whatsapp)) headingRef.current?.focus();
     } catch {
       /* the note beside the button already says what to do */
     } finally {

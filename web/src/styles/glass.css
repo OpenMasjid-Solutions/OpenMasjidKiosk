@@ -73,21 +73,6 @@
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.3) 32%, transparent 52%, rgba(2, 132, 199, 0.12));
 }
 
-/* Soft accent bloom behind an element (mirrors OpenMasjidOS' glow-accent). The halo
-   extends past the element's edges; strength adapts to the theme via --glow-strength. */
-.glow-accent { position: relative; isolation: isolate; }
-.glow-accent::before {
-  content: "";
-  position: absolute;
-  inset: -28%;
-  z-index: -1;
-  border-radius: inherit;
-  pointer-events: none;
-  background: radial-gradient(circle, color-mix(in srgb, var(--color-primary) calc(var(--glow-strength) * 100%), transparent), transparent 70%);
-  filter: blur(22px);
-  opacity: var(--glow-strength);
-}
-
 /* Live status dot — colour conveys state (always alongside words that say it too); the glow pulses a
    few times when it appears and then rests. It used to pulse forever on every online kiosk and on the
    dashboard's permanent "Running" pill — continuous GPU work for a state that had not changed (§8). */

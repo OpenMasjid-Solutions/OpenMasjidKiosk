@@ -43,7 +43,7 @@ with no instructions and nobody standing next to them. Behind it sits one admin 
 your OpenMasjidOS: run several appeals at once, take monthly giving, email receipts,
 collect school fees, and manage a fleet of tablets across more than one site.
 
-> **Status: v0.11.0 — running in masajid, actively developed.**
+> **Status: v0.13.0 — running in masajid, actively developed.**
 > See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ---
@@ -159,16 +159,17 @@ Each appeal is its own tab across the top of the kiosk, with its own everything.
 
 Shared by every appeal:
 
-- The **attract headline** and the **masjid name** shown on the kiosk.
+- The **masjid name** shown on the kiosk.
 - A **footer tagline** under the amounts.
 - **Name policy** and **email policy** — off / optional / required.
-- A default **thank-you message**.
+- The **size of the appeal tabs** across the top of the kiosk.
 - **Large-gift threshold**, the note to show, and an optional image (e.g. a bank QR code).
 - **Fireworks** on/off and the amount threshold that earns them.
 - **Force maximum screen brightness** — a wall kiosk should be as bright as it can be.
 - **Per-kiosk screen rotation** (0° / 90° / 180° / 270°), set from the web, applied by the
   tablet itself so it works even on tablets that ignore orientation requests.
-- The **kiosk exit PIN** (4–8 digits), set, rotated or removed here.
+- The **kiosk exit PIN** (4–8 digits), one for every kiosk — set, rotated or removed on the
+  **Devices** page.
 
 ## Payments & Stripe
 
@@ -199,8 +200,9 @@ Shared by every appeal:
 
 - **Stripe's own email receipts** for any donor who gives an email.
 - **A branded receipt designer** — your logo, your subject, heading and wording, an accent
-  color, and the amount/date/card/fund filled in automatically, with a live preview and a
-  send-me-a-test button. It is escaped against injection and can never double-send.
+  color, and the amount/date/card/fund filled in automatically, with a live preview and an
+  **Email me a sample receipt** button that sends you the real branded receipt. It is escaped
+  against injection and can never double-send.
 - **A retry queue** for receipts, so a transient email failure still lands.
 - **A refund note** to the donor, in the same branding, when you give a donation back.
 - **A "your monthly donation is set up" email** carrying the donor's own cancel link.
@@ -214,32 +216,39 @@ Shared by every appeal:
 
 The platform's own alert settings send everything to one address. A masjid usually needs more than
 that: "the foyer reader is offline" should reach whoever walks past the foyer, while "a donation was
-refunded" should reach the treasurer. So **each alert has its own row**, and can go to any
-combination of three places — they are **additive**, and one failing never stops the others:
+refunded" should reach the treasurer. So the screen is a grid — **one row per person or group, one
+column per alert**, with a tick where they meet. Rows are **additive**, and one failing never stops
+the others:
 
-| Channel | Default | What it does |
+| Row | Default | What it does |
 |---|---|---|
-| **OpenMasjidOS** | **on** | Forwards by email or webhook per your OpenMasjidOS alert settings — exactly as before. |
-| **Also email** | off | A second address of your choosing, sent through your OpenMasjidOS email provider. |
-| **WhatsApp** | **off** | A message to a number you enter. Needs WhatsApp set up in OpenMasjidOS. |
+| **OpenMasjidOS** | **ticked for every alert** | Forwards by email or webhook per your OpenMasjidOS alert settings — exactly as before. |
+| **An email address** | — | Sent through your OpenMasjidOS email provider. Add as many as you need. |
+| **A WhatsApp number or group** | — | Needs WhatsApp set up in OpenMasjidOS. A group is picked from the ones approved there, never typed. |
 
-- **Nothing changes on upgrade** — every alert starts with OpenMasjidOS on and WhatsApp off.
-- An alert with nothing switched on is badged **"goes nowhere"**, and WhatsApp switched on with no
-  number is called out too, so a channel can't quietly stop reaching anyone.
+- **Nothing changes on upgrade** — every alert keeps going to OpenMasjidOS, and an address you had
+  already entered becomes a row of its own, ticked for exactly the alerts it was on. (A WhatsApp
+  number whose switch was off is not carried over.)
+- An alert that nothing is ticked for is badged **"nowhere"**, so a channel can't quietly stop
+  reaching anyone.
 - **Send test message** follows these same settings and names the channels it actually went by, so
   it proves your configuration rather than just that the server is up.
-- **You can see what happened to the last WhatsApp** for each alert, right under it: sent, queued,
-  or refused with the reason in plain words — an unapproved group, a number missing its country
-  code, or the masjid's own WhatsApp number. Before, a refused message and a lost one looked
+- **You can see what happened to the last WhatsApp** to each number or group, on its row: sent,
+  queued, or refused with the reason in plain words — an unapproved group, a number missing its
+  country code, or the masjid's own WhatsApp number. Before, a refused message and a lost one looked
   identical.
-- **The kiosk paces itself.** At most one WhatsApp per kind of alert every half hour, and the next
-  one tells you how many were held back. This matters because a card processor outage can otherwise
-  raise one alert per attempted donation — and WhatsApp bans attach to your masjid's phone
-  number, which cannot be recovered if it is lost. Email and your OpenMasjidOS alerts are never
-  paced; they have no such risk.
-- A phone number must carry its **country code** (`+44 7700 900123`). Leaving it off is refused
-  rather than guessed at — a guess would eventually message a stranger abroad — and a rejected
-  number never overwrites the one already saved.
+- **Donor names stay out of WhatsApp groups** unless you switch them on for that group. Two alerts
+  name a donor (a refund, a stopped monthly donation), and everyone in a WhatsApp group can see
+  every other member's number.
+- **WhatsApp limits are yours to set.** By default at most 20 WhatsApp messages an hour and 100 a
+  day, with a 2-minute wait before the same alert repeats; anything held back is counted and
+  reported on the next message that goes, and a test is never held back. This matters because a
+  card processor outage can otherwise raise one alert per attempted donation — and WhatsApp bans
+  attach to your masjid's phone number, which cannot be recovered if it is lost. Email and your
+  OpenMasjidOS alerts are never limited; they have no such risk.
+- A phone number must carry its **country code** (`+44 7700 900123`) — the panel has a country
+  picker for it. Leaving it off is refused rather than guessed at, since a guess would eventually
+  message a stranger abroad.
 
 ## Ask the kiosk from WhatsApp
 
@@ -269,10 +278,11 @@ on, message the masjid's own number with `!kiosk` and pick from the menu:
 - A failure can never put technical detail — a payment reference, a file path — into a message, and
   something slow answers "still working, ask again in a moment" rather than timing out silently.
 
-**Donors are never messaged.** WhatsApp reaches only the numbers you typed into Settings →
+**Donors are never messaged.** WhatsApp reaches only the numbers and groups you added in Settings →
 Notifications. There is no phone field anywhere in the giving flow. And because messages go through
-the masjid's own number, OpenMasjidOS paces them deliberately to protect it — delivery is seconds to
-minutes, so it's for things worth interrupting someone about. Email stays the reliable channel.
+the masjid's own number, the kiosk keeps its alerts within the limits you set there, and a message
+is only ever handed to OpenMasjidOS, never confirmed delivered — so it's for things worth
+interrupting someone about. Email stays the reliable channel.
 
 ## Donations & reporting
 
@@ -282,7 +292,8 @@ minutes, so it's for things worth interrupting someone about. Email stays the re
   **netted of refunds** so they show what the masjid actually kept. Refunded donations stay in
   the log, struck through and badged, rather than disappearing.
 - **CSV export** of the entire history — including **Refunded**, **Net** and **Refund ID**
-  columns — escaped against spreadsheet formula injection and behind admin sign-in because it
+  columns, and the date in masjid time and as a Hijri date beside the UTC timestamp — escaped
+  against spreadsheet formula injection and behind admin sign-in because it
   contains donor details.
 - Totals count **succeeded donations in your current currency** only, so mixed currencies are
   never silently added together.
@@ -364,8 +375,8 @@ cached status on the screen you use to cancel someone's standing order would be 
 - **Dark, fixed brand theme**, wall-sized type, every step scrolls rather than clipping,
   reduced-motion respected, and **right-to-left layouts** supported (`supportsRtl`), so an Arabic or
   Urdu system locale mirrors the screens correctly. Your own wording — appeal titles, descriptions,
-  thank-you messages, the attract headline — is whatever you type in the admin panel, in any
-  language. **The app's own donor-facing wording is still hardcoded English**: the setup, pairing
+  thank-you messages — is whatever you type in the admin panel, in any language. **The app's own
+  donor-facing wording is still hardcoded English**: the setup, pairing
   and maintenance screens are in `strings.xml` and translatable, but the giving flow is not yet, so
   translating the kiosk itself is a future change rather than a settings one.
 - **Backups are disabled**, so the pairing secret never leaves the tablet.
@@ -375,13 +386,15 @@ cached status on the screen you use to cancel someone's standing order would be 
 - **Stripe Reader M2 over Bluetooth *and* USB.**
 - **Automatic reconnection** — on boot and whenever the connection drops, plus a background
   health check that catches silent drops.
-- **Firmware updates** handled in the app, with battery and charging reported to the panel. An
+- **Firmware updates** handled in the app. An
   update in progress is shown **on the giving screen** with a percentage and a "leave it switched
   on" note — from the floor an updating reader used to look like a broken one, and unplugging it
   mid-update is the one thing that can leave it needing a repair.
 - Transient Bluetooth failures are retried with a clean re-scan, and errors come with the
   **actual fix** ("don't pair it in Android's own Bluetooth settings", "charge it past 50%").
-- A **simulated reader** for testing without hardware.
+- No simulated reader in the app, deliberately — a "test reader" button on a wall kiosk is a way
+  for a real donation to be silently not taken. Without a reader, **typed entry** with Stripe test
+  cards runs the whole flow.
 - The tablet only ever holds a **short-lived connection token** — never a Stripe key.
 
 ## Admin panel
@@ -395,6 +408,16 @@ Six sections — **Dashboard · Devices · Campaigns · Donations · Recurring �
   masjid-network-only fallback.
 - The panel **inherits the dashboard's** light/dark, accent color and wallpaper, with a
   per-session light/dark override of your own.
+- **Dates in your masjid's time zone, with the Hijri date beside the Gregorian** — on the panel, in
+  receipts and other emails, on the donor's cancel page, in the CSV and in WhatsApp replies. Set the
+  **time zone**, a **12- or 24-hour clock** and a **Hijri adjustment** of up to three days either way
+  under **Settings → Payments → Masjid details**; "today" starts at the masjid's own midnight.
+- **Money written the way your currency writes it** — "$1,234,500", "₹1,00,000", "KWD 2.500" — on
+  the panel, in emails and on the tablets, each donation in its own currency.
+- **Right-to-left** when the dashboard is in Arabic or Urdu: the panel mirrors with it (its wording
+  is still English).
+- **Keyboard and screen-reader friendly** — every window is a real dialog that keeps focus inside
+  it, closes on Escape and hands focus back to what opened it.
 - **"What's new"** in the account menu — the release notes that shipped inside the running
   build, with a gold dot until you've read them, and no call to the internet.
 - A **public `/new` setup page** that hands out **both** Android apps, matched to the server
@@ -512,14 +535,8 @@ receipts, iOS app, offline payments, or Play Store distribution.
   without asking for one. **Exit kiosk** stays hidden — but **Android settings** and **Re-pair** do
   not, and Android settings drops the lockdown. It is deliberate that a PIN-less kiosk isn't locked
   out of its own reader setup; it is not deliberate that those two are reachable. Setting a PIN
-  (Devices → the kiosk → exit PIN) closes it completely. See
+  (Devices → Kiosk exit PIN) closes it completely. See
   [`docs/audit/ACTION_REQUIRED.md`](docs/audit/ACTION_REQUIRED.md) §9.
-- **A typed-card donation is captured on the tablet rather than by the server.** Reader payments are
-  authorised on the tablet and only *captured* by the server after it re-checks with Stripe, so the
-  money never moves on the tablet's word. Typed entry — the automatic fallback when no reader is
-  connected — settles immediately instead, so a connection lost at the wrong moment can leave Stripe
-  holding a payment this app has no record of, while the donor is told it will be refunded. Rare, and
-  the money is in your Stripe account either way, but it will not appear in your totals. §10.
 - **The local admin password can't be changed once set** — there is no route or screen for it. If you
   sign in with OpenMasjidOS this doesn't affect you. §11.
 - The stored **"allow manual card entry"** setting is inert — typed entry is always offered as a
@@ -538,9 +555,9 @@ All development happens on the **`dev`** branch — see the Branching policy at 
 
 ```bash
 # server (API + static host)
-cd server && npm install && npm run build && npm test
+cd server && npm install && npm run build && npm run typecheck:tests && npm test
 
-# admin web (Vite dev server proxies /api, /healthz + /download to the server on :8080)
+# admin web (Vite dev server proxies /api, /healthz, /download + /uploads to the server on :8080)
 cd web && npm install && npm run dev
 
 # Android kiosk app (needs JDK 17+ and the Android SDK)
@@ -550,8 +567,8 @@ cd android && ./gradlew assembleDebug
 docker compose up -d      # → http://localhost:7878
 ```
 
-Local dev uses Stripe **test keys** and the Terminal **simulated reader**, so the whole flow
-runs without hardware.
+Local dev uses Stripe **test keys** and **typed card entry** with Stripe's test cards, so the whole
+flow runs without a reader — the app has no simulated-reader option.
 
 **Docs:** [tablet setup](docs/TABLET_SETUP.md) · [reader setup](docs/READER_SETUP.md) ·
 [architecture](docs/ARCHITECTURE.md) · [remote adoption](docs/REMOTE_ADOPTION.md) ·

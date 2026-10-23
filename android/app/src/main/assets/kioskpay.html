@@ -75,7 +75,7 @@
       #msg { color: var(--color-danger-ink); font-size: 0.95rem; margin: 0 0 14px; text-align: center; min-height: 1.1em; }
       button { width: 100%; border: 0; border-radius: 16px; cursor: pointer; font-weight: 700; }
       #pay { background: var(--accent); color: var(--on-accent); padding: 18px; font-size: 1.25rem; }
-      #pay:disabled, #pay[aria-disabled="true"] { opacity: 0.55; }
+      #pay:disabled, #pay[aria-disabled="true"], #cancel[aria-disabled="true"] { opacity: 0.55; }
       #cancel { background: transparent; color: var(--color-ink-muted); padding: 14px; font-size: 1.05rem; font-weight: 600; margin-top: 8px; }
       /* The spinner is drawn in the button's own ink (currentColor = --on-accent), so it reads on
          whatever accent the campaign chose. */
@@ -125,7 +125,10 @@
         var cancelBtn = document.getElementById('cancel');
         var msg = document.getElementById('msg');
         payBtn.textContent = payLabel;
-        cancelBtn.addEventListener('click', function () { bridge('canceled', ''); });
+        // Not while a payment is confirming: Stripe may already have the card, and cancelling then
+        // dropped the payment the app was about to finish, so a donor could be charged and nothing
+        // recorded. (`busy` is the pay button's flag below; `var` makes it visible here.)
+        cancelBtn.addEventListener('click', function () { if (busy) return; bridge('canceled', ''); });
 
         if (!cs || !pk || typeof Stripe === 'undefined') {
           msg.textContent = 'Couldn’t load the card form. Please check the tablet’s internet and try again.';
@@ -161,7 +164,7 @@
         card.on('change', function (e) { msg.textContent = e && e.error && e.error.message ? e.error.message : ''; });
 
         var busy = false;
-        function resetBtn() { busy = false; payBtn.removeAttribute('aria-disabled'); payBtn.textContent = payLabel; }
+        function resetBtn() { busy = false; payBtn.removeAttribute('aria-disabled'); cancelBtn.removeAttribute('aria-disabled'); payBtn.textContent = payLabel; }
         payBtn.addEventListener('click', function () {
           if (busy) return;
           busy = true; msg.textContent = '';
@@ -169,6 +172,7 @@
           // focus drops focus to the page, and a screen reader loses its place mid-payment. The button
           // also keeps a spoken name while it works — the spinner alone left it with none.
           payBtn.setAttribute('aria-disabled', 'true');
+          cancelBtn.setAttribute('aria-disabled', 'true');
           payBtn.innerHTML = '<span class="spin" aria-hidden="true"></span> Processing…';
           stripe.confirmCardPayment(cs, { payment_method: { card: card } }).then(function (result) {
             if (result.error) {

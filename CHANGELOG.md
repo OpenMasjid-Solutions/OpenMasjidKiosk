@@ -65,6 +65,60 @@ detail of every change — it is distilled into a major-changes-only entry when 
   default colors.
 - **Fixed: renaming the masjid in Settings → Masjid details didn't reach the tablets** until some
   other setting changed — the card-entry page kept the old name. It now updates on the next check-in.
+- **Security fixes from a full repository audit.**
+  - **A typed card is now only authorised on the tablet and captured by the server**, as a reader
+    payment always was. Before, a dropped connection at the wrong second could leave Stripe holding
+    a typed donation this app had no record of. Now nothing is taken until the server has checked it.
+  - **Another page on the same server can no longer act as you in the admin panel.** A site served
+    from another port of the masjid's server could send changes with your session, including
+    pressing Send test over and over. Changes must now come from the panel itself, and Send test
+    has a limit of its own.
+  - **A kiosk can only finish payments it started itself.** Before, any paired device could finish
+    another payment by its id.
+  - **Turning a tablet off and on no longer resets the exit-PIN lockout.**
+  - **The donations CSV is safe to open in Excel in every region.** Where Excel separates columns
+    with `;`, a donor's name containing `;=` could become a formula.
+  - **The tablet app's build tool is now checked against its published checksum** before it runs.
+- **Fixes from the same audit — money first.**
+  - **Ugandan shillings were charged at a hundredth.** Stripe takes UGX with two decimal places that
+    are always zero; this app sent it without them, so a USh 10,000 gift charged USh 100 while the
+    receipt and totals said 10,000. An existing Ugandan install's suggested amounts are converted
+    once, so each still means what it did.
+  - **Kuwaiti, Bahraini, Omani and Jordanian dinar amounts now end in 0**, which is all a card can be
+    charged in. Covering the card fee in those currencies — always on for Zakat — produced amounts
+    like 5.459 KWD that could be refused at the card; the total now rounds up to the next 0.010.
+  - **A refund typed as "12,50" refunded 1250.** Amount boxes now read a decimal comma as one, the way
+    most of the world writes money; "1,000" is still a thousand.
+  - **A tablet that loses its connection right after the card is read now keeps trying to finish the
+    payment** for a few seconds, instead of giving up and telling the donor they might be refunded. A
+    donor who presses Cancel while a typed card is processing no longer leaves a charge unfinished,
+    and the masjid hears about each donation once, however many tries it took.
+  - **A campaign on a second Stripe account switches the card reader over properly**, and a tuition
+    payment after one switches it back. When it can't, the donor types the card instead — never a
+    payment on the wrong account.
+  - **Fixed: a monthly plan whose details were edited in the Stripe dashboard couldn't be stopped** —
+    not from Recurring, and not from the donor's own cancel link, so the donor kept being charged.
+  - **The phone app no longer offers campaigns it can't take money for** (tuition, or an appeal on
+    another Stripe account).
+  - **The card reader's Location is the one you chose in Settings → Payments.** The first connection
+    used to quietly create a second Location in Stripe.
+- **Fixed for admins.**
+  - **A WhatsApp number typed the usual way — 07700 900123 with UK picked — was saved with its 0 kept**,
+    as a number that does not exist, so it never received anything. It is saved correctly now, and
+    numbers already saved that way are repaired on their own.
+  - **The "Send branded receipts" switch now saves when you flip it.** It only saved with the Save
+    receipt button further down, while the line under it already said receipts would be sent.
+  - **Unticking the last kiosk on a campaign no longer puts it on every kiosk.**
+  - **The WhatsApp limit boxes show what was actually saved** when the server adjusts a number.
+  - **The receipt preview no longer flips its amounts to the left** on an Arabic or Urdu dashboard.
+  - **Identify now always flashes the kiosk** — a background check-in could use it up first.
+  - **The "new" dot on What's new appears when a development build moves to its release.**
+  - **A server restored from a backup reaches its tablets again** — including a new exit PIN.
+  - **"Today" starts at the right time on the day the clocks go forward at midnight** (Chile, Cuba).
+  - **A donor's receipt can no longer be sent twice** after an email outage.
+- **Internal.** Removed code nothing used: a diagnostics route the panel stopped calling, the
+  never-shown attract-screen title, unused exports, styles and colours, and comments that described
+  the app as unfinished.
 
 ## 0.13.0
 **A security update — please install it. Kiosk now runs on the patched Node.js that Stripe has been

@@ -443,7 +443,7 @@ function GlobalSettingsCard() {
                     value={largeThreshold}
                     inputMode="decimal"
                     placeholder="e.g. 250"
-                    onChange={(e) => setLargeThreshold(e.target.value.replace(/[^\d.]/g, ''))}
+                    onChange={(e) => setLargeThreshold(e.target.value.replace(/[^\d.,]/g, ''))}
                   />
                 </div>
                 <span className="hint">Leave blank to never show it.</span>
@@ -488,7 +488,7 @@ function GlobalSettingsCard() {
                   value={celebrateThreshold}
                   inputMode="decimal"
                   placeholder="e.g. 100"
-                  onChange={(e) => setCelebrateThreshold(e.target.value.replace(/[^\d.]/g, ''))}
+                  onChange={(e) => setCelebrateThreshold(e.target.value.replace(/[^\d.,]/g, ''))}
                 />
               </div>
               <span className="hint">Leave blank to celebrate every donation.</span>
@@ -823,9 +823,31 @@ function CampaignEditor({
     tabRefs.current[next]?.focus();
   };
 
-  const setPreset = (i: number, v: string) => setPresets((ps) => ps.map((p, j) => (j === i ? v.replace(/[^\d.]/g, '') : p)));
-  const removePreset = (i: number) => setPresets((ps) => ps.filter((_, j) => j !== i));
-  const addPreset = () => setPresets((ps) => (ps.length < MAX_PRESETS ? [...ps, ''] : ps));
+  // Commas kept as typed: toMinor reads "12,50" as twelve and a half (see plainAmount).
+  const setPreset = (i: number, v: string) => setPresets((ps) => ps.map((p, j) => (j === i ? v.replace(/[^\d.,]/g, '') : p)));
+  // Adding the sixth amount removes "Add amount", and removing one removes its own button, so either
+  // press dropped keyboard focus to the page. Focus goes to the box that is now in that place instead
+  // (or to "Add amount" when no boxes are left).
+  const presetGridRef = useRef<HTMLDivElement>(null);
+  const addPresetRef = useRef<HTMLButtonElement>(null);
+  const focusPreset = useRef<number | null>(null);
+  useEffect(() => {
+    const i = focusPreset.current;
+    if (i === null) return;
+    focusPreset.current = null;
+    const boxes = presetGridRef.current?.querySelectorAll<HTMLInputElement>('input');
+    if (boxes && boxes.length) boxes[Math.min(i, boxes.length - 1)].focus();
+    else addPresetRef.current?.focus();
+  }, [presets]);
+  const removePreset = (i: number) => {
+    focusPreset.current = i;
+    setPresets((ps) => ps.filter((_, j) => j !== i));
+  };
+  const addPreset = () => {
+    if (presets.length >= MAX_PRESETS) return;
+    focusPreset.current = presets.length;
+    setPresets((ps) => (ps.length < MAX_PRESETS ? [...ps, ''] : ps));
+  };
 
   // Live preview amounts (drop blanks/invalid, cap at 6) — recomputed as you type.
   const previewPresets = useMemo(() => presets.map((p) => toMinor(p, currency)).filter((n) => n > 0).slice(0, MAX_PRESETS), [presets, currency]);
@@ -969,7 +991,7 @@ function CampaignEditor({
               <div className="field">
                 <label className="label" htmlFor="c-title">Title</label>
                 <input id="c-title" className="input" value={title} maxLength={TITLE_MAX} placeholder="e.g. General fund, Zakat, Building fund" onChange={(e) => setTitle(e.target.value)} autoFocus />
-                <span className={`char-count ${title.length > TITLE_MAX ? 'form-error' : 'hint'}`}>{title.length}/{TITLE_MAX} — this is the tab name, so keep it short.</span>
+                <span className={`char-count ${title.length > TITLE_MAX ? 'form-error' : 'hint'}`}><span className="num">{title.length}/{TITLE_MAX}</span> — this is the tab name, so keep it short.</span>
               </div>
 
               <div className="ce-tabs" role="tablist" aria-label="Campaign settings">
@@ -1077,7 +1099,7 @@ function CampaignEditor({
                   <>
                     <div className="field">
                       <span className="label">Suggested amounts <span className="faint">({currency})</span></span>
-                      <div className="preset-grid">
+                      <div className="preset-grid" ref={presetGridRef}>
                         {presets.map((p, i) => (
                           <div className="preset-input" key={i}>
                             <span className="preset-sym" aria-hidden="true">{symbolFor(currency)}</span>
@@ -1090,7 +1112,7 @@ function CampaignEditor({
                         ))}
                       </div>
                       {presets.length < MAX_PRESETS && (
-                        <button className="btn btn--ghost btn--sm" onClick={addPreset} style={{ marginBlockStart: '0.5rem' }}>
+                        <button ref={addPresetRef} className="btn btn--ghost btn--sm" onClick={addPreset} style={{ marginBlockStart: '0.5rem' }}>
                           <Plus size={14} aria-hidden="true" /> Add amount
                         </button>
                       )}
@@ -1101,11 +1123,11 @@ function CampaignEditor({
                       <div className="row row--top" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
                         <div className="field" style={{ flex: 1, minWidth: '8rem' }}>
                           <label className="label" htmlFor="c-min">Minimum custom amount</label>
-                          <input id="c-min" className="input" dir="ltr" value={customMin} inputMode="decimal" onChange={(e) => setCustomMin(e.target.value.replace(/[^\d.]/g, ''))} />
+                          <input id="c-min" className="input" dir="ltr" value={customMin} inputMode="decimal" onChange={(e) => setCustomMin(e.target.value.replace(/[^\d.,]/g, ''))} />
                         </div>
                         <div className="field" style={{ flex: 1, minWidth: '8rem' }}>
                           <label className="label" htmlFor="c-max">Maximum custom amount</label>
-                          <input id="c-max" className="input" dir="ltr" value={customMax} inputMode="decimal" onChange={(e) => setCustomMax(e.target.value.replace(/[^\d.]/g, ''))} />
+                          <input id="c-max" className="input" dir="ltr" value={customMax} inputMode="decimal" onChange={(e) => setCustomMax(e.target.value.replace(/[^\d.,]/g, ''))} />
                         </div>
                       </div>
                     )}
@@ -1241,13 +1263,21 @@ function CampaignEditor({
                           <div className="device-pick">
                             {devices.map((d) => {
                               const on = deviceIds.includes(d.id);
+                              // The last one stays: an empty list MEANS all kiosks, so unticking it quietly
+                              // put the appeal on every kiosk — the opposite of what the admin was doing.
+                              const last = on && deviceIds.length === 1;
                               return (
                                 <button
                                   key={d.id}
                                   type="button"
                                   className={`device-chip${on ? ' device-chip--on' : ''}`}
                                   aria-pressed={on}
-                                  onClick={() => setDeviceIds(on ? deviceIds.filter((x) => x !== d.id) : [...deviceIds, d.id])}
+                                  aria-disabled={last || undefined}
+                                  title={last ? 'At least one kiosk has to show it — or turn on All kiosks above.' : undefined}
+                                  onClick={() => {
+                                    if (last) return;
+                                    setDeviceIds(on ? deviceIds.filter((x) => x !== d.id) : [...deviceIds, d.id]);
+                                  }}
                                 >
                                   {d.name || 'Kiosk'}
                                 </button>
@@ -1266,7 +1296,7 @@ function CampaignEditor({
                     <div className="field">
                       <label className="label" htmlFor="c-desc">Description <span className="faint">(optional)</span></label>
                       <textarea id="c-desc" className="input" rows={3} maxLength={DESC_MAX} value={description} placeholder="A short line about this appeal." onChange={(e) => setDescription(e.target.value)} />
-                      <span className={`char-count ${description.length > DESC_MAX ? 'form-error' : 'hint'}`}>{description.length}/{DESC_MAX} — keep it brief so it fits the kiosk screen without being cut off.</span>
+                      <span className={`char-count ${description.length > DESC_MAX ? 'form-error' : 'hint'}`}><span className="num">{description.length}/{DESC_MAX}</span> — keep it brief so it fits the kiosk screen without being cut off.</span>
                     </div>
 
                     <div className="field">
@@ -1453,6 +1483,7 @@ function ColorField({
   hint: string;
 }) {
   const [draft, setDraft] = useState(value);
+  const hexRef = useRef<HTMLInputElement>(null);
   // Follow the value when it changes from OUTSIDE this field (a preset was clicked, or Reset).
   useEffect(() => setDraft(value), [value]);
 
@@ -1484,6 +1515,7 @@ function ColorField({
         />
         <input
           id={id}
+          ref={hexRef}
           className="input color-hex"
           dir="ltr"
           value={draft}
@@ -1496,7 +1528,17 @@ function ColorField({
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit((e.target as HTMLInputElement).value); } }}
         />
         {value ? (
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => onChange('')}>Reset to default</button>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            // The button goes once the value is cleared; focus stays in this field rather than the page.
+            onClick={() => {
+              onChange('');
+              hexRef.current?.focus();
+            }}
+          >
+            Reset to default
+          </button>
         ) : (
           <span className="hint" style={{ margin: 0 }}>{unsetLabel}</span>
         )}

@@ -74,7 +74,6 @@ dependencies {
     api(libs.androidx.material3)
 
     api(libs.androidx.datastore.preferences)  // device token / config / pinned cert at rest
-    api(libs.androidx.work.runtime.ktx)       // backstop heartbeat when backgrounded
     api(libs.okhttp)                          // HTTPS client: pinned on a LAN cert, system-CA over the tunnel
     api(libs.kotlinx.coroutines.android)      // IO dispatcher for blocking OkHttp calls
     api(libs.bouncycastle)                    // offline SCrypt PIN verification

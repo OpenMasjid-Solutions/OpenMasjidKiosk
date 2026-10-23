@@ -33,6 +33,7 @@ import com.stripe.stripeterminal.external.models.ReaderSoftwareUpdate
 import com.stripe.stripeterminal.external.models.TerminalErrorCode
 import com.stripe.stripeterminal.external.models.TerminalException
 import com.stripe.stripeterminal.log.LogLevel
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,7 +47,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.openmasjidos.kiosk.net.KioskRepository
 
-/** How the tablet talks to the reader. Simulated uses Stripe's built-in mock reader (no hardware). */
+/** How the tablet talks to the reader. Simulated (Stripe's built-in mock reader, no hardware) is
+ *  unreachable today: nothing selects it, and the Test reader was removed from the maintenance
+ *  picker. Its branches are kept until the maintainer decides whether to remove it. */
 enum class ReaderTransport { Bluetooth, Usb, Simulated }
 
 /** Coarse connection state for the maintenance UI + heartbeat. */
@@ -57,7 +60,6 @@ data class DiscoveredReader(val serial: String, val label: String)
 
 /** Immutable snapshot the maintenance screen renders. */
 data class ReaderUiState(
-    val initialized: Boolean = false,
     val transport: ReaderTransport = ReaderTransport.Bluetooth,
     val conn: ReaderConn = ReaderConn.NotConnected,
     val discovered: List<DiscoveredReader> = emptyList(),
@@ -67,7 +69,8 @@ data class ReaderUiState(
     val updateProgress: Int? = null,   // 0..100 while an update installs
     val updateAvailable: Boolean = false,
     val error: String? = null,
-    // Reader prompt text ("Insert or tap card", …). Populated during the slice-6 collect flow.
+    // Reader prompt text ("Tap or insert your card", …). Set by the reader listener during a
+    // collect; cleared by [ReaderManager.clearPrompt] when the donation flow ends.
     val prompt: String? = null,
 )
 
@@ -75,9 +78,9 @@ data class ReaderUiState(
 data class ReaderStatusSnapshot(val status: String, val serial: String?, val battery: Int?)
 
 /**
- * The single owner of all Stripe Terminal SDK interaction (M2 reader over Bluetooth AND USB, plus
- * Stripe's simulated reader for testing without hardware). Isolating every Terminal call here keeps
- * the SDK's surface in one place and off the rest of the app.
+ * The single owner of all Stripe Terminal SDK interaction (M2 reader over Bluetooth AND USB; the
+ * simulated-reader branches remain but nothing selects them — see [ReaderTransport]). Isolating every
+ * Terminal call here keeps the SDK's surface in one place and off the rest of the app.
  *
  * A process singleton because [Terminal] itself is a singleton: the maintenance UI and the
  * background heartbeat both read the current reader status from here.
@@ -150,10 +153,7 @@ object ReaderManager {
     fun ensureInitialized(context: Context, repository: KioskRepository) {
         repo = repository
         appContext = context.applicationContext
-        if (Terminal.isInitialized()) {
-            _state.update { it.copy(initialized = true) }
-            return
-        }
+        if (Terminal.isInitialized()) return
         Terminal.init(
             context.applicationContext,
             LogLevel.ERROR,
@@ -161,7 +161,6 @@ object ReaderManager {
             terminalListener,
             null,
         )
-        _state.update { it.copy(initialized = true) }
     }
 
     /**
@@ -211,7 +210,8 @@ object ReaderManager {
             }
         }
 
-        override fun onPaymentStatusChange(status: PaymentStatus) { /* used by the slice-6 flow */ }
+        // Not needed: PaymentController follows each payment through its own collect/confirm callbacks.
+        override fun onPaymentStatusChange(status: PaymentStatus) { }
     }
 
     // ---- Discovery ---------------------------------------------------------------------
@@ -541,26 +541,29 @@ object ReaderManager {
         // Scope every token from here on to this campaign, THEN drop the old registration.
         tokenCampaignId = campaignId
         registeredAccountId = null
-        _state.update { it.copy(conn = ReaderConn.Connecting, error = null) }
+        // Wait for the SDK to actually let go — on ITS callback — before clearing credentials: they
+        // belong to the old account, and clearing them while still connected is not honoured. This
+        // used to set `Connecting` first and then wait for "not Connected", which was already true,
+        // so it never waited — and that same `Connecting` made tryAutoConnect below bail out.
+        val released = CompletableDeferred<Unit>()
         runCatching {
             Terminal.getInstance().disconnectReader(object : Callback {
-                override fun onSuccess() {}
-                override fun onFailure(e: TerminalException) {}
+                override fun onSuccess() { released.complete(Unit) }
+                override fun onFailure(e: TerminalException) { released.complete(Unit) }
             })
-        }
-        // Wait for the SDK to actually let go before clearing credentials — they belong to the old
-        // account, and clearing them while still connected is not honored.
-        withTimeoutOrNull(10_000) { _state.first { it.conn != ReaderConn.Connected } }
+        }.onFailure { released.complete(Unit) }
+        withTimeoutOrNull(10_000) { released.await() }
+        withTimeoutOrNull(3_000) { _state.first { it.conn != ReaderConn.Connected } }
         runCatching { Terminal.getInstance().clearCachedCredentials() }
 
         autoLocationId = locationId
         enableAutoConnect(transport, serial, locationId)
-        val ok = withTimeoutOrNull(45_000) { _state.first { it.conn == ReaderConn.Connected } } != null
-        if (ok) {
-            registeredAccountId = accountId
-        } else {
-            repo?.log("warn", "reader_reregister_failed", "account=" + accountId.ifBlank { "primary" })
-        }
+        val reconnected = withTimeoutOrNull(45_000) { _state.first { it.conn == ReaderConn.Connected } } != null
+        // Ready only if it came back on a token minted for THIS account. The token provider records
+        // the account of every token it fetches; a reconnect on cached credentials fetches none and
+        // would still be the old account, so the donation must go to typed entry instead.
+        val ok = reconnected && registeredAccountId == accountId
+        if (!ok) repo?.log("warn", "reader_reregister_failed", "account=" + accountId.ifBlank { "primary" })
         return ok
     }
 
@@ -753,7 +756,7 @@ object ReaderManager {
             val wasAuto = connectedTransport == autoTransport
             connectedTransport = null
             // Only promise a reconnect when one is actually about to be scheduled. Without auto-connect
-            // (a reader that was never remembered — the simulated one, say) nothing retries, and
+            // (a reader that was never remembered) nothing retries, and
             // "Reconnecting…" would sit on screen for good, describing work nobody is doing.
             val willRetry = autoEnabled && wasAuto
             val message = if (willRetry) {

@@ -49,8 +49,8 @@ which is the opposite of what a sideloaded app wants — see below.)
 ### Doing all of that from anywhere
 
 This is the point of the app, so it is worth stating plainly: **none of the above needs the masjid's
-Wi-Fi.** If the masjid has Remote access turned on in OpenMasjidOS and **Allow remote adoption**
-enabled in this app's admin panel, a volunteer at a hotel forty miles away opens the masjid's public
+Wi-Fi.** If the masjid has Remote access turned on in OpenMasjidOS and remote adoption (**Let tablets
+at other sites pair**) enabled in this app's admin panel, a volunteer at a hotel forty miles away opens the masjid's public
 address on their own phone and completes every step over it.
 
 That works because `/new`, the APK download, pairing and the payment endpoints are all reachable

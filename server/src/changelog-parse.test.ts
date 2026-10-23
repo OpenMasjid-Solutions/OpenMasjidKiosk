@@ -23,7 +23,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { inlineSpans, parseChangelog, type InlineSpan, type Release } from '../../web/src/changelog';
+import { inlineSpans, parseChangelog, versionNewer, type InlineSpan, type Release } from '../../web/src/changelog';
 
 const md = readFileSync(new URL('../../CHANGELOG.md', import.meta.url), 'utf8');
 const releases = parseChangelog(md);
@@ -153,4 +153,13 @@ test('inline: nesting, atomic code, and markers that do not pair up stay as plai
   }
   // A space just inside a marker is not emphasis either.
   assert.deepEqual(inlineSpans('* not italic *'), [{ kind: 'text', text: '* not italic *' }]);
+});
+
+test('the "new" dot: numeric, and a release is newer than its own development builds', () => {
+  assert.equal(versionNewer('0.9.34', '0.9.9'), true, 'numbers, not strings');
+  assert.equal(versionNewer('0.14.0', '0.14.0-dev.5'), true, 'a dev box moving to the release sees it');
+  assert.equal(versionNewer('0.14.0-dev.5', '0.14.0'), false);
+  assert.equal(versionNewer('0.14.0-dev.12', '0.14.0-dev.5'), true, 'dev.12 after dev.5');
+  assert.equal(versionNewer('0.14.0-dev.1', '0.13.0'), true, 'the next cycle is newer than the last release');
+  assert.equal(versionNewer('0.13.0', '0.13.0'), false);
 });

@@ -231,6 +231,15 @@ export function newRecipient(kind: RecipientKind, address: string, label: string
  *
  * Returns '' when the input cannot be a valid international number.
  */
+/**
+ * The country codes whose national numbers carry a TRUNK 0 that is not part of the international
+ * number — every non-NANP country the admin panel's picker offers (web/src/phone.ts COUNTRIES; a
+ * test keeps the two lists equal). None of them has a subscriber number that starts with 0, so a 0
+ * straight after one of these codes is always the trunk prefix: "+44 (0)7700 900123", or what the
+ * picker itself stored before 0.14.0 ("4407700900123", a number that does not exist).
+ */
+export const TRUNK_ZERO_DIALS: readonly string[] = ['44', '92', '91', '880', '971', '966', '60', '27', '61', '90', '234'];
+
 export function normalisePhone(input: string): string {
   const raw = (input ?? '').trim();
   if (!raw) return '';
@@ -243,6 +252,11 @@ export function normalisePhone(input: string): string {
   // international number, and the surest sign the country code is missing. Refuse rather than strip
   // it: "07700 900123" is unambiguous to a person and ambiguous to us.
   if (digits.startsWith('0')) return '';
+  // A trunk 0 kept after a known country code is dropped, not refused: unlike a missing country
+  // code it is unambiguous. Every stored number is read back through here, so this also repairs the
+  // ones the picker saved wrongly. (Codes are prefix-free, so at most one can match.)
+  const dial = TRUNK_ZERO_DIALS.find((c) => digits.startsWith(`${c}0`));
+  if (dial) digits = dial + digits.slice(dial.length + 1);
   // E.164 allows at most 15 digits; a country code plus a subscriber number is never below 8.
   if (digits.length < 8 || digits.length > 15) return '';
   return digits;

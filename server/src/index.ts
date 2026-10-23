@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 OpenMasjid-Solutions
 
-/** Entry point: a Fastify server that serves the built admin web app, the public setup
- *  page (/new), the bundled Android APK, and the JSON API.
- *
- *  Slice 1: themed shell + health check + /new + APK download.
- *  Slice 2 (this): the OpenMasjidOS Fabric — single sign-on (server→server) with a local
- *  admin-password fallback, live appearance inheritance, restore-resilience, and the
- *  notifications relay. Stripe/payments, device pairing & fleet management, and the
- *  donations log arrive in later slices. */
+/** Entry point: a Fastify server that serves the built admin web app, the public setup page
+ *  (/new), the bundled Android APKs, and the JSON API — the admin panel's routes, the tablets'
+ *  device API (pairing, heartbeats, config, connection tokens, payments), the donor's monthly-cancel
+ *  page, and the OpenMasjidOS Fabric (single sign-on with a local-password fallback, appearance,
+ *  Stripe accounts, alerts, email and WhatsApp, the admin commands). CLAUDE.md is the map. */
 import path from 'node:path';
 import fs from 'node:fs';
 import { pipeline } from 'node:stream/promises';
@@ -64,6 +61,7 @@ import {
 } from './replies';
 import {
   completeCardPresentPaymentIntent,
+  NotOurPaymentIntent,
   createCardPaymentIntent,
   createCardPresentPaymentIntent,
   cancelPlan,
@@ -91,8 +89,6 @@ import {
 } from './stripe';
 
 const log = makeLog('main');
-
-const LOOPBACK_RE = /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[?::1)/i;
 
 /** A kiosk that hasn't checked in within this window is reported offline. Check-ins are every 10s,
  *  so ~35s is three missed beats — long enough not to flap on one dropped packet. Module-level so
@@ -313,13 +309,28 @@ async function main(): Promise<void> {
     if (viaTunnel(req)) {
       // A page on a sibling subdomain (the masjid's own website, say) is same-SITE, so a form it
       // posts here still carries the platform's SameSite=Lax token. A change must come from this
-      // page's own origin; browsers always send Origin with one.
+      // ORIGIN; browsers always send Origin with one. That origin is shared by every app the
+      // dashboard exposes, so this keeps out other sites, not a sibling app on the same hostname
+      // (the platform's own documented limit for remote administration).
       const origin = req.headers.origin;
       if (origin && req.method !== 'GET' && req.method !== 'HEAD' && origin !== `https://${String(req.headers['x-forwarded-host'] ?? '')}`) {
         return reply.code(403).send({ error: 'Not allowed.' });
       }
       if (!(await remoteAdmin(req))) return reply.code(401).send({ error: 'Please open Kiosk again from your OpenMasjidOS dashboard.' });
       return;
+    }
+    // On the LAN too, a change must come from this page itself. Our cookie is SameSite=Lax, and the
+    // same SITE includes every other port on this host (another app, the dashboard), whose script can
+    // post here as multipart or text/plain with no preflight. Sec-Fetch-Site names exactly that case;
+    // Origin is the fallback for a browser too old to send it. The OS proxy sets X-Forwarded-Host from
+    // the real Host, and a cross-site page cannot add headers of its own without a preflight.
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      const site = req.headers['sec-fetch-site'];
+      const origin = req.headers.origin;
+      const own = `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '')}`;
+      if ((site && site !== 'same-origin' && site !== 'none') || (!site && origin && origin !== own)) {
+        return reply.code(403).send({ error: 'Not allowed.' });
+      }
     }
     if (!isAuthed(req.cookies[COOKIE])) return reply.code(401).send({ error: 'Please sign in.' });
   };
@@ -579,23 +590,6 @@ async function main(): Promise<void> {
       log.debug('changelog not readable');
     }
     return { data: { version: config.version, markdown } };
-  });
-
-  // ── Fabric notifications: diagnose + send a test alert ──────────────────────
-  app.post('/api/admin/notify-test', { preHandler: requireAdmin }, async () => {
-    const base = config.omosBaseUrl;
-    const hasSecret = !!config.omosAppSecret;
-    let result: { delivered: boolean; reason?: string } = { delivered: false, reason: 'no-fabric' };
-    if (base && hasSecret) {
-      result = await notify({
-        title: 'OpenMasjid Kiosk — test',
-        text: '✅ Test alert from OpenMasjid Kiosk. If you see this, donation alerts will reach you here.',
-        level: 'info',
-      });
-    }
-    return {
-      data: { baseUrlSet: !!base, hasSecret, baseUrlLoopback: LOOPBACK_RE.test(base), appId: config.omosAppId, ...result },
-    };
   });
 
   // ── Payments (Stripe via the Fabric, with a standalone key fallback) ─────────
@@ -999,6 +993,8 @@ async function main(): Promise<void> {
     }
   };
 
+  // Alert kinds with a WhatsApp send in progress (see the burst-gap note in raiseAlert).
+  const waInFlight = new Set<AlertId>();
   const raiseAlert = async (
     id: AlertId,
     title: string,
@@ -1047,7 +1043,10 @@ async function main(): Promise<void> {
     if (waTargets.length) {
       const pacing = store.getWhatsAppPacing();
       const now = Date.now();
-      const permit = whatsappPermit(id, store.getWhatsAppLedger(), pacing, now);
+      let permit = whatsappPermit(id, store.getWhatsAppLedger(), pacing, now);
+      // One send of a kind at a time. The ledger is charged only once the sends come back, so a second
+      // alert of the same kind arriving meanwhile read the same ledger and passed the burst gap too.
+      if (id !== 'test' && waInFlight.has(id) && permit.allowed > 0) permit = { ...permit, allowed: 0, reason: 'gap' };
       if (permit.allowed <= 0) {
         const why = permitReasonText(permit.reason, pacing);
         reasons.push(`WhatsApp: ${why}`);
@@ -1055,58 +1054,63 @@ async function main(): Promise<void> {
         log.info(`alert ${id}: WhatsApp ${why}`);
         store.setWhatsAppLedger(recordWhatsAppSends(store.getWhatsAppLedger(), id, 0, now));
       } else {
-        // The budget is in MESSAGES. When it cannot cover everyone, groups go first: one group send
-        // reaches more people per message than any individual number, so under a squeeze it is the
-        // channel that tells the most people. Say plainly who missed out rather than truncating in
-        // silence.
-        const ordered = [...waTargets].sort((a, b) => (a.kind === 'group' ? -1 : 0) - (b.kind === 'group' ? -1 : 0));
-        const going = ordered.slice(0, permit.allowed);
-        const skipped = ordered.length - going.length;
-        if (skipped > 0) {
-          const note = `${skipped} recipient${skipped === 1 ? '' : 's'} not messaged — the hourly or daily limit was reached partway through`;
-          reasons.push(`WhatsApp: ${note}`);
-          codes.push(`WhatsApp: ${note}`);
-        }
-        for (const r of going) {
-          const body = withSuppressedNote(`${title}\n\n${bodyForRecipient(r, text, textWithoutNames)}`, permit.suppressedBefore);
-          const sendIt =
-            r.kind === 'group'
-              ? fabricWhatsAppGroup(r.address, body)
-              : fabricWhatsApp(r.address, body);
-          const res = await sendIt.catch(() => ({ queued: false, id: undefined, reason: 'threw' }));
-          if (res.queued) whatsapp += 1;
-          // RECORD THE OUTCOME EITHER WAY, per recipient. A refusal used to reach nothing but a
-          // debug line, so a message the platform rejected in a plain sentence — an unapproved
-          // group, a number missing its country code, the masjid's own gateway number — looked
-          // exactly like one that vanished into the queue. The settings screen reads this record and
-          // shows the sentence on the row that caused it.
+        waInFlight.add(id);
+        try {
+          // The budget is in MESSAGES. When it cannot cover everyone, groups go first: one group send
+          // reaches more people per message than any individual number, so under a squeeze it is the
+          // channel that tells the most people. Say plainly who missed out rather than truncating in
+          // silence.
+          const ordered = [...waTargets].sort((a, b) => (a.kind === 'group' ? -1 : 0) - (b.kind === 'group' ? -1 : 0));
+          const going = ordered.slice(0, permit.allowed);
+          const skipped = ordered.length - going.length;
+          if (skipped > 0) {
+            const note = `${skipped} recipient${skipped === 1 ? '' : 's'} not messaged — the hourly or daily limit was reached partway through`;
+            reasons.push(`WhatsApp: ${note}`);
+            codes.push(`WhatsApp: ${note}`);
+          }
+          for (const r of going) {
+            const body = withSuppressedNote(`${title}\n\n${bodyForRecipient(r, text, textWithoutNames)}`, permit.suppressedBefore);
+            const sendIt =
+              r.kind === 'group'
+                ? fabricWhatsAppGroup(r.address, body)
+                : fabricWhatsApp(r.address, body);
+            const res = await sendIt.catch(() => ({ queued: false, id: undefined, reason: 'threw' }));
+            if (res.queued) whatsapp += 1;
+            // RECORD THE OUTCOME EITHER WAY, per recipient. A refusal used to reach nothing but a
+            // debug line, so a message the platform rejected in a plain sentence — an unapproved
+            // group, a number missing its country code, the masjid's own gateway number — looked
+            // exactly like one that vanished into the queue. The settings screen reads this record and
+            // shows the sentence on the row that caused it.
+            //
+            // IN WORDS. The platform's own refusal is already a plain sentence and reasonWords passes
+            // it through untouched — that sentence is the point of this record. What it translates is
+            // OUR fallback codes ('threw', 'unreachable', 'http_502'), which used to reach the row as
+            // "Last message refused: threw".
+            store.setWhatsAppOutcome(r.id, {
+              state: res.queued ? 'queued' : 'refused',
+              at: Date.now(),
+              messageId: res.queued ? (res.id ?? '') : '',
+              reason: res.queued ? '' : reasonWords(res.reason ?? 'refused'),
+              suppressed: permit.suppressedBefore,
+              alertId: id,
+            });
+            if (!res.queued && res.reason) failed(`WhatsApp to ${r.label || r.address}`, res.reason);
+            // Resolve queued -> sent/failed shortly afterwards, when the platform can say (0.51.1+).
+            if (res.queued && res.id) scheduleWhatsAppFollowUp(r.id, id, res.id);
+          }
+          // Charge the budget for what was actually handed over, not for what was permitted.
           //
-          // IN WORDS. The platform's own refusal is already a plain sentence and reasonWords passes
-          // it through untouched — that sentence is the point of this record. What it translates is
-          // OUR fallback codes ('threw', 'unreachable', 'http_502'), which used to reach the row as
-          // "Last message refused: threw".
-          store.setWhatsAppOutcome(r.id, {
-            state: res.queued ? 'queued' : 'refused',
-            at: Date.now(),
-            messageId: res.queued ? (res.id ?? '') : '',
-            reason: res.queued ? '' : reasonWords(res.reason ?? 'refused'),
-            suppressed: permit.suppressedBefore,
-            alertId: id,
-          });
-          if (!res.queued && res.reason) failed(`WhatsApp to ${r.label || r.address}`, res.reason);
-          // Resolve queued -> sent/failed shortly afterwards, when the platform can say (0.51.1+).
-          if (res.queued && res.id) scheduleWhatsAppFollowUp(r.id, id, res.id);
-        }
-        // Charge the budget for what was actually handed over, not for what was permitted.
-        //
-        // AND ONLY WHEN SOMETHING WENT. A run where every send was refused must leave the ledger
-        // alone: nothing was handed over, so there is no budget to charge — and it is not
-        // suppression either. Recording it as a hold would make the NEXT message say "3 alerts were
-        // held back to protect the masjid's number" about three messages the platform rejected
-        // outright, which is a confident, wrong answer to the one question the admin is asking.
-        // Their real reasons are already on their rows.
-        if (whatsapp > 0) {
-          store.setWhatsAppLedger(recordWhatsAppSends(store.getWhatsAppLedger(), id, whatsapp, now));
+          // AND ONLY WHEN SOMETHING WENT. A run where every send was refused must leave the ledger
+          // alone: nothing was handed over, so there is no budget to charge — and it is not
+          // suppression either. Recording it as a hold would make the NEXT message say "3 alerts were
+          // held back to protect the masjid's number" about three messages the platform rejected
+          // outright, which is a confident, wrong answer to the one question the admin is asking.
+          // Their real reasons are already on their rows.
+          if (whatsapp > 0) {
+            store.setWhatsAppLedger(recordWhatsAppSends(store.getWhatsAppLedger(), id, whatsapp, now));
+          }
+        } finally {
+          waInFlight.delete(id);
         }
       }
     }
@@ -1286,7 +1290,15 @@ async function main(): Promise<void> {
   // In-app "send me a test": fire the declared `test` alert THROUGH THE SAME ROUTING as a real one,
   // so what it proves is the admin's actual configuration — not merely that the platform is up. A
   // test that took a different path would be the least useful kind of test.
-  app.post('/api/admin/test-alert', { preHandler: requireAdmin }, async () => {
+  // Budgeted like the sample receipt: the `test` alert skips WhatsApp pacing (an admin is watching),
+  // so without this a stuck key or a looping script could message every recipient without limit.
+  const testAlertBudget = new GlobalAttemptBudget(10, 10 * 60_000);
+  app.post('/api/admin/test-alert', { preHandler: requireAdmin }, async (_req, reply) => {
+    const wait = testAlertBudget.retryAfterMs();
+    if (wait > 0) {
+      return reply.code(429).send({ error: `That’s a lot of test alerts in a row. Please wait ${waitWords(wait)} and send another.` });
+    }
+    testAlertBudget.fail();
     const res = await raiseAlert(
       'test',
       'Test from OpenMasjid Kiosk',
@@ -1481,10 +1493,10 @@ async function main(): Promise<void> {
   });
 
   // ── Giving-screen designer (amounts/messages the kiosk shows) ────────────────
-  // Everything here is pushed live: setGiving/setAttractTitle bump the config version, so paired
+  // Everything here is pushed live: setGiving and setMasjid bump the config version, so paired
   // kiosks pick it up on their next heartbeat and re-render. Amounts are integer minor units.
   app.get('/api/admin/giving', { preHandler: requireAdmin }, async () => ({
-    data: { giving: store.getGiving(), currency: store.getCurrency(), masjidName: store.getMasjid().name, attractTitle: store.getAttractTitle() },
+    data: { giving: store.getGiving(), currency: store.getCurrency(), masjidName: store.getMasjid().name },
   }));
 
   const GivingBody = z
@@ -1506,7 +1518,6 @@ async function main(): Promise<void> {
       largeAmountImage: z.string().max(500).optional(),
       celebrateEnabled: z.boolean().optional(),
       celebrateThresholdMinor: z.number().int().min(0).optional(),
-      attractTitle: z.string().max(120).optional(),
       masjidName: z.string().max(160).optional(),
     })
     .strict();
@@ -1514,11 +1525,10 @@ async function main(): Promise<void> {
   app.put('/api/admin/giving', { preHandler: requireAdmin }, async (req, reply) => {
     const parsed = GivingBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: issueSentence(parsed.error, GIVING_FIELD_WORDS, 'We couldn’t save the giving-screen settings. Reload the page and try again.') });
-    const { attractTitle, masjidName, ...giving } = parsed.data;
+    const { masjidName, ...giving } = parsed.data;
     store.setGiving(giving); // sanitizes (≤6 presets, sane bounds, known policies) + bumps configVersion
-    if (attractTitle !== undefined) store.setAttractTitle(attractTitle.trim());
     if (masjidName !== undefined) store.setMasjid({ name: masjidName.trim() }); // bumps the config when it changes
-    return { data: { giving: store.getGiving(), currency: store.getCurrency(), masjidName: store.getMasjid().name, attractTitle: store.getAttractTitle() } };
+    return { data: { giving: store.getGiving(), currency: store.getCurrency(), masjidName: store.getMasjid().name } };
   });
 
   // ── Campaigns (giving appeals shown as kiosk tabs) ───────────────────────────
@@ -1738,7 +1748,7 @@ async function main(): Promise<void> {
    *  would at best 404 and at worst touch a same-id object elsewhere. */
   const withPlan = async <T,>(
     id: string,
-    fn: (keys: StripeKeys, accountId: string) => Promise<T>,
+    fn: (keys: StripeKeys, accountId: string, ownedLocally: boolean) => Promise<T>,
   ): Promise<{ ok: true; value: T } | { ok: false; reason: 'not-found' | 'no-account' }> => {
     const accounts = await planAccounts();
     if (!accounts.length) return { ok: false, reason: 'no-account' };
@@ -1751,7 +1761,7 @@ async function main(): Promise<void> {
       // worse half of the same bug (an admin can see the standing order but not stop it).
       const found = await retrievePlan(acct.keys.secretKey, id, { ownedLocally: !!rec }).catch(() => null);
       if (!found) continue;
-      return { ok: true, value: await fn(acct.keys, acct.id) };
+      return { ok: true, value: await fn(acct.keys, acct.id, !!rec) };
     }
     return { ok: false, reason: 'not-found' };
   };
@@ -1842,8 +1852,8 @@ async function main(): Promise<void> {
   app.get('/api/admin/plans/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     if (!SUB_ID_RE.test(id)) return reply.code(400).send({ error: 'That plan wasn’t valid.' });
-    const r = await withPlan(id, async (keys, accountId) => {
-      const sp = await retrievePlan(keys.secretKey, id);
+    const r = await withPlan(id, async (keys, accountId, ownedLocally) => {
+      const sp = await retrievePlan(keys.secretKey, id, { ownedLocally });
       if (!sp) return null;
       return { plan: toPlan(sp, accountId, await accountLabels()), invoices: await listPlanInvoices(keys.secretKey, id) };
     });
@@ -1856,14 +1866,14 @@ async function main(): Promise<void> {
   const planAction = async (
     req: import('fastify').FastifyRequest,
     reply: import('fastify').FastifyReply,
-    act: (keys: StripeKeys, id: string) => Promise<unknown>,
+    act: (keys: StripeKeys, id: string, ownedLocally: boolean) => Promise<unknown>,
   ) => {
     const id = (req.params as { id: string }).id;
     if (!SUB_ID_RE.test(id)) return reply.code(400).send({ error: 'That plan wasn’t valid.' });
     try {
-      const r = await withPlan(id, async (keys, accountId) => {
-        await act(keys, id);
-        const sp = await retrievePlan(keys.secretKey, id);
+      const r = await withPlan(id, async (keys, accountId, ownedLocally) => {
+        await act(keys, id, ownedLocally);
+        const sp = await retrievePlan(keys.secretKey, id, { ownedLocally });
         return sp ? toPlan(sp, accountId, await accountLabels()) : null;
       });
       if (!r.ok || !r.value) return reply.code(404).send({ error: 'That plan couldn’t be found in Stripe.' });
@@ -1880,8 +1890,8 @@ async function main(): Promise<void> {
     const body = CancelBody.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
     const now = body.data.immediately === true;
-    return planAction(req, reply, async (keys, id) => {
-      const r = await cancelPlan(keys.secretKey, id, now);
+    return planAction(req, reply, async (keys, id, owned) => {
+      const r = await cancelPlan(keys.secretKey, id, now, owned);
       await audit(req, 'plan.cancel', id, now ? 'ended immediately' : 'ends at the end of the paid period');
       return r;
     });
@@ -1891,8 +1901,8 @@ async function main(): Promise<void> {
   app.post('/api/admin/plans/:id/pause', { preHandler: requireAdmin }, async (req, reply) => {
     const body = PauseBody.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'That request wasn’t valid.' });
-    return planAction(req, reply, async (keys, id) => {
-      const r = await pausePlan(keys.secretKey, id, body.data.paused);
+    return planAction(req, reply, async (keys, id, owned) => {
+      const r = await pausePlan(keys.secretKey, id, body.data.paused, owned);
       await audit(req, 'plan.pause', id, body.data.paused ? 'paused — nothing collected until resumed' : 'resumed');
       return r;
     });
@@ -1915,8 +1925,8 @@ async function main(): Promise<void> {
       if (t <= Date.now()) return reply.code(400).send({ error: 'Pick a date in the future.' });
       endSec = Math.floor(t / 1000);
     }
-    return planAction(req, reply, async (keys, id) => {
-      const r = await schedulePlanEnd(keys.secretKey, id, { endAt: endSec, charges: charges ?? null });
+    return planAction(req, reply, async (keys, id, owned) => {
+      const r = await schedulePlanEnd(keys.secretKey, id, { endAt: endSec, charges: charges ?? null, ownedLocally: owned });
       const what = endSec ? `ends on ${new Date(endSec * 1000).toISOString().slice(0, 10)}` : charges ? `stops after ${charges} more charge(s)` : 'end date cleared — carries on';
       await audit(req, 'plan.schedule', id, what);
       return r;
@@ -2336,7 +2346,7 @@ ${body}
     // immediately: the donor has already given this month at the kiosk and the next charge is still
     // ahead, so “stop it” means stop it — there is no remaining paid period to run out.
     const done = acct
-      ? await cancelPlan(acct.keys.secretKey, plan.subscriptionId, true).then(() => true).catch(() => false)
+      ? await cancelPlan(acct.keys.secretKey, plan.subscriptionId, true, true).then(() => true).catch(() => false)
       : false;
     if (!done) {
       // Never claim it stopped when it didn't — the donor would walk away and be charged again.
@@ -2433,8 +2443,10 @@ ${body}
     appVersion: z.string().max(40).optional(),
     configVersion: z.number().int().optional(),
     // The live on-screen loop sends foreground:true; the WorkManager backstop sends false. Only a
-    // foreground heartbeat can act on the one-shot "open update" flag, so only it consumes it — the
-    // backstop must not, or an admin's Update could be silently eaten by a background check-in.
+    // foreground heartbeat can act on the one-shot Identify flash, so only it consumes it — the
+    // backstop must not, or an admin's Identify could be silently eaten by a background check-in.
+    // (This field outlived the "open update" flag it was added for, and went unread until 0.14.0.)
+    // Absent, from an older tablet, counts as foreground — which is what that tablet always got.
     foreground: z.boolean().optional(),
   });
   // ── Reader-offline alert (derived from the heartbeat's readerStatus) ─────────
@@ -2487,7 +2499,7 @@ ${body}
     return {
       data: {
         configVersion: store.getConfigVersion(),
-        identify: store.consumeIdentify(d.id),
+        identify: parsed.success && parsed.data.foreground === false ? false : store.consumeIdentify(d.id),
         latestAppVersion: config.version, // the APK version bundled in this server image (info only)
         revoked: false,
       },
@@ -2528,8 +2540,17 @@ ${body}
    * the Payments screen; making a donor wait for that to be repeated per account would be a poor
    * trade, so a secondary account gets one created from the same masjid details, once, and remembered.
    */
+  /** Where an account's Location is stored. The PRIMARY account's is the one the admin chose on the
+   *  Payments screen — stored under '' and sent to every kiosk in its config; a second account's is
+   *  keyed by its own id. This used to read `acct.id === '' ? '' : acct.id`, which is acct.id either
+   *  way (the primary is 'local' or a vault id, never ''), so the primary's first connection token
+   *  quietly created a SECOND Location — or, with no masjid address saved, came back with none. */
+  const locationKey = async (acct: ResolvedAccount): Promise<string> => {
+    const primary = await resolveAccount();
+    return primary && primary.id === acct.id ? '' : acct.id;
+  };
   const locationForAccount = async (acct: ResolvedAccount): Promise<string> => {
-    const key = acct.id === '' ? '' : acct.id;
+    const key = await locationKey(acct);
     const existing = store.getLocation(key);
     if (existing) {
       // VERIFY IT STILL EXISTS BEFORE HANDING IT OUT. A `tml_…` is scoped to one Stripe account AND
@@ -2598,7 +2619,7 @@ ${body}
     const acct = campaign?.stripeAccountId ? await resolveAccountById(campaign.stripeAccountId) : await resolveAccount();
     if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     try {
-      const locationId = await locationForAccount(acct).catch(() => store.getLocation(acct.id)?.id);
+      const locationId = await locationForAccount(acct).catch(async () => store.getLocation(await locationKey(acct))?.id);
       const secret = await createConnectionToken(acct.keys.secretKey, locationId);
       // The tablet needs to know WHICH account this token registers the reader to, so it can tell
       // when the next donation needs a different one. An account id is not a secret.
@@ -2960,7 +2981,7 @@ ${body}
     const acct = await resolveAccountById(store.getPiAccount(id));
     if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     try {
-      const result = await completeCardPresentPaymentIntent(acct.keys.secretKey, id);
+      const result = await completeCardPresentPaymentIntent(acct.keys.secretKey, id, (m) => m.app === 'kiosk' && m.deviceId === d.id);
       const meta = result.metadata;
       // A tuition PaymentIntent (purpose=students-billing) is settled + recorded via the tuition path
       // (its own /complete drains to the Students app), and must NEVER land in the donations table or
@@ -3075,23 +3096,6 @@ ${body}
           }
         }
       }
-      // A monthly gift the donor asked for and did NOT get is the one outcome here that must never
-      // be silent: the money was taken once, the donor believes they have set up a standing order,
-      // and the admin has nothing to cancel because nothing exists. Put it where both can see it —
-      // this kiosk's log, and an alert to the admin.
-      if (result.succeeded && wantsMonthly && !monthly.created) {
-        store.addLogs(d.id, [{ level: 'warn', event: 'monthly_setup_failed', detail: `${monthlyProblem || 'No monthly plan was created.'}${monthlyDetail ? ` · ${monthlyDetail}` : ''}` }]);
-        alert(
-          'monthly-failed',
-          'A monthly donation could not be set up',
-          `${formatMoney(result.amountMinor, result.currency)} was taken once at ${d.name || 'the kiosk'}` +
-            `${(meta.campaign || '').trim() ? ` · ${(meta.campaign || '').trim()}` : ''}, but the donor's monthly plan could NOT be created, ` +
-            `so nothing will be collected again and there is nothing to cancel. ${monthlyProblem}` +
-            `${monthlyDetail ? ` The technical reason is saved in Devices → ${d.name || 'this kiosk'} → Logs.` : ''}` +
-            ` If the donor expected a monthly plan, please contact them.`,
-          'warning',
-        );
-      }
       // Branded receipt owed ONLY when the PI was minted branded (Stripe's receipt suppressed at
       // intent) AND it succeeded AND the donor gave an email. recordDonation persists that decision
       // and reports whether THIS call first-recorded it, so we send exactly once (a retried /complete
@@ -3118,6 +3122,24 @@ ${body}
         receipt: oweBranded ? 'pending' : 'stripe',
         chargeId: result.chargeId,
       });
+      // A monthly gift the donor asked for and did NOT get is the one outcome here that must never
+      // be silent: the money was taken once, the donor believes they have set up a standing order,
+      // and the admin has nothing to cancel because nothing exists. Put it where both can see it —
+      // this kiosk's log, and an alert to the admin. Once: after recordDonation, on the call that
+      // first recorded it, so the tablet retrying /complete after a dropped reply cannot alert twice.
+      if (rec.firstRecord && result.succeeded && wantsMonthly && !monthly.created) {
+        store.addLogs(d.id, [{ level: 'warn', event: 'monthly_setup_failed', detail: `${monthlyProblem || 'No monthly plan was created.'}${monthlyDetail ? ` · ${monthlyDetail}` : ''}` }]);
+        alert(
+          'monthly-failed',
+          'A monthly donation could not be set up',
+          `${formatMoney(result.amountMinor, result.currency)} was taken once at ${d.name || 'the kiosk'}` +
+            `${(meta.campaign || '').trim() ? ` · ${(meta.campaign || '').trim()}` : ''}, but the donor's monthly plan could NOT be created, ` +
+            `so nothing will be collected again and there is nothing to cancel. ${monthlyProblem}` +
+            `${monthlyDetail ? ` The technical reason is saved in Devices → ${d.name || 'this kiosk'} → Logs.` : ''}` +
+            ` If the donor expected a monthly plan, please contact them.`,
+          'warning',
+        );
+      }
       if (result.succeeded) {
         const label = monthly.created ? 'monthly donation set up' : 'donation received';
         // NAME THE APPEAL. A masjid running several at once ("Roof", "Zakat", "Winter Appeal") got
@@ -3126,12 +3148,15 @@ ${body}
         // and one kiosk shows several as tabs. The ` · ` separator matches the refund alert, which
         // has always named it.
         const appeal = (meta.campaign || '').trim();
-        void notify({
-          text:
-            `${formatMoney(result.amountMinor, result.currency)} ${label} at ${d.name || 'the kiosk'}` +
-            `${appeal ? ` · ${appeal}` : ''}.`,
-          level: 'success',
-        });
+        // Once per donation, like the emails below: a retried /complete must not announce it twice.
+        if (rec.firstRecord) {
+          void notify({
+            text:
+              `${formatMoney(result.amountMinor, result.currency)} ${label} at ${d.name || 'the kiosk'}` +
+              `${appeal ? ` · ${appeal}` : ''}.`,
+            level: 'success',
+          });
+        }
         // "Your monthly donation is set up", carrying the donor's own cancel link. Sent ONCE, on the
         // first recording, so a retried /complete can't email twice. Separate from the receipt on
         // purpose: the receipt is about the payment just taken, this is about the ongoing commitment
@@ -3162,6 +3187,10 @@ ${body}
       }
       return { data: { status: result.status, succeeded: result.succeeded, amountMinor: result.amountMinor, currency: result.currency, monthly } };
     } catch (e) {
+      if (e instanceof NotOurPaymentIntent) {
+        log.warn(`/complete refused ${id}: not a payment this kiosk (${d.id}) started`);
+        return reply.code(404).send({ error: 'That payment wasn’t found.' });
+      }
       // LOG IT. This catch wraps the whole handler, not just the Stripe call — `recordDonation`,
       // the plan write, the receipt decision and the device log all run AFTER the money has been
       // captured. So the case it silently hid is the worst one this app has: Stripe took the
@@ -3569,7 +3598,14 @@ ${body}
     const acct = await resolveAccountById(store.getPiAccount(id));
     if (!acct) return reply.code(400).send({ error: 'Payments aren’t set up yet.' });
     try {
-      const result = await completeCardPresentPaymentIntent(acct.keys.secretKey, id);
+      const result = await completeCardPresentPaymentIntent(
+        acct.keys.secretKey,
+        id,
+        (m) => m.app === 'kiosk' && m.deviceId === d.id && m.purpose === 'students-billing',
+      );
+      // Whether an earlier call already finished it: the tablet retries /complete after a dropped
+      // reply, and the masjid should hear about one tuition payment once.
+      const alreadyPaid = store.getTuitionOutbox(id)?.payStatus === 'succeeded';
       store.markTuitionPaid(
         id,
         result.succeeded ? 'succeeded' : 'failed',
@@ -3589,7 +3625,7 @@ ${body}
         const tuitionAppealTitle = (row?.campaignId ? store.getCampaign(row.campaignId)?.title : '') || '';
         const tuitionAppeal = tuitionAppealTitle.trim() ? ` · ${tuitionAppealTitle.trim()}` : '';
         await tryRecordTuition(id); // best-effort now; the outbox retries if Students is unreachable
-        void notify({
+        if (!alreadyPaid) void notify({
           // Say what the SCHOOL is owed and what the processor took, separately. A single grossed-up
           // figure in a dashboard notification reads as tuition and quietly overstates every payment.
           text:
@@ -3612,7 +3648,11 @@ ${body}
           currency: result.currency,
         },
       };
-    } catch {
+    } catch (e) {
+      if (e instanceof NotOurPaymentIntent) {
+        log.warn(`tuition /complete refused ${id}: not a tuition payment this kiosk (${d.id}) started`);
+        return reply.code(404).send({ error: 'That payment wasn’t found.' });
+      }
       return reply.code(502).send({ error: 'Couldn’t confirm the payment with Stripe.' });
     }
   });
@@ -3767,7 +3807,13 @@ ${body}
     // seconds its fabricEmail POST is in flight (8s timeout). A floor comfortably past that closes
     // the double-send race where an outbox tick re-sends a receipt the inline send is mid-delivering.
     const RECEIPT_MIN_AGE_MS = 120_000; // 2 min
+    // One pass at a time. A pass sends one receipt after another, each with its own timeout, so after
+    // an email outage it can outlast the minute — and an overlapping pass re-selects rows the first
+    // has not marked sent yet, the one in flight included: a donor gets the same receipt twice.
+    let outboxRunning = false;
     const receiptOutbox = async () => {
+      if (outboxRunning) return;
+      outboxRunning = true;
       try {
         // Rows that have run out of road. Before this they simply stopped being selected once they
         // passed RECEIPT_MAX_AGE_MS and were abandoned at 'pending' for ever — and since we had
@@ -3787,7 +3833,11 @@ ${body}
             store.setDonationReceipt(don.paymentIntentId, 'skipped');
           } else break; // email provider down / rate-limited — try again next tick
         }
-      } catch { /* fail soft — never let the receipt outbox crash the app */ }
+      } catch {
+        /* fail soft — never let the receipt outbox crash the app */
+      } finally {
+        outboxRunning = false;
+      }
     };
     setInterval(() => { void receiptOutbox(); }, 60_000).unref();
   }

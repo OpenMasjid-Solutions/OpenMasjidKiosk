@@ -12,7 +12,7 @@ import { prefsStore, resolveTheme, usePrefs } from './prefs';
 import { getSession, logout, type AppInfo, type Session } from './api';
 import { withBase } from './base';
 import { formatTime, gregorianDate, hijriDate } from './dates';
-import { useClock } from './primitives';
+import { figures, useClock } from './primitives';
 import { useUnreadRelease, WhatsNewModal } from './whatsnew';
 
 export { figures, ResultLine, Skeleton, Toggle, useClock } from './primitives';
@@ -88,8 +88,8 @@ export function Clock() {
     <time className="topclock" dateTime={now.toISOString()}>
       <span className="topclock-time">{time}</span>
       <span className="topclock-date">
-        {date}
-        {hijri && <span className="topclock-hijri"> · {hijri}</span>}
+        {figures(date)}
+        {hijri && <span className="topclock-hijri"> · {figures(hijri)}</span>}
       </span>
     </time>
   );

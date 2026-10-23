@@ -98,7 +98,6 @@ data class SceneStyle(
     val tileInk: Color,        // amount text on a tile
     val tileAccentInk: Color,  // the accent as a mark ON a tile (a chosen bill's ✓), or the tile ink
     val card: Color,           // the central giving card (liquid glass)
-    val cardBorder: Color,     // its hairline border
 )
 
 /**
@@ -1659,12 +1658,14 @@ private fun feeExtra(baseMinor: Long, config: KioskConfig?): Long {
     if (baseMinor <= 0) return 0
     val bps = config?.feeBps ?: 290
     val fixed = config?.feeFixedMinor ?: 30
-    val total = Math.ceil((baseMinor + fixed) / (1.0 - bps / 10000.0)).toLong()
+    // Up to the next amount Stripe can charge, exactly as the server's grossUpForFees does it.
+    val step = minorStep(config?.currency.orEmpty())
+    val total = (Math.ceil((baseMinor + fixed) / (1.0 - bps / 10000.0) / step) * step).toLong()
     return maxOf(0L, total - baseMinor)
 }
 
 // ── Money formatting ───────────────────────────────────────────
-// formatMoney / symbolFor / decimals / factorFor MOVED to :core (ui/Money.kt), so the kiosk and
+// formatMoney / decimals / factorFor MOVED to :core (ui/Money.kt), so the kiosk and
 // OpenMasjid Mobile Donations cannot render the same masjid's amounts two different ways. They kept
 // this exact package, so nothing here needed an import.
 

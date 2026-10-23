@@ -3,8 +3,7 @@
 
 /* Base + components for the OpenMasjid Kiosk admin. Layout uses logical properties so it
    works LTR and RTL. Mirrors the OpenMasjidOS / Donations look; values come from
-   tokens.css — no raw hex here. Slice 1 covers the shell + the /new setup page; more
-   component styles arrive with each slice. */
+   tokens.css — no raw hex here. */
 
 html, body { height: 100%; }
 body {
@@ -41,7 +40,7 @@ h1, h2, h3, p, ul { margin: 0; }
    this list names only elements that hold NOTHING BUT a figure: a line that mixes figures with words
    or names (a stat tile's subtitle, a facts value, a donation row's "who · where · when") puts each
    figure in `.num` instead — `figures()` in primitives.tsx does it for a string. */
-.num, time, .topclock, .stat-tile__value, .donation-amt, .detail-amt, .plan-amt, .log-time, .inv-date, .inv-amt,
+.num, .topclock-time, .stat-tile__value, .donation-amt, .detail-amt, .inv-amt,
 .pair-code, .pair-clock, .pin-input, .mx-pacing strong, .gv-tile-amt, .er-receipt__table td + td, .preset-input .input,
 input[inputmode="decimal"], input[inputmode="numeric"], input[type="number"], input[type="tel"] {
   font-variant-numeric: tabular-nums;
@@ -142,25 +141,12 @@ html[dir="rtl"] { --align-start: right; --align-end: left; text-align: right; }
   display: grid; place-items: center; color: var(--color-on-primary);
   background: var(--color-btn); box-shadow: var(--glow-primary);
 }
-.hero-title { font-family: var(--font-display); font-size: 1.9rem; font-weight: 700; letter-spacing: -0.02em; }
-.hero-lead { color: var(--color-ink-muted); line-height: 1.6; max-width: 32rem; }
 .pill {
   display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; font-weight: 600;
   padding: 0.2rem 0.6rem; border-radius: 999px; color: var(--color-ink-muted);
   background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
 .pill--ok { color: var(--color-success-ink); }
-.pill--test { color: var(--color-gold-ink); background: var(--color-gold-subtle); box-shadow: inset 0 0 0 1px var(--color-gold); }
-
-/* Next-steps checklist on the dashboard shell */
-.steps-list { text-align: var(--align-start); width: 100%; max-width: 30rem; margin-inline: auto; display: flex; flex-direction: column; gap: 0.55rem; }
-.steps-list li { display: flex; align-items: flex-start; gap: 0.6rem; color: var(--color-ink); line-height: 1.5; }
-.steps-list li svg { color: var(--color-primary); flex-shrink: 0; margin-block-start: 0.15rem; }
-.steps-list .num {
-  flex-shrink: 0; width: 1.5rem; height: 1.5rem; border-radius: 50%; display: grid; place-items: center;
-  font-size: 0.78rem; font-weight: 700; color: var(--color-primary);
-  background: var(--color-primary-subtle);
-}
 
 /* ── Buttons ──────────────────────────────────────────────────────────────── */
 .btn {
@@ -182,7 +168,6 @@ html[dir="rtl"] { --align-start: right; --align-end: left; text-align: right; }
 .btn--primary:disabled:hover { background: var(--color-btn); }
 .btn--ghost { background: transparent; box-shadow: inset 0 0 0 1px var(--color-border); }
 .btn--ghost:hover { background: var(--color-surface-hover); }
-.btn--lg { padding: 0.8rem 1.3rem; font-size: 1rem; }
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 .muted { color: var(--color-ink-muted); }
@@ -239,10 +224,6 @@ html[dir="rtl"] { --align-start: right; --align-end: left; text-align: right; }
   background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
 
-/* ── On-scene text (sits directly on the wallpaper, outside a glass card) ──── */
-.on-scene { color: var(--ink-scene); text-shadow: var(--text-shadow-scene); }
-.on-scene .muted { color: var(--ink-scene-muted); }
-
 .btn--block { width: 100%; }
 
 /* ── Forms ────────────────────────────────────────────────────────────────── */
@@ -279,10 +260,6 @@ html[dir="rtl"] { --align-start: right; --align-end: left; text-align: right; }
 .kv-row:last-child { border-block-end: 0; }
 .kv-k { color: var(--color-ink-muted); font-size: 0.9rem; }
 .kv-v { font-weight: 600; text-align: var(--align-end); }
-
-/* ── Footer ───────────────────────────────────────────────────────────────── */
-.foot { text-align: center; padding: 1.2rem; font-size: 0.8rem; color: var(--ink-scene-muted); text-shadow: var(--text-shadow-scene); }
-.foot a { display: inline-flex; align-items: center; gap: 0.2rem; }
 
 /* ── Custom wallpaper image (inherited from OpenMasjidOS or set in-app) ──────── */
 /* A standalone backdrop with NO preset gradient/aurora/pattern, so an inherited image
@@ -459,7 +436,6 @@ html[dir="rtl"] { --align-start: right; --align-end: left; text-align: right; }
 .empty-title { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; }
 .empty-state .muted { max-width: 26rem; line-height: 1.55; }
 .empty-state .btn { margin-block-start: 0.7rem; }
-.pair-hint--block { display: block; margin-block-start: 0.85rem; text-align: var(--align-start); line-height: 1.55; }
 .devices-note { margin-block-start: 1rem; text-align: center; }
 
 /* ── Payments (Settings → in-app Stripe setup) ──────────────────────────────── */
@@ -636,12 +612,6 @@ button.status-pill:hover { filter: brightness(1.08); }
 .update-steps strong { color: var(--color-ink); font-weight: 600; }
 
 /* ── Giving-screen designer ──────────────────────────────────────────────────── */
-/* Editor + live preview side by side on wide screens, stacked on narrow. */
-.giving-layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
-@media (max-width: 860px) { .giving-layout { grid-template-columns: 1fr; } }
-.giving-preview-panel { position: sticky; top: 5rem; }
-@media (max-width: 860px) { .giving-preview-panel { position: static; } }
-
 .preset-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
 @media (max-width: 460px) { .preset-grid { grid-template-columns: 1fr; } }
 .preset-input { display: flex; align-items: center; gap: 0.35rem; }
@@ -942,7 +912,7 @@ dialog.modal.modal--window {
    Its colours are the --er-* tokens, which mirror server/src/email.ts; the greys were raised with it
    for AA (they were 2.5–3.6:1 on white). It stays LTR in an RTL panel (dir="ltr" on the element),
    because the email it previews is. Email-safe system fonts, like the email. */
-.er-receipt { background: var(--er-card); color: var(--er-ink); border: 1px solid var(--er-rule); border-radius: 12px; padding: 20px 18px; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow-wrap: anywhere; }
+.er-receipt { text-align: left; background: var(--er-card); color: var(--er-ink); border: 1px solid var(--er-rule); border-radius: 12px; padding: 20px 18px; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow-wrap: anywhere; }
 .er-receipt__head { text-align: center; padding-block-end: 6px; }
 .er-receipt__logo { max-height: 48px; max-width: 180px; height: auto; }
 .er-receipt__masjid { font-size: 18px; font-weight: 700; color: var(--er-ink); }
@@ -953,7 +923,9 @@ dialog.modal.modal--window {
 .er-receipt__table td { padding: 9px 0; color: var(--er-ink); border-block-start: 1px solid var(--er-rule-soft); }
 .er-receipt__table tr:first-child td { border-block-start: 0; }
 .er-receipt__table td:first-child { color: var(--er-label); }
-.er-receipt__table td:last-child { text-align: var(--align-end); }
+/* The preview is an LTR island (dir="ltr", like the email it imitates), so its sides are physical:
+   the page's RTL defaults would otherwise flip its amounts to the left. */
+.er-receipt__table td:last-child { text-align: right; }
 .er-receipt__table td.er-strong { font-weight: 700; font-size: 15px; }
 .er-receipt__foot { margin-block-start: 14px; padding-block-start: 14px; border-block-start: 1px solid var(--er-rule-soft); text-align: center; font-size: 12px; line-height: 1.6; color: var(--er-faint); }
 
@@ -998,10 +970,6 @@ dialog.modal.modal--window {
 .plan-act__title { font-weight: 600; font-size: 0.92rem; margin-block-end: 0.25rem; }
 .plan-act__row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .plan-end-btn:hover { color: var(--color-danger-ink); }
-/* Action feedback is a whole sentence ("Paused — nothing will be collected until you resume"), which
-   a 999px status pill turns into an odd stretched lozenge. */
-.plan-note { display: flex; align-items: flex-start; gap: 0.4rem; margin-block-start: 0.6rem; font-size: 0.84rem; line-height: 1.5; color: var(--color-success-ink); }
-.plan-note svg { flex: none; margin-block-start: 0.15rem; }
 /* The danger twin of .note-amber — for the confirm step before a standing order is ended outright. */
 .note-danger {
   color: var(--color-danger-ink);

@@ -20,7 +20,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { withBase } from './base';
 import { ACCENT_PROPS, accentVars, DEFAULT_ACCENT, isAccentId } from './accents';
-import { isRtlLang, isWallpaperId, WALLPAPER_IDS } from './appearance';
+import { isRtlLang, isWallpaperId } from './appearance';
 
 export interface Prefs {
   theme: 'system' | 'dark' | 'light';
@@ -37,23 +37,6 @@ export interface Prefs {
 
 const KEY = 'omkiosk-prefs';
 const DEFAULTS: Prefs = { theme: 'system', wallpaper: 'aurora', wallpaperImage: '', accent: DEFAULT_ACCENT, lang: 'en', followOmos: true };
-
-export { ACCENTS } from './accents';
-
-/** The nine wallpapers by id — labels are the platform's; the ids live in appearance.ts. */
-export const WALLPAPERS: Record<(typeof WALLPAPER_IDS)[number], { label: string }> = {
-  aurora: { label: 'Aurora' },
-  ocean: { label: 'Ocean' },
-  twilight: { label: 'Twilight' },
-  berry: { label: 'Berry' },
-  sunset: { label: 'Sunset' },
-  ember: { label: 'Ember' },
-  forest: { label: 'Forest' },
-  night: { label: 'Night' },
-  graphite: { label: 'Graphite' },
-};
-
-export { isRtlLang };
 
 export function resolveTheme(theme: Prefs['theme']): 'dark' | 'light' {
   if (theme === 'system') {

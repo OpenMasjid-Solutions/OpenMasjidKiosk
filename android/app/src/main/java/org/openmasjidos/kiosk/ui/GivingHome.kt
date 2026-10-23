@@ -202,7 +202,8 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
         }
         // Reader hint: a pulsing NFC symbol + arrows pinned to the reader's side (set per tablet in
         // Admin → Devices). Shown while the donor is at the card step; turns green when it clears. It
-        // rides inside RotatedRoot with everything else, so "left/right" follow the mount into portrait.
+        // rides inside RotatedRoot with everything else, so the side (off/left/right/top/bottom) is as
+        // the donor sees the rotated screen; a reader above or below it is top/bottom.
         // The green is the SCENE's success colour, not the dark theme's: that light green measured
         // 1.3:1 on the default bright wash, so "it went through" was the part a donor couldn't see.
         NfcReaderHint(
@@ -506,7 +507,6 @@ private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean, s
         // scene and still vanish on a white tile.
         tileAccentInk = readableOr(accent, Color.White, InkBlack),
         card = Color.White,
-        cardBorder = Color.White,
     )
 } else {
     SceneStyle(
@@ -529,6 +529,5 @@ private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean, s
         tileInk = InkDark,
         tileAccentInk = readableOr(accent, SurfaceOverlayDark, InkDark),
         card = SurfaceRaisedDark,
-        cardBorder = SurfaceOverlayDark,
     )
 }

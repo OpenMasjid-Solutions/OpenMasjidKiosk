@@ -2,8 +2,7 @@
 // Copyright (C) 2026 OpenMasjid-Solutions
 
 /** Typed client for the OpenMasjid Kiosk API. Responses use a { data | error } envelope;
- *  this unwraps `data` and turns `error` into a thrown friendly message. Grows with each
- *  slice (auth/SSO now; devices, payments, donations later). */
+ *  this unwraps `data` and turns `error` into a thrown friendly message. */
 import { withBase } from './base';
 
 export interface AppInfo {
@@ -99,15 +98,6 @@ export interface PlanInvoice {
   hostedUrl: string;
 }
 
-export interface NotifyTestResult {
-  baseUrlSet: boolean;
-  hasSecret: boolean;
-  baseUrlLoopback: boolean;
-  appId: string;
-  delivered: boolean;
-  reason?: string;
-}
-
 /**
  * A failed call, in words a volunteer can act on. `detail` carries technical text the server chose to
  * attach (a Stripe message, say) for a "Technical details" disclosure — never for the main line.
@@ -186,8 +176,6 @@ export const login = (password: string) =>
   request<{ ok: true }>('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
 
 export const logout = () => request<{ ok: true }>('/api/logout', { method: 'POST' });
-
-export const sendTestNotification = () => request<NotifyTestResult>('/api/admin/notify-test', { method: 'POST' });
 
 // ── Notifications: who gets told what ──────────────────────────────────
 // The platform's own alerts matrix stays underneath this (that is the `os` flag, per alert). On top
@@ -571,8 +559,6 @@ export interface Device {
  *  works even on tablets that ignore system orientation requests. */
 export type DeviceOrientation = '0' | '90' | '180' | '270';
 
-/** Which side the card reader sits on, relative to the app's LOGICAL landscape screen. Left/right map
- *  to top/bottom when the tablet is rotated to portrait. 'off' shows no reader hint. */
 /** Where the reader sits relative to the giving screen. Left/right suit a landscape mount; top/bottom
  *  are for a portrait one, where the reader is usually above or below rather than beside the screen. */
 export type DeviceNfcSide = 'off' | 'left' | 'right' | 'top' | 'bottom';
@@ -682,17 +668,16 @@ export type CampaignTheme = 'auto' | 'light' | 'dark';
  *  Zakat: fee always covered by the donor. Tuition: admin chooses whether to require it. */
 export type CampaignType = 'donation' | 'zakat' | 'tuition';
 
-/** The full giving-designer state: the giving config + the currency, masjid name and attract
- *  headline that share the same live-push mechanism. */
+/** The full giving-designer state: the giving config + the currency and masjid name that share the
+ *  same live-push mechanism. */
 export interface GivingSettings {
   giving: GivingConfig;
   currency: string;
   masjidName: string;
-  attractTitle: string;
 }
 
 /** Fields the designer can save (all optional — send only what changed). */
-export type GivingPatch = Partial<GivingConfig> & { attractTitle?: string; masjidName?: string };
+export type GivingPatch = Partial<GivingConfig> & { masjidName?: string };
 
 export const getGiving = () => request<GivingSettings>('/api/admin/giving');
 

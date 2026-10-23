@@ -22,12 +22,10 @@
  * unreachable platform is "no Fabric this request", never a crash or a lock-out. The wire
  * identifiers (env vars, header, cookie, endpoints) are the shared contract — do not rename.
  */
-import { config, ssoConfigured } from './config';
+import { config } from './config';
 import { makeLog } from './logger';
 
 const log = makeLog('fabric');
-
-export { ssoConfigured };
 
 /** Is `host` a loopback / private / LAN address where sending our secret over plain HTTP is
  *  acceptable? Anything else is treated as PUBLIC (we err toward "public" if unsure). */
@@ -264,7 +262,7 @@ export async function fabricAlert(
 // That removes a delay we were relying on without having decided to. Ban risk still attaches to the
 // NUMBER, that number is shared by every app on the box, and a blocked number cannot be recovered —
 // the masjid simply loses the number their community reaches them on. So the pacing is OUR job now:
-// see `whatsappGate` in alerts.ts, which is what stops a Stripe outage turning forty failed
+// see `whatsappPermit` in alerts.ts, which is what stops a Stripe outage turning forty failed
 // donations into forty messages on one caretaker's phone.
 //
 // Two things that did NOT change: `202 { queued: true }` still means ACCEPTED, never delivered —

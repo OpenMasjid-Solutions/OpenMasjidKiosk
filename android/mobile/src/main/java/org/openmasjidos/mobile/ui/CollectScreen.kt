@@ -38,6 +38,7 @@ import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.ui.decimals
 import org.openmasjidos.kiosk.ui.factorFor
 import org.openmasjidos.kiosk.ui.formatMoney
+import org.openmasjidos.kiosk.ui.typedDecimals
 import org.openmasjidos.mobile.Collect
 import java.math.RoundingMode
 import java.text.DecimalFormatSymbols
@@ -150,6 +151,9 @@ private fun AmountEntry(
     var refused by remember { mutableStateOf<String?>(null) }
     val factor = factorFor(currency)
     val places = decimals(currency)
+    // What may be TYPED, which is fewer than `places` where Stripe charges whole units (ISK, UGX) or
+    // a last 0 (the dinars): "5.125 KWD" would be refused at the payment, so it is refused here.
+    val typedPlaces = typedDecimals(currency)
     // Whether this phone's own keyboard writes decimals with a comma. Read once: it is the device's
     // locale, not anything the server sends.
     val commaIsDecimal = remember { DecimalFormatSymbols.getInstance().decimalSeparator == ',' }
@@ -230,10 +234,10 @@ private fun AmountEntry(
             // do with a comma, and on a keyboard whose decimal key is ',' that turned "12,50" into
             // "1250": the button offered "Take £1250", which is inside the default ceiling.
             onValueChange = { raw ->
-                val clean = normaliseAmount(raw, places, commaIsDecimal)
+                val clean = normaliseAmount(raw, typedPlaces, commaIsDecimal)
                 when {
                     clean == null -> {
-                        refused = amountHint(places)
+                        refused = amountHint(typedPlaces)
                     }
                     clean.length > MAX_AMOUNT_CHARS -> {
                         refused = "That’s more digits than any amount here can have."

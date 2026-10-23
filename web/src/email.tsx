@@ -163,6 +163,8 @@ export function EmailReceiptSection() {
   const [sampleTo, setSampleTo] = useState('');
   const [sending, setSending] = useState(false);
   const [sample, setSample] = useState<Outcome>(null);
+  const [toggling, setToggling] = useState(false);
+  const [toggleErr, setToggleErr] = useState<Outcome>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Where focus goes when the button just pressed takes itself away (Remove logo, Use the default
   // color) — otherwise it drops to the page and a keyboard user starts again from the top.
@@ -213,6 +215,26 @@ export function EmailReceiptSection() {
       setLogoErr(failed(e, 'That image couldn’t be uploaded. Try a PNG, JPEG or WebP image.'));
     } finally {
       setUploading(false);
+    }
+  };
+
+  // The switch saves itself. It sits in the setup card, away from "Save receipt", and the line under
+  // it says whether receipts WILL be sent — so an unsaved flip read as on while the server still had
+  // it off, and a reload quietly turned it back.
+  const toggleEnabled = async (v: boolean) => {
+    if (toggling) return;
+    setToggleErr(null);
+    setEnabled(v);
+    setToggling(true);
+    try {
+      const r = await saveEmailReceipt({ enabled: v });
+      setCfg(r);
+      setEnabled(r.enabled);
+    } catch (e) {
+      setEnabled(!v);
+      setToggleErr(failed(e, 'Couldn’t change that. Please try again.'));
+    } finally {
+      setToggling(false);
     }
   };
 
@@ -316,7 +338,7 @@ export function EmailReceiptSection() {
   }
 
   const embedded = cfg.embedded;
-  const status = statusLine(embedded, cfg.emailStatus ?? 'unknown', enabled);
+  const status = statusLine(embedded, cfg.emailStatus ?? 'unknown', cfg.enabled);
   const masjidName = masjid?.name || 'Your masjid';
   const previewAccent = isHex(accent) ? accent : ACCENT_DEFAULT;
   // The accent as TEXT (heading, website link) is darkened just enough to read on the white card,
@@ -352,8 +374,10 @@ export function EmailReceiptSection() {
           label="Send branded receipts to donors"
           hint="When off (or before email is set up), Stripe’s own receipt is used instead — a donor is never left without one."
           checked={enabled}
-          onChange={setEnabled}
+          busy={toggling}
+          onChange={(v) => void toggleEnabled(v)}
         />
+        <OutcomeLine outcome={toggleErr} />
 
         <StatusLine tone={status.tone} text={status.text} />
 

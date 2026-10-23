@@ -35,6 +35,13 @@ test('standard CSV quoting for commas, quotes and newlines', () => {
   assert.equal(csvCell('line1\nline2'), '"line1\nline2"');
 });
 
+test('a semicolon or tab is quoted, so no list-separator locale can start a cell mid-value', () => {
+  // Excel splits on `;` where that is the list separator; quoted, the value stays one cell.
+  assert.equal(csvCell('Ali;=1+1'), '"Ali;=1+1"');
+  assert.equal(csvCell('x;=HYPERLINK("http://evil","y");'), '"x;=HYPERLINK(""http://evil"",""y"");"');
+  assert.equal(csvCell('a\t=1+1'), '"a\t=1+1"');
+});
+
 test('phone-like leading + is guarded, not executed', () => {
   assert.equal(csvCell('+1 555 0100'), "'+1 555 0100");
 });

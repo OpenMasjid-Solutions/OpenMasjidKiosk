@@ -4,8 +4,8 @@
 package org.openmasjidos.kiosk.local
 
 /**
- * Plain data models shared across the networking, storage and UI layers.
- * Kept deliberately small — later slices (reader, giving flow) extend the config.
+ * Plain data models shared across the networking, storage and UI layers. The reader and
+ * giving-flow settings are carried by [KioskConfig] and its [Campaign]s.
  */
 
 /**
@@ -90,9 +90,10 @@ data class KioskConfig(
      *  rotates its own content by this angle (RotatedRoot), so it works even on tablets that ignore
      *  system orientation requests. Legacy named values are still accepted + mapped by orientationDegrees. */
     val orientation: String = "0",
-    /** Which side of the tablet the card reader sits on: "off" | "left" | "right". Drives the on-screen
-     *  reader hint (pulsing NFC symbol + arrows) during the card step. Left/right are in the app's
-     *  LOGICAL landscape space, so RotatedRoot maps them to top/bottom in a portrait mount. */
+    /** Which side of the tablet the card reader sits on: "off" | "left" | "right" | "top" | "bottom".
+     *  Drives the on-screen reader hint (pulsing NFC symbol + arrows) during the card step. The side
+     *  is as the donor sees the (rotated) giving screen; RotatedRoot does not turn left/right into
+     *  top/bottom, so a portrait mount sets top/bottom explicitly (see NfcReaderHint). */
     val nfcSide: String = "off",
     /** Large-donation alternative: at/above this many MINOR units the kiosk suggests a cheaper way
      *  to give (bank transfer / Zelle QR) before the card. 0 disables it. */
@@ -121,7 +122,7 @@ data class KioskConfig(
 data class Diagnostics(
     val battery: Int? = null,
     val charging: Boolean? = null,
-    val readerStatus: String = "not_connected", // reader arrives in slice 5
+    val readerStatus: String = "not_connected", // from ReaderManager.statusForHeartbeat()
     val appVersion: String = "",
     val latestAppVersion: String = "", // the server's bundled APK version (for "update available")
     val pinnedCertSha256: String? = null,

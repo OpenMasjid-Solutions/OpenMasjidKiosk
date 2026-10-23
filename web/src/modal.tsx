@@ -101,15 +101,28 @@ export function Modal({
         closeRef.current();
       }
     };
+    // Nor is the page behind it inert there, so a click on the dim reached the control under it (the
+    // dock switched tabs behind an open window). Caught on the way down and treated as the backdrop
+    // click it looks like.
+    const onOutside = (e: MouseEvent) => {
+      if (e.target instanceof Node && dialog.contains(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeRef.current();
+    };
     dialog.addEventListener('cancel', onCancel);
     dialog.addEventListener('pointerdown', onDown);
     dialog.addEventListener('click', onClick);
-    if (!native) document.addEventListener('keydown', onKey);
+    if (!native) {
+      document.addEventListener('keydown', onKey);
+      document.addEventListener('click', onOutside, true);
+    }
     return () => {
       dialog.removeEventListener('cancel', onCancel);
       dialog.removeEventListener('pointerdown', onDown);
       dialog.removeEventListener('click', onClick);
       document.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onOutside, true);
       if (!native) dialog.removeAttribute('open');
       else if (dialog.open) dialog.close();
       const target = returnFocus?.current ?? opener;

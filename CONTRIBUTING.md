@@ -40,8 +40,9 @@ cd web    && npm install && npm run build               # tsc + vite build
 cd android && ./gradlew assembleDebug                    # needs JDK 17+ and the Android SDK
 ```
 
-CI runs the first two on every pull request and on every push to `dev` and `main`
-(`.github/workflows/test.yml`), and **no image is published unless they pass**. The Android build
+CI runs the first two on every pull request and on every push to `dev` and `main` that builds an
+image (`.github/workflows/test.yml`, called from `build-image.yml`, whose `paths-ignore` skips a
+push that touches only docs, `LICENSE`, `screenshots/` or `docker-compose.yml`), and **no image is published unless they pass**. The Android build
 runs as part of the image pipeline — and since there is no Android SDK on most dev machines, that
 job is in practice the only compile check the Kotlin gets.
 
@@ -49,13 +50,16 @@ job is in practice the only compile check the Kotlin gets.
 `*.test.ts` (they run from source under tsx, which strips types without checking them), so the tests
 are the one part of the tree the normal build never type-checks. Run both.
 
-Local development uses Stripe **test keys** and the Terminal **simulated reader**, so the whole
-donation flow runs without hardware. `web`'s dev server (`npm run dev`) proxies `/api`, `/healthz`
-and `/download` to the server on `:8080`.
+Local development uses Stripe **test keys** and **typed card entry** with Stripe's test cards, so
+the whole donation flow runs without a reader (the app has no simulated-reader option). `web`'s dev
+server (`npm run dev`) proxies `/api`, `/healthz`, `/download` and `/uploads` to the server on
+`:8080`.
 
-Two tests deliberately reach across from `server/` into `web/` — `theme-contrast.test.ts` reads the
-design tokens and `refund-amount.test.ts` imports the currency arithmetic. The server's runner is
-the only one CI executes, and asserting web behavior there is worth more than asserting it nowhere.
+Nine tests deliberately reach across from `server/` into `web/` — among them `theme-contrast.test.ts`,
+`accent-contrast.test.ts` and `ink-contrast.test.ts` (the design tokens), `prepaint.test.ts` (the
+pre-paint script in `web/index.html`), `dates-parity.test.ts` (the two date formatters agree) and
+`refund-amount.test.ts` (the currency arithmetic). The server's runner is the only one CI executes,
+and asserting web behavior there is worth more than asserting it nowhere.
 
 ## Code
 
@@ -77,7 +81,8 @@ Changes here need care and a clear reason, because each was a real incident:
 - **Amounts are validated server-side** against the campaign's presets and bounds; cover-fees are
   computed on the server. The tablet never dictates a price.
 - **The Stripe secret key lives in memory only** — never sent to a browser or tablet, never logged,
-  never written to `/data`.
+  never written to `/data`. (The one exception is the standalone fallback key an admin types in when
+  there is no platform, which is saved on the server — `CLAUDE.md` §6.)
 - **The tunnel allowlist** (`server/src/tunnel.ts`) must judge the path the *router* resolves, not
   the one that arrived — that is what percent-encoding walked past once already. `/fabric` is **not**
   under `/api` and is listed separately; adding a route outside `/api` means checking it again.

@@ -13,8 +13,9 @@ data class BatterySnapshot(val level: Int?, val charging: Boolean?)
 
 /**
  * Reads device health without any special permission. Battery state comes from the sticky
- * ACTION_BATTERY_CHANGED broadcast, so a wall kiosk can report "not charging" (a fallen cable)
- * to the admin. The reader's status is added in slice 5.
+ * ACTION_BATTERY_CHANGED broadcast and is still sent on every heartbeat and shown in the
+ * maintenance diagnostics, though the admin's Devices page no longer displays battery or charging.
+ * The reader's status comes from ReaderManager.statusForHeartbeat().
  */
 object DeviceStatus {
 

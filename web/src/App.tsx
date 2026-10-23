@@ -556,7 +556,7 @@ function DashboardTab({ session, embedded }: { session: Session; embedded: boole
                 : `All ${total} kiosks are online.`
               : (
                   <>
-                    {online} of {total} kiosks are online — <a href="#devices">open Devices</a> to see which.
+                    <span className="num">{online}</span> of <span className="num">{total}</span> kiosks are online — <a href="#devices">open Devices</a> to see which.
                   </>
                 )}
       </p>

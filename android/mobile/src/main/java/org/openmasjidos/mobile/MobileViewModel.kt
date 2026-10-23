@@ -141,9 +141,11 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Collecting --------------------------------------------------------------------------
 
-    /** The campaigns this masjid is running, from the synced config. */
+    /** The campaigns this phone can take money for. Not tuition (that needs the Students lookup only
+     *  the kiosk has), and not one that settles to another Stripe account: unlike the kiosk, this app
+     *  never re-registers its reader, which is what `readerCapable` still means here. */
     val campaigns: StateFlow<List<Campaign>> = store.config
-        .map { it?.campaigns.orEmpty() }
+        .map { cfg -> cfg?.campaigns.orEmpty().filter { it.readerCapable && it.type != "tuition" } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val currency: StateFlow<String> = store.config

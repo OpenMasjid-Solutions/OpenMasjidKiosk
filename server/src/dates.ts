@@ -157,7 +157,12 @@ function offsetAt(ms: number, timeZone: string | undefined): number {
 export function zonedTime(y: number, m: number, d: number, hh: number, mm: number, ss: number, timeZone: string | undefined): number {
   const guess = Date.UTC(y, m - 1, d, hh, mm, ss);
   const first = guess - offsetAt(guess, timeZone);
-  return guess - offsetAt(first, timeZone);
+  const second = guess - offsetAt(first, timeZone);
+  // A wall time that never happens — midnight on the day Santiago or Havana springs forward at 00:00
+  // — reads back as a different time; the later candidate is the first moment that does exist.
+  // Without this, "today" there began at 23:00 the evening before.
+  if (second + offsetAt(second, timeZone) !== guess) return Math.max(first, second);
+  return second;
 }
 
 /** Midnight at the start of the masjid's day containing `at`, as an instant. "Today's takings" and

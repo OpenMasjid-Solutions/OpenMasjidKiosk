@@ -1,18 +1,20 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!-- Copyright (C) 2026 OpenMasjid-Solutions -->
 
-# `apk/` — the bundled Android kiosk app
+# `apk/` — the bundled Android apps
 
-This folder is where the **signed Android APK** is placed at build time so the server can
-serve it from the setup page (`/new`). The versionName always matches the server (both
-read the repo-root [`VERSION`](../VERSION) file), so the tablet app can never drift from
-the server it pairs with.
+This folder is where the two **signed Android APKs** — the kiosk (`openmasjidkiosk.apk`) and
+OpenMasjid Mobile Donations (`openmasjidmobile.apk`) — are placed at build time so the server can
+serve them from the setup page (`/new`). Their versionName always matches the server (all three
+read the repo-root [`VERSION`](../VERSION) file), so neither app can drift from the server it pairs
+with.
 
-- **In CI:** `build-apk.yml` builds + signs `openmasjidkiosk.apk` and uploads it as an
-  artifact; `build-image.yml` downloads it into this folder **before** the Docker build,
-  and the `Dockerfile` copies `apk/` into the image at `/app/public/download/`.
-- **Locally:** this folder ships only `.gitkeep`, so `docker build` still succeeds. Until
-  a real APK is present, `/new` shows a friendly "the app will be available after the
-  first build" message.
+- **In CI:** `build-apk.yml` builds + signs both and uploads them as the `kiosk-apk` and
+  `mobile-apk` artifacts; `build-image.yml` downloads both into this folder **before** the Docker
+  build (and fails if either is missing), and the `Dockerfile` copies `apk/` into the image at
+  `/app/public/download/`.
+- **Locally:** this folder ships only `.gitkeep` (and this README), so `docker build` still
+  succeeds. `/new` offers only the apps actually present; with no APK, its download button is
+  disabled with a note that the app isn't included in this install yet.
 
-The APK itself is **never committed** (see the repo `.gitignore`).
+The APKs themselves are **never committed** (see the repo `.gitignore`).

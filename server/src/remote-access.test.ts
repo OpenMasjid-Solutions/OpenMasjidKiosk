@@ -192,6 +192,25 @@ test('on the LAN nothing changes: password login, the admin API, and the SSO upg
   assert.ok(!page.text.includes('<base'), 'no base path on the LAN');
 });
 
+test('on the LAN a change must come from this page — not another port on the same host', { timeout: 30_000 }, async () => {
+  const cookie = sessionCookie(await call(port, 'POST', '/api/login', {}, { password: PASSWORD })) ?? '';
+  const self = `http://127.0.0.1:${port}`;
+  const post = (h: Record<string, string>) => call(port, 'POST', '/api/admin/test-alert', { cookie, ...h });
+  // What another app's page on this host sends: same SITE (the cookie goes with it), no preflight.
+  assert.equal((await post({ 'sec-fetch-site': 'same-site', origin: 'http://127.0.0.1:9443' })).status, 403);
+  // A browser too old for Sec-Fetch-Site is judged by Origin.
+  assert.equal((await post({ origin: 'http://127.0.0.1:9443' })).status, 403);
+  // The panel itself, new browser and old.
+  assert.equal((await post({ 'sec-fetch-site': 'same-origin', origin: self })).status, 200);
+  assert.equal((await post({ origin: self })).status, 200);
+  // Behind the OpenMasjidOS HTTPS proxy, which forwards the real host and scheme.
+  const proxied = { 'x-forwarded-proto': 'https', 'x-forwarded-host': '192.168.1.50:17878' };
+  assert.equal((await post({ ...proxied, origin: 'https://192.168.1.50:17878' })).status, 200);
+  assert.equal((await post({ ...proxied, origin: 'https://192.168.1.50:9443' })).status, 403);
+  // Reads are not changes.
+  assert.equal((await call(port, 'GET', '/api/admin/devices', { cookie, 'sec-fetch-site': 'same-site' })).status, 200);
+});
+
 test('opened from the remote dashboard, OpenMasjidOS signs the admin in — no password', { timeout: 30_000 }, async () => {
   const s = await call(port, 'GET', '/kiosk/api/session', { ...TUNNEL, cookie: `omos_session=${GOOD}` });
   assert.equal(s.status, 200, 'the session route answers over the tunnel');

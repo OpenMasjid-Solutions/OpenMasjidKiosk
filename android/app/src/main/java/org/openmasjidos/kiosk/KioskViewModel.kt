@@ -8,6 +8,7 @@ import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -28,6 +29,7 @@ import org.openmasjidos.kiosk.local.Diagnostics
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.local.PairingRecord
 import org.openmasjidos.kiosk.kiosk.DeviceStatus
+import org.openmasjidos.kiosk.net.ApiException
 import org.openmasjidos.kiosk.net.HeartbeatOutcome
 import org.openmasjidos.kiosk.net.PairResult
 import org.openmasjidos.kiosk.net.TuitionPay
@@ -256,7 +258,8 @@ data class PairingForm(
     val error: PairResult.Reason? = null,
 )
 
-/** Transient PIN-pad state (attempts + exponential backoff live in memory for slice 4). */
+/** PIN-pad state. `attempts` and `lockedUntilMs` are also persisted (DeviceStore.savePinLockout)
+ *  and restored in [KioskViewModel.start], so a reboot does not reset the backoff. */
 data class PinState(
     val verifying: Boolean = false,
     val wrong: Boolean = false,
@@ -358,7 +361,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             rePair = l.rePair,
             pin = l.pin,
             identify = l.identify,
-            diagnostics = buildDiagnostics(pairing, l, reader),
+            diagnostics = buildDiagnostics(pairing, l),
             reader = reader,
             exitAllowed = l.maintUnlockedViaPin,
             giving = l.giving,
@@ -383,6 +386,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         // actually scans/connects in maintenance) so the reader section is ready and the heartbeat
         // can report reader status.
         runCatching { ReaderManager.ensureInitialized(appContext, repo) }
+        viewModelScope.launch {
+            val (attempts, until) = runCatching { repo.store.getPinLockout() }.getOrDefault(0 to 0L)
+            local.update { it.copy(pin = it.pin.copy(attempts = attempts, lockedUntilMs = until)) }
+        }
         // Always pull the latest config once on launch (not only when the version bumps): after an app
         // update this repopulates fields a newer app version persists (e.g. the giving screen), which
         // an unchanged config version would otherwise never trigger a re-fetch for.
@@ -503,7 +510,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     private var givingJob: Job? = null
 
     /** Set while the tuition flow is paused on the fee-confirm screen, waiting for the parent to
-     *  accept the itemized total. Completed by [confirmTuitionFee] / [cancelTuitionFee]; cleared by
+     *  accept the itemized total. Completed by [confirmTuitionFee] / [cancelGiving]; cleared by
      *  the coroutine that created it. Null the rest of the time, and null for every school that
      *  absorbs the processing fee — which is almost all of them. */
     private var feeGate: CompletableDeferred<Boolean>? = null
@@ -513,13 +520,6 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
     /** The parent accepted the tuition + processing-fee total, so the reader may be armed. */
     fun confirmTuitionFee() {
         feeGate?.complete(true)
-    }
-
-    /** The parent backed out at the fee screen. Nothing has been collected — the PaymentIntent is
-     *  abandoned and Stripe expires it. Also used by the idle timeout, so a parent who simply walks
-     *  away is never left having agreed to something by inaction. */
-    fun cancelTuitionFee() {
-        feeGate?.complete(false)
     }
 
     private var autoReturnJob: Job? = null
@@ -853,7 +853,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             // captures + records it, and the donor sees the thank-you they earned.
             withContext(NonCancellable) {
                 updateGiving { it.copy(step = GivingStep.Processing, busy = true) }
-                val result = runCatching { repo.completePaymentIntent(piId) }.getOrNull()
+                val result = completeWithRetry { repo.completePaymentIntent(piId) }
                 if (result?.succeeded == true) {
                     val outcome = when {
                         !result.monthlyRequested -> MonthlyOutcome.None
@@ -937,7 +937,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             ManualResult.Completed -> {
                 updateGiving { it.copy(step = GivingStep.Processing, busy = true) }
                 viewModelScope.launch {
-                    val res = runCatching { repo.completePaymentIntent(m.piId) }.getOrNull()
+                    val res = completeWithRetry { repo.completePaymentIntent(m.piId) }
                     if (res?.succeeded == true) {
                         repo.log("info", "donation_succeeded", "${res.amountMinor} ${res.currency} · manual")
                         updateGiving { it.copy(step = GivingStep.Thanks, busy = false, monthlyOutcome = MonthlyOutcome.None) }
@@ -1264,6 +1264,23 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                 updateGiving { it.copy(step = GivingStep.Card, busy = true, feeQuote = null) }
             }
 
+            // Tuition always settles to the PRIMARY account (the server creates it there), so the reader
+            // goes back to it first: after a donation to an appeal on another account it is still
+            // registered there, and the collect would be refused. Nothing happens if it is already there.
+            val conn = try {
+                repo.getConnectionToken("")
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                null
+            }
+            if (conn != null && !ReaderManager.registerFor("", conn.accountId, conn.locationId)) {
+                repo.log("warn", "reader_account_switch_failed", "tuition")
+                updateGiving { it.copy(step = GivingStep.Error, busy = false, error = "The card reader couldn’t get ready — no charge was made. Try again?") }
+                repo.flushLogs()
+                return@launch
+            }
+
             val piId = try {
                 PaymentController.collectAndConfirm(pi.clientSecret)
             } catch (c: CancellationException) {
@@ -1281,7 +1298,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             }
             withContext(NonCancellable) {
                 updateGiving { it.copy(step = GivingStep.Processing, busy = true) }
-                val result = runCatching { repo.completeTuitionPaymentIntent(piId) }.getOrNull()
+                val result = completeWithRetry { repo.completeTuitionPaymentIntent(piId) }
                 if (result?.succeeded == true) {
                     repo.log("info", "tuition_succeeded", "${result.amountMinor} ${result.currency}")
                     updateGiving { it.copy(step = GivingStep.Thanks, busy = false, monthlyOutcome = MonthlyOutcome.None) }
@@ -1355,11 +1372,12 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
             if (ok) {
                 repo.log("info", "kiosk_unlocked")
                 local.update { it.copy(overlay = Overlay.Maintenance, pin = PinState(), maintUnlockedViaPin = true) }
+                runCatching { repo.store.savePinLockout(0, 0L) }
             } else {
-                local.update {
-                    val attempts = it.pin.attempts + 1
-                    it.copy(pin = it.pin.copy(verifying = false, wrong = true, attempts = attempts, lockedUntilMs = backoffUntil(attempts)))
-                }
+                val attempts = local.value.pin.attempts + 1
+                val until = backoffUntil(attempts)
+                local.update { it.copy(pin = it.pin.copy(verifying = false, wrong = true, attempts = attempts, lockedUntilMs = until)) }
+                runCatching { repo.store.savePinLockout(attempts, until) }
                 repo.log("warn", "pin_failed")
             }
         }
@@ -1440,7 +1458,7 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Helpers -----------------------------------------------------------------------
 
-    private fun buildDiagnostics(pairing: PairingRecord?, l: Local, reader: ReaderUiState) = Diagnostics(
+    private fun buildDiagnostics(pairing: PairingRecord?, l: Local) = Diagnostics(
         battery = l.battery,
         charging = l.charging,
         readerStatus = ReaderManager.statusForHeartbeat().status,
@@ -1454,7 +1472,31 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         uptimeMs = System.currentTimeMillis() - startedAtMs,
     )
 
-    /** Exponential backoff after repeated wrong PINs; no lockout for the first few attempts. */
+    /**
+     * `/complete`, asked again when the answer is lost — a Wi-Fi blip, the server restarting — rather
+     * than once. It was once, and the card had been authorised by then: the donor was told "if your
+     * card was charged it will be refunded" about a payment the server simply never heard about.
+     * Repeating is safe because the server records, notifies and emails once per payment, and only
+     * after re-checking with Stripe. A 4xx is an answer, not a lost one, so it is not repeated.
+     */
+    private suspend fun <T> completeWithRetry(call: suspend () -> T): T? {
+        repeat(COMPLETE_ATTEMPTS) { attempt ->
+            try {
+                return call()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ApiException) {
+                if (e.status < 500) return null
+            } catch (e: IOException) {
+                // lost on the way; try again below
+            } catch (e: Exception) {
+                return null
+            }
+            if (attempt < COMPLETE_ATTEMPTS - 1) delay(COMPLETE_RETRY_MS * (attempt + 1))
+        }
+        return null
+    }
+
     /** Exponential backoff after a wrong PIN, capped.
      *
      *  `steps` is clamped BEFORE the shift, which matters: `attempts` grows without bound, and
@@ -1480,6 +1522,9 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
         const val IDENTIFY_MS = 12_000L
         // How long the thank-you screen stays up before returning to the giving screen.
         const val THANKS_MS = 8_000L
+        // Three tries over about six seconds on the Processing screen before saying it didn't complete.
+        const val COMPLETE_ATTEMPTS = 3
+        const val COMPLETE_RETRY_MS = 2_000L
         // How long an abandoned donation (Details/Card/Error, no touches) waits before resetting.
         const val IDLE_ABANDON_MS = 45_000L
         // While the keyed-card WebView is open the donor's taps don't reach us, so give a long window.

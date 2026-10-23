@@ -118,7 +118,7 @@ export const config = {
    *  layer). Injected by the platform at install; empty on a standalone install, where
    *  the app uses its own login + own appearance. The wire identifiers (env var names,
    *  header, cookie, endpoints) are the shared Fabric contract and must stay byte-for-
-   *  byte. See docs/ARCHITECTURE.md. Used from slice 2 onward. */
+   *  byte. See docs/ARCHITECTURE.md. */
   omosBaseUrl: env('OPENMASJID_BASE_URL', '').replace(/\/+$/, ''),
   omosAppId: env('OPENMASJID_APP_ID', ''),
   /** Per-app secret issued by the platform to `sso: true` apps. SSO is identity-bound:
@@ -138,4 +138,3 @@ export function ssoConfigured(): boolean {
   return !!config.omosBaseUrl && !!config.omosAppSecret;
 }
 
-export type Config = typeof config;

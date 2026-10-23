@@ -78,6 +78,8 @@ class DeviceStore(private val context: Context) {
         // transport ("Usb"); Bluetooth also stores the serial so we reconnect that exact reader.
         val LAST_READER_TRANSPORT = stringPreferencesKey("last_reader_transport")
         val LAST_READER_SERIAL = stringPreferencesKey("last_reader_serial")
+        val PIN_ATTEMPTS = intPreferencesKey("pin_attempts")
+        val PIN_LOCKED_UNTIL = longPreferencesKey("pin_locked_until") // wall-clock epoch ms
     }
 
     /** Emits the current pairing, or null when the kiosk is not (yet) paired. */
@@ -181,6 +183,21 @@ class DeviceStore(private val context: Context) {
             p[Keys.LAST_READER_TRANSPORT] = transport
             p[Keys.LAST_READER_SERIAL] = serial.orEmpty()
         }
+    }
+
+    /** The exit-PIN backoff. Persisted because holding the power button reboots even a Lock Task
+     *  tablet, and an in-memory count handed every boot three fresh tries and a reset ramp. */
+    suspend fun savePinLockout(attempts: Int, lockedUntilMs: Long) {
+        store.edit { p ->
+            p[Keys.PIN_ATTEMPTS] = attempts
+            p[Keys.PIN_LOCKED_UNTIL] = lockedUntilMs
+        }
+    }
+
+    /** (wrong attempts so far, locked until epoch ms) — (0, 0) when nothing is recorded. */
+    suspend fun getPinLockout(): Pair<Int, Long> {
+        val p = store.data.first()
+        return (p[Keys.PIN_ATTEMPTS] ?: 0) to (p[Keys.PIN_LOCKED_UNTIL] ?: 0L)
     }
 
     /** The last-connected reader as (transport, serial?) — or null if none remembered. */

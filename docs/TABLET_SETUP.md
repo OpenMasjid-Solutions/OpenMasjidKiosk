@@ -10,7 +10,7 @@ mount that keeps it **plugged in** is strongly recommended.
 ## 1. Install the app
 1. On the tablet's browser, open your kiosk's setup page: **`https://<your-server>:<port>/new`**
    (find the address by pressing **Open** on the Kiosk app in OpenMasjidOS).
-2. Tap **Download the kiosk app**, allow "install from this source" when asked, and open
+2. Tap **Download OpenMasjid Kiosk**, allow "install from this source" when asked, and open
    the downloaded file to install **OpenMasjid Kiosk**.
 
 ## 2. Pair it
@@ -19,7 +19,7 @@ mount that keeps it **plugged in** is strongly recommended.
 2. Open the kiosk app on the tablet, type the **server address** and the **6-digit code**,
    and tap Pair. The app pins the server's certificate on this first connection
    (trust-on-first-use) and won't talk to anything else afterward.
-3. The kiosk appears in **Devices** with live status (battery, charging, reader, version).
+3. The kiosk appears in **Devices** with live status (online, reader, app version).
 
 ## 3. Lock it down (kiosk mode) — no computer needed
 
@@ -88,7 +88,8 @@ notification shade genuinely unreachable.
 This is optional — the soft-kiosk steps above are enough for most masjids.
 
 ## 4. Keep it running
-- Keep the tablet **plugged in**; the Devices page flags "not charging".
+- Keep the tablet **plugged in**. (The Devices page does not show its battery: many tablets report
+  "not charging" at 100% while on power, so it was noise.)
 - It relaunches after a reboot and self-heals after a crash.
 - **To move it to another server or after revoking:** open the maintenance screen (10 taps →
   PIN) → **Re-pair**.

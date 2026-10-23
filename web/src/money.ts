@@ -18,8 +18,10 @@
  */
 import { getClock } from './locale';
 
+// Stripe's minor units — the same table as server/src/stripe.ts, which money-tables.test.ts checks.
+// UGX is NOT here: Stripe takes it as two-decimal, always ending 00 (like ISK).
 const ZERO_DECIMAL = new Set([
-  'JPY', 'KRW', 'VND', 'CLP', 'XAF', 'XOF', 'BIF', 'DJF', 'GNF', 'KMF', 'MGA', 'PYG', 'RWF', 'UGX', 'VUV', 'XPF',
+  'JPY', 'KRW', 'VND', 'CLP', 'XAF', 'XOF', 'BIF', 'DJF', 'GNF', 'KMF', 'MGA', 'PYG', 'RWF', 'VUV', 'XPF',
 ]);
 // Three-decimal currencies (Gulf/Maghreb): 1 major unit = 1000 minor units.
 const THREE_DECIMAL = new Set(['BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND']);
@@ -68,9 +70,32 @@ export function symbolFor(ccy: string): string {
   return fmt?.formatToParts(0).find((p) => p.type === 'currency')?.value ?? c;
 }
 
-/** A "major unit" text field (e.g. "5", "10.50") → integer minor units, or 0 if not a valid amount. */
+/**
+ * A typed amount as a plain "1234.50". The decimal point is read the way people TYPE it, not from the
+ * locale: `.` always is one; with both signs present, the last one is; a lone comma is one unless
+ * exactly three digits follow it, which is how English writes thousands. Spaces go.
+ *
+ * Before this every comma was simply dropped, so "12,50" — how a masjid in South Africa, Indonesia or
+ * most of Europe writes twelve and a half — became 1250, a hundred times the refund that was typed.
+ * Not from the locale on purpose: the boxes are filled by toMajorStr, which always writes a dot, and
+ * reading the dot as a thousands sign where the locale uses one would turn "12.5" into 125.
+ */
+export function plainAmount(text: string): string {
+  let s = String(text ?? '').replace(/[\s\u00a0\u202f]/g, '');
+  const dot = s.lastIndexOf('.');
+  const comma = s.lastIndexOf(',');
+  if (dot >= 0 && comma >= 0) {
+    s = dot > comma ? s.replace(/,/g, '') : s.replace(/\./g, '').replace(',', '.');
+  } else if (comma >= 0) {
+    const single = s.indexOf(',') === comma;
+    s = single && s.length - comma - 1 !== 3 ? s.replace(',', '.') : s.replace(/,/g, '');
+  }
+  return s;
+}
+
+/** A "major unit" text field (e.g. "5", "10.50", "12,50") → integer minor units, or 0 if not a valid amount. */
 export function toMinor(major: string, ccy: string): number {
-  const n = Number(String(major).trim());
+  const n = Number(plainAmount(major));
   if (!Number.isFinite(n) || n <= 0) return 0;
   return Math.round(n * factor(ccy));
 }

@@ -409,7 +409,7 @@ export function PlansSection() {
 
       {totals.otherCurrencies > 0 && (
         <p className="hint">
-          These totals cover the {totals.currency.toUpperCase()} plans. {totals.otherCurrencies} plan
+          These totals cover the {totals.currency.toUpperCase()} plans. <span className="num">{totals.otherCurrencies}</span> plan
           {totals.otherCurrencies === 1 ? '' : 's'} on another currency {totals.otherCurrencies === 1 ? 'is' : 'are'}{' '}
           listed below but left out of the figures — we won't add different currencies together.
         </p>
@@ -479,7 +479,7 @@ function PlanRow({ plan, onOpen }: { plan: Plan; onOpen: () => void }) {
     <button type="button" className="plan-row" onClick={onOpen}>
       <div className="plan-row__top">
         <span className="plan-amt">
-          {money(plan.amountMinor)} {cadence(plan.interval, plan.intervalCount)}
+          <span className="num">{money(plan.amountMinor)}</span> {figures(cadence(plan.interval, plan.intervalCount))}
         </span>
         <span className={`status-pill status-pill--${status.tone}`}>{status.text}</span>
         {ends && (
@@ -683,7 +683,7 @@ function PlanModal({ plan, onUpdated, onClose }: { plan: Plan; onUpdated: (p: Pl
         <div className="card-head__main">
           <h3 id={titleId} className="section-title-inline">{plan.donorName || plan.donorEmail || 'Recurring donation'}</h3>
           <p className="muted">
-            {money(plan.amountMinor)} {every}
+            <span className="num">{money(plan.amountMinor)}</span> {figures(every)}
             {plan.campaignTitle ? ` · ${plan.campaignTitle}` : ''}
           </p>
         </div>
@@ -767,7 +767,7 @@ function PlanModal({ plan, onUpdated, onClose }: { plan: Plan; onUpdated: (p: Pl
                 <p className="plan-act__title">Give it an end date</p>
                 <p className="hint" style={{ marginBlockEnd: '0.45rem', lineHeight: 1.5 }}>
                   {/* This plan's own amount and currency — never a hardcoded "$" (spec §10). */}
-                  For a donor who's pledged “{money(plan.amountMinor)} {every} until Ramadan” — Stripe keeps collecting
+                  For a donor who's pledged “<span className="num">{money(plan.amountMinor)}</span> {figures(every)} until Ramadan” — Stripe keeps collecting
                   until then, and stops on its own.
                 </p>
                 {schedOpen ? (
@@ -959,7 +959,7 @@ function PlanModal({ plan, onUpdated, onClose }: { plan: Plan; onUpdated: (p: Pl
                 {cancelStage === 'confirm' && (
                   <>
                     <p className="note-danger">
-                      This ends <strong>{who}</strong>'s {money(plan.amountMinor)} {every} donation right now. Stripe
+                      This ends <strong>{who}</strong>'s <span className="num">{money(plan.amountMinor)}</span> {figures(every)} donation right now. Stripe
                       won't collect it again and it can't be restarted from here — {who} would have to give monthly at
                       a kiosk again. To stop only the next payment, pause it instead.
                     </p>
@@ -1065,7 +1065,7 @@ function InvoiceRow({ inv }: { inv: PlanInvoice }) {
       <span className="inv-dot" aria-hidden="true" />
       <div className="inv-main">
         <div className="inv-top">
-          <span className="inv-date">{formatDate(inv.date, clock)}</span>
+          <span className="inv-date">{figures(formatDate(inv.date, clock))}</span>
           <span className="inv-amt">{formatMoney(inv.amountMinor, inv.currency)}</span>
         </div>
         <span className="inv-sub">

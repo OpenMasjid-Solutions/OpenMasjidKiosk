@@ -51,16 +51,17 @@ val SurfaceLight = Color(0xFFF0F9FF)        // --color-surface
 val SurfaceRaisedLight = Color(0xFFFFFFFF)  // --color-surface-raised
 val SurfaceOverlayLight = Color(0xFFE0F2FE) // --color-surface-overlay
 
-// The light primary is the platform's BUTTON blue, not its #0284C7, in tokens.css as here: that one is
-// 3.8:1 as text on the light page and 4.1:1 under white ink, and Compose uses one `primary` for both a
-// filled button and a text button's label, so it has to pass as both. This one is 5.9:1 and 5.6:1.
-val PrimaryLight = Color(0xFF0369A1)        // --color-primary
 val PrimaryHoverLight = Color(0xFF075985)   // --color-primary-hover
 val PrimaryMutedLight = Color(0xFFBAE6FD)   // --color-primary-muted
 
+// The light primary is the platform's BUTTON blue, not its #0284C7, in tokens.css as here: that one is
+// 3.8:1 as text on the light page and 4.1:1 under white ink, and Compose uses one `primary` for both a
+// filled button and a text button's label, so it has to pass as both. This one is 5.9:1 and 5.6:1.
 /** The fill of a filled button in light theme (the spec's --color-btn), with [OnPrimaryLight] on it
- *  at 5.93:1. The same hex as [PrimaryLight] today; named separately because the spec gives the
- *  button its own token, and a later accent change must be able to move one without the other. */
+ *  at 5.93:1 — and Compose's light `primary` (Theme.kt), so there is no separate light primary here.
+ *  The same hex as tokens.css's light --color-primary today; named for the button because the spec
+ *  gives the button its own token, and a later accent change must be able to move one without the
+ *  other. */
 val BtnLight = Color(0xFF0369A1)            // --color-btn
 
 val GoldLight = Color(0xFFD97706)           // --color-accent / --color-gold
@@ -70,8 +71,6 @@ val InkMutedLight = Color(0xFF44515F)       // --color-ink-muted (raised for AA;
 val InkFaintLight = Color(0xFF5B6978)       // --color-ink-faint (4.9:1 on the overlay surface; platform #94A3B8)
 
 val OnPrimaryLight = Color(0xFFFFFFFF)      // --color-on-primary
-val SuccessLight = Color(0xFF16A34A)        // --color-success
-val WarningLight = Color(0xFFD97706)        // --color-warning
 val DangerLight = Color(0xFFDC2626)         // --color-danger
 
 // ---- Giving-screen fixtures ------------------------------------------------------------

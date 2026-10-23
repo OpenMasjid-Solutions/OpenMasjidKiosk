@@ -89,7 +89,6 @@
     0 0 0 1px var(--glass-border);
 
   --glow-primary: 0 0 0 1px var(--color-primary-subtle), 0 12px 32px -8px rgba(34, 211, 238, 0.35);
-  --glow-strength: 0.40;
 
   --color-btn: #22D3EE;
   --color-btn-hover: #67E8F9;
@@ -180,7 +179,6 @@
     0 0 0 1px var(--glass-border);
 
   --glow-primary: 0 0 0 1px var(--color-primary-subtle), 0 12px 32px -8px rgba(2, 132, 199, 0.22);
-  --glow-strength: 0.22;
 
   --color-btn: #0369A1;
   --color-btn-hover: #075985;
@@ -420,10 +418,10 @@
  * that already animated; just no longer applied to everything. (Ported from OpenMasjidStudents.) */
 body,
 h1, h2, h3, h4, p, a, span, small, label, button, input, select, textarea, pre,
-.glass, .glass-raised, .glass-inset, .glass-dock,
+.glass, .glass-raised, .glass-inset,
 .btn, .panel, .input, .select, .menu, .menu-item, .icon-btn,
-.tag, .toast, .card, .stat-card, .status-pill, .kv-row, .mx-add, .mx-pacing,
-.page-title, .page-sub, .section-title, .section-title-inline, .hint, .muted {
+.tag, .card, .status-pill, .kv-row, .mx-add, .mx-pacing,
+.page-title, .page-sub, .section-title-inline, .hint, .muted {
   transition:
     background-color 0.2s ease,
     border-color 0.2s ease,

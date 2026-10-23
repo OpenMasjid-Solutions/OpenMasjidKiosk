@@ -43,10 +43,29 @@ import java.util.concurrent.ConcurrentHashMap
  * on the web side. Before this the tablet wrote "$2500" while the receipt said "$2,500".
  */
 
+// Stripe's minor units — keep identical to server/src/stripe.ts. UGX is NOT zero-decimal to Stripe:
+// like ISK it is a two-decimal value always ending 00, so it is in WHOLE_UNITS_IN_HUNDREDTHS instead.
 private val ZERO_DECIMAL = setOf(
-    "JPY", "KRW", "VND", "CLP", "XAF", "XOF", "BIF", "DJF", "GNF", "KMF", "MGA", "PYG", "RWF", "UGX", "VUV", "XPF",
+    "JPY", "KRW", "VND", "CLP", "XAF", "XOF", "BIF", "DJF", "GNF", "KMF", "MGA", "PYG", "RWF", "VUV", "XPF",
 )
+private val WHOLE_UNITS_IN_HUNDREDTHS = setOf("ISK", "UGX")
 private val THREE_DECIMAL = setOf("BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND")
+
+/** The smallest amount Stripe can charge, in minor units — the server's `minorStep`: 100 for ISK and
+ *  UGX (whole units only), 10 for the three-decimal dinars (last digit 0), 1 everywhere else. */
+fun minorStep(currency: String): Long = when (currency.uppercase()) {
+    in WHOLE_UNITS_IN_HUNDREDTHS -> 100L
+    in THREE_DECIMAL -> 10L
+    else -> 1L
+}
+
+/** How many decimals a person may TYPE: what [minorStep] leaves of [decimals] (none for ISK/UGX,
+ *  two for the dinars). */
+fun typedDecimals(currency: String): Int = when (minorStep(currency)) {
+    100L -> 0
+    10L -> 2
+    else -> decimals(currency)
+}
 
 fun isZeroDecimal(currency: String) = currency.uppercase() in ZERO_DECIMAL
 
@@ -110,20 +129,6 @@ private fun formatterFor(locale: Locale, code: String, minDigits: Int, maxDigits
             minimumFractionDigits = minDigits
         }
     }
-
-/**
- * The currency's symbol as the masjid's locale writes it ("$", "£", "KWD", "CA$" for Canadian
- * dollars outside Canada), for anything that needs the symbol on its own. Falls back to the code.
- * Matches web/src/money.ts `symbolFor`. (It used to be a hand-written table of nine currencies that
- * returned "" for everything else.)
- */
-fun symbolFor(currency: String): String {
-    val code = currency.trim().uppercase()
-    return runCatching { Currency.getInstance(code).getSymbol(MoneyFormat.locale) }
-        .getOrNull()
-        ?.takeIf { it.isNotBlank() }
-        ?: code
-}
 
 /** Format integer minor units as a human amount: 2500 USD → "$25", 2550 → "$25.50", 2500 KWD → "KWD 2.500". */
 fun formatMoney(minor: Long, currency: String): String {

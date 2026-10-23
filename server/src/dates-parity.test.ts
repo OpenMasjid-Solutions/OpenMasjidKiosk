@@ -134,3 +134,21 @@ test('money keeps the decimals ICU would have dropped', () => {
   assert.match(serverMoney(1234, 'XYZ', 'en-US'), /^XYZ\s12\.34$/);
   assert.equal(serverMoney(1234, '', 'en-US'), '12.34', 'no code at all falls back without throwing');
 });
+
+test('on a day that springs forward AT midnight, "today" starts at the first moment that exists', () => {
+  // Santiago and Havana skip 00:00 → 01:00. "Today" used to begin at 23:00 the evening before.
+  for (const [tz, at, want] of [
+    ['America/Santiago', '2026-09-06T15:00:00Z', '2026-09-06T04:00:00.000Z'],
+    ['America/Havana', '2026-03-08T15:00:00Z', '2026-03-08T05:00:00.000Z'],
+    ['America/Chicago', '2026-03-08T15:00:00Z', '2026-03-08T06:00:00.000Z'], // DST at 02:00: unchanged
+  ] as const) {
+    const s = { ...S.DEFAULT_CLOCK, timeZone: tz };
+    assert.equal(S.startOfDay(new Date(at), s).toISOString(), want, tz);
+    assert.equal(W.zonedTime(...ymd(at, tz), 0, 0, 0, tz), Date.parse(want), `${tz} (web copy)`);
+  }
+});
+
+function ymd(at: string, tz: string): [number, number, number] {
+  const { y, m, d } = S.ymdIn(new Date(at), tz);
+  return [y, m, d];
+}

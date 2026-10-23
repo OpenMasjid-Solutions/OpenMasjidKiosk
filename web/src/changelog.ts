@@ -147,3 +147,28 @@ export function inlineSpans(text: string): InlineSpan[] {
   if (plain < text.length) out.push({ kind: 'text', text: text.slice(plain) });
   return out;
 }
+
+/** Compare two versions, numerically and prerelease-aware: "0.9.9" < "0.9.34" (a string compare
+ *  gets that exactly backwards, which is how a "new!" dot ends up lying), and "0.14.0-dev.5" <
+ *  "0.14.0" — a release is newer than its own development builds. Reading the dash as one more
+ *  number made 0.14.0 compare as OLDER than 0.14.0-dev.5, so a dev box that moved to the release
+ *  never saw the dot. Between two prereleases of one release the numbers after the dash decide. */
+export function versionNewer(a: string, b: string): boolean {
+  const nums = (v: string) => v.split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const split = (v: string) => {
+    const dash = v.indexOf('-');
+    return dash < 0 ? { core: nums(v), pre: '' } : { core: nums(v.slice(0, dash)), pre: v.slice(dash + 1) };
+  };
+  const cmp = (x: number[], y: number[]) => {
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const d = (x[i] ?? 0) - (y[i] ?? 0);
+      if (d !== 0) return d;
+    }
+    return 0;
+  };
+  const [x, y] = [split(a.trim()), split(b.trim())];
+  const core = cmp(x.core, y.core);
+  if (core !== 0) return core > 0;
+  if (!x.pre || !y.pre) return !x.pre && !!y.pre;
+  return cmp(nums(x.pre), nums(y.pre)) > 0;
+}

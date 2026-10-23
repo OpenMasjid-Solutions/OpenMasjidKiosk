@@ -346,8 +346,9 @@ private fun ReaderControls(
     onReaderPermissionDenied: () -> Unit,
 ) {
     val context = LocalContext.current
-    // The manual picker is for Bluetooth (or the test reader) only — USB connects itself, so it's
-    // never a manual choice here. Default to Bluetooth regardless of the last transport used.
+    // The manual picker is for Bluetooth only — USB connects itself, so it's never a manual choice
+    // here. Default to Bluetooth regardless of the last transport used. The Simulated branch is
+    // unreachable: the Test reader was removed from the picker and nothing selects that transport.
     var selected by remember { mutableStateOf(if (reader.transport == ReaderTransport.Simulated) ReaderTransport.Simulated else ReaderTransport.Bluetooth) }
     var pending by remember { mutableStateOf<ReaderTransport?>(null) }
     val permLauncher = rememberLauncherForActivityResult(
@@ -387,7 +388,7 @@ private fun ReaderControls(
         Text(it, style = MaterialTheme.typography.bodyMedium, color = InkMutedDark)
     }
     // `?.let` rather than `if (reader.battery != null)` — and that is a requirement, not a style
-    // preference. `ReaderState` lives in :core now, and Kotlin will not smart-cast a public property
+    // preference. `ReaderUiState` lives in :core now, and Kotlin will not smart-cast a public property
     // declared in ANOTHER module: it cannot prove the getter returns the same value twice, so the
     // null check does not narrow the type at the use site and `stringResource`, which takes a
     // non-null `Any`, stops compiling. Binding it to a local once is what makes it a stable value.
@@ -447,7 +448,7 @@ private fun ReaderControls(
         reader.conn == ReaderConn.Updating -> Unit // controls hidden while updating
 
         else -> {
-            // USB readers connect on their own; this manual picker is Bluetooth (or the test reader).
+            // USB readers connect on their own; this manual picker is Bluetooth only.
             Text(
                 stringResource(R.string.reader_usb_auto),
                 style = MaterialTheme.typography.bodyMedium,
