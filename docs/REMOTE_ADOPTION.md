@@ -9,8 +9,10 @@ HTTPS address (self-signed cert, trust-on-first-use). **Remote adoption** lets a
 internet, via the masjid's OpenMasjidOS **Cloudflare tunnel** — no VPN, no port-forwarding, nothing
 inbound on the kiosk's network.
 
-It is **opt-in and off by default**, and it exposes **only the kiosk endpoints** — never the admin
-panel.
+It is **opt-in and off by default**, and to anyone on the internet it exposes **only the kiosk
+endpoints**. The admin panel answers over the tunnel only to an admin OpenMasjidOS vouches for —
+someone who pressed **Open** on its remote dashboard after two-step sign-in — and its own password
+works only on the masjid's network (see *Security posture*).
 
 ## What has to be true
 
@@ -51,11 +53,21 @@ When both are true, the kiosk is reachable at `https://omos.<masjid-domain>/<bas
 
 - **Base-path aware, kiosk-endpoints-only.** The OS forwards the full `/<basePath>` prefix without
   stripping it. Fastify `rewriteUrl` strips it before routing (so every route stays root-relative) and
-  **flags the request as tunnel-origin** (a LAN-direct hit arrives at the root, with no prefix). An
-  `onRequest` guard then **404s `/api/admin/*`, `/api/fabric/*` and everything under `/fabric/*` for
-  tunnel-origin requests** — the admin panel, the Fabric relay and the WhatsApp admin-command handler
-  all stay LAN-only. Only `/new`, the APK (`/download`), the public bootstrap (`/api/app`,
-  `/api/public/appearance`), and the device API (`/api/kiosk/*`) are reachable over the internet.
+  **flags the request as tunnel-origin** (a LAN-direct hit arrives at the root, with no prefix; one
+  carrying `cf-ray` is flagged too). An `onRequest` guard then **404s every `/api` path not on its
+  allowlist, and everything under `/fabric/*`, for tunnel-origin requests** — password login
+  (`/api/login`), first-run setup (`/api/setup`), the Fabric relay and the WhatsApp admin-command
+  handler all stay LAN-only, in every spelling (percent-encoded, double-encoded, dot segments). Open
+  to anyone: `/new`, the APK (`/download`), the public bootstrap (`/api/app`,
+  `/api/public/appearance`), and the device API (`/api/kiosk/*`).
+- **The admin panel over the tunnel answers only to OpenMasjidOS** (OS 0.51.2+ remote
+  administration). `/api/session`, `/api/logout` and `/api/admin/*` pass the guard, but there
+  `requireAdmin` accepts nothing but the platform vouching for *this* request: OpenMasjidOS's
+  **Open** gives the browser an access token for this app alone, which its ingress forwards only while
+  the admin's two-step-verified remote session is alive, and which we check at `/api/auth/session`.
+  We mint **no** session of our own over the tunnel and ignore ours there — every app shares that
+  hostname, so a cookie of ours would reach the others' servers, and a LAN password session must never
+  count from the internet. A non-GET admin call with a foreign `Origin` is refused there as well.
 - **`/fabric/*` is a separate rule, not a special case of the `/api` one.** The allowlist in
   `tunnel.ts` only ever examined `/api` paths, so every path outside `/api` fell through as
   *allowed* — correct while that meant the SPA, its assets, `/new`, the APK and `/uploads`, and
@@ -70,8 +82,11 @@ When both are true, the kiosk is reachable at `https://omos.<masjid-domain>/<bas
   sent to the tablet/browser and are unreachable over the tunnel (`/api/fabric/*` is blocked). The
   tablet still only ever receives Stripe **connection tokens** + PaymentIntent client secrets, exactly
   as on the LAN. Card data never touches our code (reader/Stripe only).
-- **Fail-soft.** If the platform is unreachable or remote access is off, `/api/fabric/site` returns
-  "off", `basePath` is `""`, and the app behaves exactly as a LAN-only kiosk.
+- **Fail-soft.** If remote access is off, `/api/fabric/site` returns "off", `basePath` is `""`, and
+  the app behaves exactly as a LAN-only kiosk. A refusal or an unreachable platform is *not* "off": the
+  last known base path is kept. If none is known yet (we started while the platform was down), a
+  tunnel request gets a fresh lookup and a 307 back to the same address, or a 503 — never the panel
+  without its base path.
 
 ## Known limitations (by design, for now)
 

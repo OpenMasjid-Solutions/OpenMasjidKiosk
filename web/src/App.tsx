@@ -440,8 +440,10 @@ function SettingsTab({ app, session, embedded }: { app: AppInfo | null; session:
 function Auth({ session, onDone }: { session: Session | null; onDone: () => Promise<void> }) {
   const sso = session?.sso;
   // Under SSO with no local password and the platform reachable, the way in is to press
-  // Open in the dashboard (which sends the omos_session cookie and mints our session).
-  const ssoOnly = !!sso?.enabled && !!sso?.reachable && !session?.hasPassword && !session?.needsSetup;
+  // Open in the dashboard (which sends the omos_session cookie and mints our session). From outside
+  // the masjid that is the ONLY way in: the password form and setup are refused there.
+  const remote = !!session?.remote;
+  const ssoOnly = remote || (!!sso?.enabled && !!sso?.reachable && !session?.hasPassword && !session?.needsSetup);
   // First run standalone, OR recovery when the platform is configured but unreachable.
   const showSetup = !!session?.needsSetup || (!!sso?.enabled && !sso?.reachable && !session?.hasPassword);
 
@@ -456,6 +458,7 @@ function Auth({ session, onDone }: { session: Session | null; onDone: () => Prom
           <p className="auth-sub muted">
             Open this app from your <b>OpenMasjidOS dashboard</b> — press <b>Open</b> on the Kiosk app and it signs you in
             automatically.
+            {remote && ' You’re outside the masjid, so Kiosk’s own password won’t work here — it only works on the masjid’s network.'}
           </p>
           <button className="btn btn--primary btn--block" onClick={() => void onDone()}>
             I’ve signed in — continue

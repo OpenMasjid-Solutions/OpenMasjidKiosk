@@ -63,14 +63,14 @@ test('tokens are per-plan — one donor’s link cannot touch another’s', () =
   assert.equal(s.getPlanByCancelToken(b)?.subscriptionId, 'sub_b');
 });
 
-test('the donor routes are reachable over the tunnel; the admin API still is not', () => {
+test('the donor routes are reachable over the tunnel; the password login still is not', () => {
   // The whole point is that a donor can use this from anywhere. Both halves must pass the guard.
   assert.equal(blockedOverTunnel('/kiosk/m/' + 'a'.repeat(64)), false, 'the page is not an /api path');
   assert.equal(blockedOverTunnel('/api/public/monthly/abc/cancel'), false, 'the action is under /api/public');
-  // …and none of this may widen the hole that guard exists for.
-  assert.equal(blockedOverTunnel('/api/admin/plans'), true);
+  // …and none of this may widen the hole that guard exists for. (The admin API is reachable over
+  // the tunnel now, but answers only to OpenMasjidOS's remote sign-in — remote-access.test.ts.)
   assert.equal(blockedOverTunnel('/api/login'), true);
-  assert.equal(blockedOverTunnel('/%61pi/admin/donations'), true, 'still fails closed on encoding');
+  assert.equal(blockedOverTunnel('/%61pi/login'), true, 'still fails closed on encoding');
 });
 
 test('the email carries the link, says to keep it, and escapes the donor’s own name', () => {

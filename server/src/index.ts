@@ -22,7 +22,7 @@ import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
 import { MAX_ALERT_RECIPIENTS, Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppGroup, fabricWhatsAppGroups, fabricWhatsAppSuspect, fabricWhatsAppStatus, fabricWhatsAppOutcome, clearWhatsAppCache, emailStatus, emailCanSend, type WhatsAppSuspectWindow } from './fabric';
+import { notify, probePlatform, platformUser, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppGroup, fabricWhatsAppGroups, fabricWhatsAppSuspect, fabricWhatsAppStatus, fabricWhatsAppOutcome, clearWhatsAppCache, emailStatus, emailCanSend, type WhatsAppSuspectWindow } from './fabric';
 import {
   ALERT_IDS,
   ALERT_META,
@@ -92,6 +92,12 @@ const ONLINE_MS = 35_000;
 const apkFilename = `openmasjidkiosk-${config.version}.apk`;
 const mobileApkFilename = `openmasjid-mobile-donations-${config.version}.apk`;
 
+/** What rewriteUrl learned about a request: it came over the OpenMasjidOS tunnel, and which base
+ *  path it stripped (absent when it stripped none). Set on the raw request, before routing. */
+type TunnelMark = { omosViaTunnel?: boolean; omosBase?: string };
+const tunnelMark = (req: { raw: unknown }): TunnelMark => req.raw as TunnelMark;
+const viaTunnel = (req: { raw: unknown }): boolean => tunnelMark(req).omosViaTunnel === true;
+
 async function main(): Promise<void> {
   const store = new Store();
   const loginLimiter = new LoginLimiter();
@@ -108,13 +114,19 @@ async function main(): Promise<void> {
     // strip it here, before routing, so every route below stays written at the root and works
     // identically on the LAN (no prefix) and behind the tunnel. The prefix is the Fabric
     // `basePath` (cached, refreshed periodically); empty = LAN-only, nothing to strip. A request
-    // that ARRIVES with the prefix came via the tunnel — we flag it so /api/admin stays LAN-only.
+    // that ARRIVES with the prefix came via the tunnel, and so does one carrying `cf-ray` (set at
+    // Cloudflare's edge; on the LAN only a caller choosing the stricter tunnel rules sends it). We
+    // flag both — the tunnel guard and requireAdmin read the flag — and remember the prefix we
+    // stripped, which is the base the page is then served with.
     rewriteUrl(req) {
       const url = req.url ?? '/';
+      const mark = req as unknown as TunnelMark;
+      if (req.headers['cf-ray']) mark.omosViaTunnel = true;
       const base = cachedFabricSite().basePath;
       if (!base) return url;
       if (url === base || url.startsWith(base + '/') || url.startsWith(base + '?')) {
-        (req as unknown as { omosViaTunnel?: boolean }).omosViaTunnel = true;
+        mark.omosViaTunnel = true;
+        mark.omosBase = base;
       }
       if (url === base) return '/';
       if (url.startsWith(base + '/')) return url.slice(base.length);
@@ -170,7 +182,9 @@ async function main(): Promise<void> {
     const proto = String(req.headers['x-forwarded-proto'] ?? '');
     const fwdHost = String(req.headers['x-forwarded-host'] ?? '');
     if (proto === 'https') {
-      if (/^[a-z0-9.-]+(:\d+)?$/i.test(fwdHost)) lastHttpsHost = fwdHost;
+      // Learn only the LAN address: a tunnel request names the public hostname, which no plain-HTTP
+      // LAN visit ever matches — learning it just switched this upgrade off after each remote visit.
+      if (!viaTunnel(req) && /^[a-z0-9.-]+(:\d+)?$/i.test(fwdHost)) lastHttpsHost = fwdHost;
       return; // already secure
     }
     if (req.method !== 'GET' || !lastHttpsHost) return;
@@ -181,21 +195,21 @@ async function main(): Promise<void> {
     return reply.redirect(`https://${lastHttpsHost}${url}`, 308);
   });
 
-  // ── Keep everything but the kiosk surface LAN-only, even when remote adoption exposes us ──
+  // ── Over the tunnel: the kiosk surface, and the admin panel only for OpenMasjidOS's remote sign-in ──
   // A request that arrived over the OS Cloudflare tunnel carries the base-path prefix (flagged as
-  // omosViaTunnel in rewriteUrl). Over the tunnel we ALLOWLIST (fail-closed) only the public kiosk
-  // surface: the device API (/api/kiosk/*), the public bootstrap (/api/app), the live appearance
-  // relay (/api/public/*), plus non-/api paths (the SPA + static assets, the APK at /download, and
-  // uploaded images at /uploads — the setup page needs them). Every OTHER /api route — admin, login,
-  // session, setup, logout, and /api/fabric — stays LAN-only, so the admin panel and its auth are
-  // never reachable from the internet even when a remote kiosk is adopted.
+  // omosViaTunnel in rewriteUrl). Over the tunnel we ALLOWLIST (fail-closed): the device API
+  // (/api/kiosk/*), the public bootstrap (/api/app), the live appearance relay (/api/public/*),
+  // non-/api paths (the SPA + static assets, the APK at /download, uploaded images at /uploads), and
+  // the remote admin's /api/session, /api/logout and /api/admin/* — which answer only to a request
+  // the PLATFORM vouches for (requireAdmin below). Password login and first-run setup, /api/fabric
+  // and anything unlisted stay LAN-only, so the local password is never guessable from the internet.
   //
   // The rule itself lives in ./tunnel because it has to canonicalise the path the way the ROUTER
   // resolves it, not the way it arrived: Fastify percent-decodes path segments before matching, so
   // the previous inline `startsWith('/api/')` on the raw url was walked past by encoding one letter
   // ('/%61pi/login' reached the real password login over the tunnel). See tunnel.test.ts.
   app.addHook('onRequest', async (req, reply) => {
-    if ((req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel !== true) return;
+    if (!viaTunnel(req)) return;
     if (blockedOverTunnel(req.raw.url ?? '/')) {
       return reply.code(404).send({ error: 'Not found.' });
     }
@@ -225,7 +239,24 @@ async function main(): Promise<void> {
     }
     store.recordAudit({ action, target, detail, actor, source: req.socket.remoteAddress ?? '' });
   };
+  /** Over the tunnel, only OpenMasjidOS's word counts — asked on every request (cached 45 s), never a
+   *  session of ours. The platform's ingress strips every platform cookie and puts back this app's
+   *  own access token only while the admin's two-step-verified remote session is alive, so a yes
+   *  here means exactly that; it ends when they sign out there. A session of ours — above all one a
+   *  PASSWORD minted — is never accepted from the internet, whoever carries its cookie there. */
+  const remoteAdmin = (req: import('fastify').FastifyRequest): Promise<string | null> => platformUser(req.headers.cookie);
   const requireAdmin = async (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
+    if (viaTunnel(req)) {
+      // A page on a sibling subdomain (the masjid's own website, say) is same-SITE, so a form it
+      // posts here still carries the platform's SameSite=Lax token. A change must come from this
+      // page's own origin; browsers always send Origin with one.
+      const origin = req.headers.origin;
+      if (origin && req.method !== 'GET' && req.method !== 'HEAD' && origin !== `https://${String(req.headers['x-forwarded-host'] ?? '')}`) {
+        return reply.code(403).send({ error: 'Not allowed.' });
+      }
+      if (!(await remoteAdmin(req))) return reply.code(401).send({ error: 'Please open Kiosk again from your OpenMasjidOS dashboard.' });
+      return;
+    }
     if (!isAuthed(req.cookies[COOKIE])) return reply.code(401).send({ error: 'Please sign in.' });
   };
 
@@ -344,6 +375,22 @@ async function main(): Promise<void> {
 
   // ── Session: who am I? Also performs the SSO upgrade. ───────────────────────
   app.get('/api/session', async (req, reply) => {
+    if (viaTunnel(req)) {
+      // From outside the masjid. Nothing is minted here: requireAdmin asks the platform on every
+      // request, so there is no session of ours to steal, to leak to the other apps that share this
+      // hostname, or to outlive the admin signing out of OpenMasjidOS. `reachable` is true by
+      // construction — the platform is what carried this request to us.
+      const user = await remoteAdmin(req);
+      return {
+        data: {
+          needsSetup: false,
+          authed: !!user,
+          hasPassword: store.hasAdmin(),
+          remote: true,
+          sso: { enabled: ssoConfigured(), reachable: true, username: user ?? undefined },
+        },
+      };
+    }
     let authed = isAuthed(req.cookies[COOKIE]);
     let username: string | undefined;
     // True unless we tried to reach the platform and couldn't — lets the UI tell "open it
@@ -366,6 +413,7 @@ async function main(): Promise<void> {
         needsSetup: !store.hasAdmin() && !ssoConfigured(),
         authed,
         hasPassword: store.hasAdmin(),
+        remote: false,
         sso: { enabled: ssoConfigured(), reachable, username },
       },
     };
@@ -409,8 +457,12 @@ async function main(): Promise<void> {
     return reply.code(401).send({ error: 'Incorrect password.' });
   });
 
-  app.post('/api/logout', async (_req, reply) => {
+  app.post('/api/logout', async (req, reply) => {
     reply.clearCookie(COOKIE, { path: '/' });
+    // Nothing is minted over the tunnel (see /api/session), but if a session of ours ever sits on the
+    // shared apps' hostname under our base path, signing out from there clears that one too.
+    const base = tunnelMark(req).omosBase;
+    if (base) reply.clearCookie(COOKIE, { path: base });
     return { data: { ok: true } };
   });
 
@@ -3337,15 +3389,14 @@ ${body}
     log.warn('index.html has no literal <head> — remote (tunnel) base-path injection will not apply');
   }
   // Serve index.html with the tunnel base path injected — but ONLY for a request that actually
-  // arrived over the tunnel (it carries the prefix, flagged in rewriteUrl as omosViaTunnel). A LAN
-  // or per-app-HTTPS-proxy request arrives at the root, so it gets the verbatim file and the SPA
+  // arrived over the tunnel with that prefix (rewriteUrl records the one it stripped). A LAN or
+  // per-app-HTTPS-proxy request arrives at the root, so it gets the verbatim file and the SPA
   // uses root paths — critical, so the LAN admin panel keeps working when remote access is on.
   // When injected: a `<base href>` (relative-built Vite assets resolve under the prefix) plus
   // `window.__OMOS_BASE__` (web/src/base.ts prefixes API/nav/asset URLs). basePath is already a
   // safe URL-path charset (normBasePath), re-sanitized here defensively.
   const sendIndexHtml = (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
-    const viaTunnel = (req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel === true;
-    const base = viaTunnel ? cachedFabricSite().basePath.replace(/[^\w/-]/g, '') : '';
+    const base = (tunnelMark(req).omosBase ?? '').replace(/[^\w/-]/g, '');
     if (!base) return reply.type('text/html').send(rawIndex);
     const head = `<base href="${base}/">\n    <script>window.__OMOS_BASE__=${JSON.stringify(base)}</script>`;
     return reply.type('text/html').send(rawIndex.replace('<head>', `<head>\n    ${head}`));
@@ -3354,8 +3405,23 @@ ${body}
 
   // SPA fallback: client-side routes (/new, /admin) resolve to index.html; requests that
   // look like a file still 404; unknown API/health routes return JSON.
-  app.setNotFoundHandler((req, reply) => {
+  let lastSiteRefresh = 0;
+  app.setNotFoundHandler(async (req, reply) => {
     const url = req.raw.url ?? '/';
+    // A tunnel request whose prefix we could not strip: our base path was not known yet (the
+    // platform was down when we started) or has just changed. Ask the platform again and send the
+    // browser back to the same address, which then routes. Never serve the panel unprefixed here:
+    // over the tunnel the root is the OpenMasjidOS dashboard, so every path that page builds — its
+    // assets, its API calls — would reach the dashboard instead of us.
+    if (viaTunnel(req) && !tunnelMark(req).omosBase) {
+      if (Date.now() - lastSiteRefresh > 2_000) {
+        lastSiteRefresh = Date.now();
+        await fetchFabricSite(true);
+      }
+      const base = cachedFabricSite().basePath;
+      if (base && (url === base || url.startsWith(base + '/') || url.startsWith(base + '?'))) return reply.redirect(url, 307);
+      return reply.code(503).header('retry-after', '5').send({ error: 'Kiosk is still starting up. Please try again in a moment.' });
+    }
     const pathname = url.split('?')[0];
     const looksLikeFile = path.extname(pathname) !== '';
     if (req.method === 'GET' && havePublic && !looksLikeFile && !url.startsWith('/api') && !url.startsWith('/healthz')) {

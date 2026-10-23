@@ -630,6 +630,12 @@ function omosCookie(cookieHeader: string | undefined): string | null {
   return /^[A-Za-z0-9._~%+/=-]{1,4096}$/.test(token) ? token : null;
 }
 
+/** Who OpenMasjidOS says is signed in on THIS request, or null — with no network call at all when
+ *  the request carries no platform session (a stranger over the tunnel costs the platform nothing). */
+export async function platformUser(cookieHeader: string | undefined): Promise<string | null> {
+  return omosCookie(cookieHeader) ? (await probePlatform(cookieHeader)).username : null;
+}
+
 interface CacheEntry {
   username: string;
   expires: number;
@@ -905,7 +911,10 @@ export async function fetchFabricSite(force = false): Promise<FabricSite> {
       redirect: 'error',
     });
     clearTimeout(t);
-    const value = res.ok ? parseSite(await res.json().catch(() => null)) : SITE_OFF;
+    // A refusal (a 429, the core restarting) is "couldn't ask", not "remote access is off": caching
+    // it as off dropped our base path for a minute, and every request over the tunnel with it.
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const value = parseSite(await res.json().catch(() => null));
     siteCache = { at: now, value };
     return value;
   } catch (err) {

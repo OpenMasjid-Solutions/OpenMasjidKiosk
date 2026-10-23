@@ -68,6 +68,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          # The default also asks for `tools`, which the runners' newer command-line tools no
+          # longer have, so sdkmanager failed. Gradle fetches the rest itself.
+          packages: platform-tools
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
