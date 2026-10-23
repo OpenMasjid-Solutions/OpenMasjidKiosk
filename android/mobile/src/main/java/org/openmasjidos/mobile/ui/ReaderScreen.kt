@@ -28,6 +28,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import org.openmasjidos.kiosk.readers.ReaderConn
 import org.openmasjidos.kiosk.readers.ReaderTransport
@@ -197,7 +200,14 @@ fun ReaderScreen(
 
         state.error?.let { err ->
             Spacer(Modifier.height(2.dp))
-            Text(err, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+            // Announced when it appears: a reader that drops does so on its own, usually while the
+            // volunteer is looking at the donor rather than at this card.
+            Text(
+                err,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
             // The escape hatch for "deny and don't ask again". Android will never show the dialog
             // again, so an app that only offers a retry button is asking someone to press a control
             // that provably cannot work. This opens the one place it can be undone.

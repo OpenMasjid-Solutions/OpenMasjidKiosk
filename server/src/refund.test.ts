@@ -155,7 +155,8 @@ test('the donor refund email states the refunded amount, and escapes everything'
   const full = renderRefund({ accent: '' }, { ...base, refundAmountText: '$10.00', full: true, dateRefunded: '10 Aug 2026, 9:00 AM' });
   assert.match(full.subject, /refunded/i);
   assert.match(full.text, /\$10\.00/);
-  assert.match(full.text, /5 to 10 working days/, 'the one thing every donor asks next');
+  // "business days", the US wording the product uses (app spec §9) — not the British "working days".
+  assert.match(full.text, /5 to 10 business days/, 'the one thing every donor asks next');
 
   // A partial must say what it was part OF, or the donor reads it as the whole gift coming back.
   const part = renderRefund({ accent: '' }, { ...base, refundAmountText: '$4.00', full: false, dateRefunded: '10 Aug 2026, 9:00 AM' });

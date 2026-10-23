@@ -102,7 +102,12 @@ data class TuitionItemUi(
 /** An open invoice a parent can pay (display + the opaque id used for selection). [studentName] is
  *  whose bill it is — blank for an only child (contract v2: one bill per student). [items] is what the
  *  bill is made of; empty against a Students older than 0.43.0, and then the bill is one tickable row
- *  exactly as before. */
+ *  exactly as before.
+ *
+ *  [dueLabel] is the due date as a PERSON reads it — "Jul 1, 2026 · Muharram 16, 1448 AH", Gregorian
+ *  and Hijri together in the masjid's own locale — formatted once on the server, which holds the
+ *  masjid's settings. [dueDate] is the wire value ("2026-07-01"), kept because it is what the pay
+ *  selection and any older server still speak; it is only ever SHOWN when the label is blank. */
 data class TuitionInvoiceUi(
     val id: String,
     val label: String,
@@ -110,6 +115,7 @@ data class TuitionInvoiceUi(
     val balanceMinor: Long,
     val studentName: String = "",
     val items: List<TuitionItemUi> = emptyList(),
+    val dueLabel: String = "",
 ) {
     /** The lines a parent can actually choose. */
     val payableItems: List<TuitionItemUi> get() = items.filter { it.payable }
@@ -123,13 +129,19 @@ data class TuitionInvoiceUi(
 /** One CHILD's part of the account: their name, their own balance and credit, and their own bills.
  *  [key] is the opaque per-session handle for "pay towards this child" — the school's internal id
  *  never reaches the tablet. Blank on the (defensive) unattributed section, which therefore offers no
- *  per-child button. */
+ *  per-child button.
+ *
+ *  [firstName] is the child's first name EXACTLY as the school holds it, sent separately by the
+ *  server so "Pay another amount for …" never has to cut it out of [name] (first name + last
+ *  initial). Splitting on the first space is what turned "Abdul Rahman K" into "Abdul" (spec §10:
+ *  render names as given). Blank against an older server; the screen then says the whole [name]. */
 data class TuitionStudentUi(
     val key: String,
     val name: String,
     val balanceMinor: Long,
     val creditMinor: Long,
     val invoices: List<TuitionInvoiceUi> = emptyList(),
+    val firstName: String = "",
 )
 
 /** State of the tuition (students/billing) shell — the Student ID entry, the "is this your child?"
@@ -1089,8 +1101,10 @@ class KioskViewModel(app: Application) : AndroidViewModel(app) {
                                                 i.balanceMinor,
                                                 i.studentName,
                                                 i.items.map { line -> TuitionItemUi(line.id, line.label, line.kind, line.amountMinor, line.balanceMinor) },
+                                                dueLabel = i.dueLabel,
                                             )
                                         },
+                                        firstName = s.firstName,
                                     )
                                 },
                                 payFull = true,

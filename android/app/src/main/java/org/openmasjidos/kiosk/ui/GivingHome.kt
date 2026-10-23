@@ -3,6 +3,7 @@
 
 package org.openmasjidos.kiosk.ui
 
+import android.provider.Settings
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -45,6 +46,11 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,14 +62,19 @@ import org.openmasjidos.kiosk.KioskViewModel
 import org.openmasjidos.kiosk.UiState
 import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.readers.ReaderConn
+import org.openmasjidos.kiosk.ui.theme.DangerDark
 import org.openmasjidos.kiosk.ui.theme.GoldDark
+import org.openmasjidos.kiosk.ui.theme.ImageScrim
+import org.openmasjidos.kiosk.ui.theme.InkBlack
 import org.openmasjidos.kiosk.ui.theme.InkDark
-import org.openmasjidos.kiosk.ui.theme.InkLight
 import org.openmasjidos.kiosk.ui.theme.InkMutedDark
-import org.openmasjidos.kiosk.ui.theme.InkMutedLight
 import org.openmasjidos.kiosk.ui.theme.PrimaryDark
+import org.openmasjidos.kiosk.ui.theme.SceneMid
+import org.openmasjidos.kiosk.ui.theme.SuccessDark
 import org.openmasjidos.kiosk.ui.theme.SurfaceOverlayDark
 import org.openmasjidos.kiosk.ui.theme.SurfaceRaisedDark
+import org.openmasjidos.kiosk.ui.theme.bestTextOn
+import org.openmasjidos.kiosk.ui.theme.contrastRatio
 
 /**
  * The always-on giving home (§9, redesigned): the kiosk boots straight into the MAIN campaign's
@@ -192,11 +203,18 @@ fun GivingHome(vm: KioskViewModel, ui: UiState, modifier: Modifier = Modifier) {
         // Reader hint: a pulsing NFC symbol + arrows pinned to the reader's side (set per tablet in
         // Admin → Devices). Shown while the donor is at the card step; turns green when it clears. It
         // rides inside RotatedRoot with everything else, so "left/right" follow the mount into portrait.
+        // The green is the SCENE's success colour, not the dark theme's: that light green measured
+        // 1.3:1 on the default bright wash, so "it went through" was the part a donor couldn't see.
         NfcReaderHint(
             side = cfg?.nfcSide ?: "off",
             active = ui.giving.step == GivingStep.Card || ui.giving.step == GivingStep.Processing,
             cleared = ui.giving.step == GivingStep.Thanks,
-            accent = accent,
+            // The READABLE accent, not the raw one: on the default campaign the raw accent is cyan drawn
+            // on a wash of cyan, about 1.3:1 — the one graphic whose whole job is to show a donor where
+            // to hold their card was close to invisible. accentInk is the accent where it reads on this
+            // scene and the scene's own ink where it doesn't.
+            accent = style.accentInk,
+            success = style.success,
         )
         // Visual-only countdown ring (no numbers/words): shown while a non-main tab idles OR while a
         // donation is under way (returns to the menu on inactivity).
@@ -249,11 +267,23 @@ private fun ReaderUpdatingBanner(percent: Int?, accent: Color, modifier: Modifie
         color = Color.Black.copy(alpha = 0.55f),
         border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
     ) {
-        Column(Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
+        Column(
+            Modifier
+                .padding(horizontal = 20.dp, vertical = 14.dp)
+                // A live region (spec §7): the update starts on its own, mid-shift, with nobody having
+                // pressed anything — exactly the kind of change a TalkBack user has no other way to
+                // hear about.
+                .semantics { liveRegion = LiveRegionMode.Polite },
+        ) {
             Text(
                 text = if (percent != null) "Card reader is updating — $percent%" else "Card reader is updating…",
                 style = MaterialTheme.typography.titleSmall,
                 color = Color.White,
+                // What is SPOKEN stays steady while the percentage ticks. A live region re-reads
+                // whatever changes inside it, so reading the number out would talk over a donor at
+                // every percent for several minutes — the countdown a live region must never be. The
+                // exact figure is still on the progress bar below, for anyone who moves to it.
+                modifier = Modifier.semantics { contentDescription = "Card reader is updating" },
             )
             Spacer(Modifier.height(4.dp))
             Text(
@@ -331,20 +361,34 @@ private fun CampaignBackground(vm: KioskViewModel, url: String, brush: Brush) {
                 modifier = Modifier.fillMaxSize(),
             )
             // Dark scrim so text stays legible over any image (text is light when a bg image is set).
-            Box(Modifier.fillMaxSize().background(Color(0xAA020A12)))
+            Box(Modifier.fillMaxSize().background(ImageScrim))
         }
     }
 }
 
-/** A small ring that depletes over [KIOSK_AUTO_RETURN_MS]. Purely visual — no text or numbers. */
+/** A small ring that depletes over [KIOSK_AUTO_RETURN_MS]. Purely visual — no text or numbers.
+ *
+ *  REDUCED MOTION (spec §7), read the same way [Fireworks] reads it: Android's "Remove animations"
+ *  sets the system animator scale to 0. Compose's own animations follow that scale by themselves, but
+ *  this ring is driven by a hand-written loop the scale never reaches — so without this check it swept
+ *  on at about 20 frames a second for a donor who had asked the whole device to hold still. It still
+ *  counts down (it is how a volunteer sees the screen is about to reset), in a few visible steps
+ *  instead of a continuous sweep. */
 @Composable
 private fun CountdownRing(startedMs: Long, accent: Color, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val reduceMotion = remember {
+        runCatching {
+            Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+        }.getOrDefault(1f) == 0f
+    }
+    val tickMs = if (reduceMotion) REDUCED_MOTION_TICK_MS else 50L
     var now by remember(startedMs) { mutableStateOf(startedMs) }
-    androidx.compose.runtime.LaunchedEffect(startedMs) {
+    androidx.compose.runtime.LaunchedEffect(startedMs, tickMs) {
         while (true) {
             now = nowMs()
             if (now - startedMs >= KIOSK_AUTO_RETURN_MS) break
-            delay(50)
+            delay(tickMs)
         }
     }
     val remaining = (1f - (now - startedMs).toFloat() / KIOSK_AUTO_RETURN_MS).coerceIn(0f, 1f)
@@ -365,8 +409,13 @@ private fun CountdownRing(startedMs: Long, accent: Color, modifier: Modifier = M
 
 private fun nowMs(): Long = System.currentTimeMillis()
 
-/** Parse a campaign's '#rrggbb' accent, falling back to the kiosk default (cyan). */
-private fun accentOf(c: Campaign?): Color {
+/** How often the countdown ring moves with animations turned off: nine steps across the 45 seconds. */
+private const val REDUCED_MOTION_TICK_MS = 5_000L
+
+/** Parse a campaign's '#rrggbb' accent, falling back to the kiosk default (cyan). Internal because the
+ *  keyed-entry page (KioskRoot → ManualCardWebView) paints the same accent and must get it, and its
+ *  ink, by the same rule as the giving screen. */
+internal fun accentOf(c: Campaign?): Color {
     val hex = c?.accentColor?.removePrefix("#") ?: return PrimaryDark
     if (hex.length != 6) return PrimaryDark
     val v = hex.toLongOrNull(16) ?: return PrimaryDark
@@ -381,18 +430,30 @@ private fun primaryOf(c: Campaign?): Color? {
     return Color(0xFF000000L or v)
 }
 
-/** A near-black ink for the bright scene — big bold amounts + headings read pure-black on the light
- *  primary background and on the white tiles (matching the reference giving screen). */
-private val InkBlack = Color(0xFF0A0F14)
+// The ink arithmetic — InkBlack (the near-black of big amounts and headings on a bright wash),
+// contrastRatio, and bestTextOn (whichever of InkBlack and white reads on a fill, falling back to pure
+// black in the narrow band where neither reaches AA) — lives in :core's ui/theme/Color.kt, so the wall
+// kiosk and Mobile Donations cannot ink the same campaign colour two ways. It mirrors
+// web/src/contrast.ts `bestInkOn` exactly, which is what lets the admin's live preview promise it shows
+// what this tablet draws; server/src/ink-contrast.test.ts holds the web half to 4.5:1 on every preset
+// and platform accent, and is the only automated check the rule gets, because the Kotlin half cannot
+// be built on the maintainer's machine. Change the two together.
 
-/** Pick whichever of dark ink / white gives the higher contrast on [bg] (a solid fill), so text on a
- *  filled color is always legible regardless of the color's brightness. */
-private fun bestTextOn(bg: Color): Color {
-    val l = bg.luminance()
-    val onBlack = (l + 0.05f) / 0.05f       // contrast ratio vs a near-black ink
-    val onWhite = 1.05f / (l + 0.05f)        // contrast ratio vs white
-    return if (onBlack >= onWhite) InkBlack else Color.White
-}
+/** Error and success TEXT on a bright scene. The theme's DangerDark/SuccessDark are the dark theme's
+ *  light red and light green, made to sit on navy, and on the default bright wash they measured 1.9:1
+ *  and 1.3:1 — the error line and the "your monthly donation is set up" line were the two a donor could
+ *  not read. These are the deep shades a light surface needs (5.7:1 and 4.9:1 on that wash);
+ *  [sceneStyleFor] still checks them against the scene actually painted, because a campaign's primary
+ *  can be any colour at all. */
+private val DangerOnBright = Color(0xFF991B1B)
+private val SuccessOnBright = Color(0xFF166534)
+
+/** WCAG AA for body text: the bar an ink has to clear to be used on this screen. */
+private const val AA_TEXT = 4.5f
+
+/** [preferred] when it reads at AA on [bg], else [fallback] — an ink already known to read there. */
+private fun readableOr(preferred: Color, bg: Color, fallback: Color): Color =
+    if (contrastRatio(preferred, bg) >= AA_TEXT) preferred else fallback
 
 /** Resolve the giving-screen color set from the accent + the scene it will actually be painted on.
  *
@@ -402,6 +463,17 @@ private fun bestTextOn(bg: Color): Color {
  *  background rather than a translucent gray: it still reads as secondary, but at a fraction of the
  *  contrast loss (and it composites predictably over a background image's scrim).
  *
+ *  THE ACCENT IS A FILL, NOT AN INK. It paints buttons, the "Donate" band, rings and borders. Where it
+ *  used to be TEXT as well — the amount being charged, "Hold your card on the reader", the balance due
+ *  — that text now takes [SceneStyle.accentInk]: the accent when it reads on the scene, the scene's own
+ *  ink when it does not. With no primary set, the bright wash is a tint OF the accent, so the default
+ *  cyan was being drawn on a paler cyan at 1.3:1. Error and success text get the same treatment
+ *  ([SceneStyle.danger], [SceneStyle.success]) instead of the dark theme's fixed light red and green.
+ *
+ *  web/src/campaigns.tsx `computeScene` is a line-for-line port of this function and measures the
+ *  accent against the same backgrounds (sceneBase here, SceneMid on the dark scene): change one,
+ *  change the other.
+ *
  *  Bright + light primary: dark ink on a light wash. Bright + dark primary: light ink on a deepened
  *  wash (the gradient in GivingHome is built to match). Either way the tiles are white (slightly
  *  glassy) with big black numbers and an accent "Donate" band. Dark theme: the calm dark scene, light
@@ -409,19 +481,30 @@ private fun bestTextOn(bg: Color): Color {
 private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean, sceneBase: Color): SceneStyle = if (bright) {
     // The ink that wins on the wash the text actually sits on (the gradient's mid stop is sceneBase).
     val ink = bestTextOn(sceneBase)
+    val onScene = if (lightScene) InkBlack else ink
     SceneStyle(
         bright = true,
         accent = accent,
-        // Text on the solid accent (buttons + the two-tone "Donate" band): a DARK ink on a light accent,
-        // white on a dark one. Crossover ≈ 0.4 luminance (well above the 0.179 WCAG break-even) so a
-        // mid-bright accent like the default cyan gets readable dark text, not low-contrast white.
-        onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
-        onScene = if (lightScene) InkBlack else ink,
+        // Text on the solid accent (buttons + the two-tone "Donate" band): whichever ink reads on THAT
+        // fill. This was `luminance > 0.4 ? InkLight : white`, defended by a comment saying the 0.4
+        // crossover was what gave the default cyan dark text — but cyan sits at L≈0.53 and takes dark
+        // ink under either threshold. What the threshold really did was put white on every accent
+        // between L≈0.18 and 0.4, exactly where white fails (Emerald, Sunset, Gold and Teal among the
+        // editor's own presets, at 2.6–3.7:1), and use the dashboard's navy InkLight rather than a
+        // near-black above it, which fell short on Midnight too (4.4:1).
+        onAccent = bestTextOn(accent),
+        accentInk = readableOr(accent, sceneBase, onScene),
+        onScene = onScene,
         // Secondary text (subtitles, hints, Cancel): only a step down from the heading, never a
         // washed-out gray — 12% toward the background keeps the hierarchy and the legibility.
-        onSceneMuted = lerp(if (lightScene) InkBlack else ink, sceneBase, 0.12f),
+        onSceneMuted = lerp(onScene, sceneBase, 0.12f),
+        danger = readableOr(DangerOnBright, sceneBase, onScene),
+        success = readableOr(SuccessOnBright, sceneBase, onScene),
         tile = Color.White.copy(alpha = 0.92f), // slight liquid-glass — the background tints through a touch
         tileInk = InkBlack,                      // big BOLD BLACK numbers, like the reference
+        // Measured against the white TILE, not the wash: on a dark primary the accent can read on the
+        // scene and still vanish on a white tile.
+        tileAccentInk = readableOr(accent, Color.White, InkBlack),
         card = Color.White,
         cardBorder = Color.White,
     )
@@ -429,15 +512,22 @@ private fun sceneStyleFor(bright: Boolean, accent: Color, lightScene: Boolean, s
     SceneStyle(
         bright = false,
         accent = accent,
-        // Same contrast rule as the bright scene — dark ink on a light accent (InkDark is near-white
-        // and would vanish on a pale accent band), white on a dark accent.
-        onAccent = if (accent.luminance() > 0.4f) InkLight else Color.White,
+        // Same rule as the bright scene: the ink that reads on the accent fill. (Never simply the
+        // scene's ink — InkDark is near-white and would vanish on a pale accent band.)
+        onAccent = bestTextOn(accent),
+        // Measured against the dark gradient's middle stop, as the web preview measures it: a deep
+        // custom accent (Ocean, Royal) is 2–3:1 on navy, and gives way to the scene's near-white.
+        accentInk = readableOr(accent, SceneMid, InkDark),
         onScene = InkDark,
         // Brighter than the dashboard's muted ink: that gray is tuned for a monitor an arm's length
         // away, and it greys out on a foyer tablet. Halfway back toward the primary ink.
         onSceneMuted = lerp(InkMutedDark, InkDark, 0.5f),
+        // The dark theme's own tokens are right here: they were made for navy (5.9:1 and 6.3:1).
+        danger = DangerDark,
+        success = SuccessDark,
         tile = SurfaceOverlayDark,
         tileInk = InkDark,
+        tileAccentInk = readableOr(accent, SurfaceOverlayDark, InkDark),
         card = SurfaceRaisedDark,
         cardBorder = SurfaceOverlayDark,
     )

@@ -354,7 +354,7 @@ Follow BUILDING_AN_APP.md §7 exactly; Donations is the working example.
 - **Manifest flags:** `sso: true`, `stripe: true`, `https: true`, `notifications: true`.
 - **Compose must reference** `${OPENMASJID_BASE_URL:-}`, `${OPENMASJID_APP_ID:-}`, `${OPENMASJID_APP_SECRET:-}` in `environment:` — without these lines the injected values never reach the container and the Fabric silently no-ops (the documented Display trap).
 - **SSO:** on the request that loads the admin panel, forward the `omos_session` cookie (from the request only) server→server to `GET ${OPENMASJID_BASE_URL}/api/auth/session` with `X-OpenMasjid-App-Secret`. Identity assertion only; fail closed; cache ~45 s; mint our own session ≤ 1 h; **always** keep the local admin-password fallback so the panel works standalone and never bricks when the platform is unreachable (distinguish *SSO not configured* from *platform unreachable*).
-- **Stripe account (this is "the Fabric gets the Stripe acc from the OS"):** the admin adds named Stripe accounts once in **OS Settings → Payments**. Our Payments screen lists them via `GET /api/fabric/stripe/accounts` (no keys) and stores only the chosen **account id**. On process start (and on account change) fetch keys via `GET /api/fabric/stripe?account=<id>` with the app secret; hold `publishableKey`/`secretKey` **in memory only**. Show a **TEST MODE** badge for `sk_test_`/`pk_test_`. Keep manual key entry as the **standalone fallback** only (platform absent), clearly labeled.
+- **Stripe account (this is "the Fabric gets the Stripe acc from the OS"):** the admin adds named Stripe accounts once in **OS Settings → Payments**. Our Payments screen lists them via `GET /api/fabric/stripe/accounts` (no keys) and stores only the chosen **account id**. On process start (and on account change) fetch keys via `GET /api/fabric/stripe?account=<id>` with the app secret; hold `publishableKey`/`secretKey` **in memory only**. Show a **TEST MODE** badge for `sk_test_`/`pk_test_`. Keep manual key entry as the **standalone fallback** only (platform absent), clearly labeled. **That fallback key IS written to the data volume** (`store.setLocalStripe`) — the one exception to "never persisted", and it predates the Fabric rule. The panel says so plainly ("Saved on this server only") rather than claiming memory-only; whether the fallback should become memory-only (re-entered after every restart) is the maintainer's call, not a silent code change.
 - **Restore resilience (required):** read `OPENMASJID_*` from env on every start; never persist them or fetched keys or a "linked" flag; all Fabric calls time out (~4 s) and fail soft to standalone.
 - **Notifications:** after a successful donation, `POST /api/fabric/notify` (`"$20 donation received at the foyer kiosk"`, level `success`). Best-effort; never block or depend on it.
 
@@ -466,7 +466,7 @@ adoption · About (version, docs links, the AGPL **Source code** link) · **What
 ## 13. Tech stack
 
 - **server/** — Node 22 (`node:22-slim` in the image), TypeScript strict, **Fastify**, **better-sqlite3**, **stripe** SDK, **scrypt** via `node:crypto` for the fallback admin password + PIN hashes (chosen over argon2 by the maintainer, 2026-07-02: zero extra native deps and Pi-friendly — see `docs/ARCHITECTURE.md`), **zod** at every boundary. No WebSocket (heartbeat polling is enough); add SSE for the Devices page if live feel demands it.
-- **web/** — React + Vite + TypeScript + Tailwind (preflight off) + **lucide-react**, and that is the whole runtime dependency list. Tokens and recipes come from **DESIGN.md** (Sakīna Glass) as hand-written CSS in `src/styles/`; animation is CSS transitions and keyframes. (This bullet used to name **shadcn/ui** and **Motion** as well — neither was ever imported by a single file, and `motion` sat in `package.json` as an unused runtime dependency until it was removed on 2026-08-17. Prefer plain CSS here: the panel is a handful of screens and the design language is already expressed as tokens.) Inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
+- **web/** — React + Vite + TypeScript + Tailwind (preflight off) + **lucide-react** + the three self-hosted font packages (`@fontsource-variable/inter`, `space-grotesk`, `noto-naskh-arabic` — CSS and woff2 only, OFL-1.1, added for the app UI spec's §4/§11), and that is the whole runtime dependency list. Tokens and recipes come from **DESIGN.md** (Sakīna Glass) as hand-written CSS in `src/styles/`; animation is CSS transitions and keyframes. (This bullet used to name **shadcn/ui** and **Motion** as well — neither was ever imported by a single file, and `motion` sat in `package.json` as an unused runtime dependency until it was removed on 2026-08-17. Prefer plain CSS here: the panel is a handful of screens and the design language is already expressed as tokens.) Inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
   ├── android/                 # Kotlin + Jetpack Compose, THREE Gradle modules:
   │     ├── core/              #   shared: server client, pairing, device store, Terminal, theme
   │     ├── app/               #   the locked-down wall KIOSK (HOME launcher, Lock Task, exit PIN)
@@ -887,3 +887,80 @@ resolve. A `404` past that is still `unknown`, never failure.
   auth-critical may ride on it.
 
 Full contract: OpenMasjidOS `docs/WHATSAPP.md` and `docs/APP_MANIFEST_SPEC.md`, **dev** branch.
+
+---
+
+## 19. The OpenMasjid app UI/UX spec — how this panel meets it
+
+OpenMasjidOS `docs/APP_UI_DESIGN_SPEC.md` is the look-and-feel contract for every app a masjid opens
+from the dashboard ("nothing about the transition should feel like leaving"). The panel was brought
+to it in 0.14.0. What follows is WHERE each rule lives and the decisions that are easy to undo by
+accident — most have a test that fails if you do.
+
+**Appearance at runtime (§1).** `web/index.html`'s inline pre-paint script reads the `#omos=`
+fragment, falls back to saved prefs, and writes theme, wallpaper, the accent (fill AND ink) and `dir`
+before the first frame. Its three tables are generated at build time from `web/src/accents.ts` and
+`web/src/appearance.ts` by `vite.config.ts` — never hand-copy them (`prepaint.test.ts` runs the real
+script). `web/src/prefs.ts` then owns the live look and polls our same-origin relay of
+`/api/public/appearance`; the relay rewrites the platform's `logo` to our own `GET /api/public/logo`
+(a fixed-URL, size-capped, raster-only proxy). The fragment is attacker-craftable: every value is
+checked against a fixed list (`isAccentId` is an own-property check — `ACCENTS['toString']` exists).
+
+**The five accents carry their ink (§3), and light theme needs one more step.** `accents.ts` holds
+the platform's `primary/hover/subtle/onPrimary` byte-for-byte, plus our own `text/textHover`: in LIGHT
+theme `--color-primary` is a foreground (links, focus ring, active dock item) and a bright accent on a
+pale surface is 1.7–2.7:1, so light theme writes the darker shade there and keeps the bright accent
+for `--color-btn` fills. **Filled controls use `--color-btn`, never `--color-primary`** — that is what
+their `--color-on-primary` ink was chosen for (`theme-contrast.test.ts` checks the selectors).
+
+**Tokens deliberately differ from the platform where its value fails AA** (§7 outranks a
+transcription): ink-muted/faint in both themes, light `--color-primary` (#0369A1), and the status
+colours' `-ink` text variants (`--color-success-ink` etc. — the fills stay the platform's). Status
+colours are never used as TEXT directly; a test enforces it. `--color-on-danger` is the ink on every
+destructive button.
+
+**Surfaces (§5, §8).** `.glass` panels are SOLID raised surfaces; the frosted material is only on
+things that float alone (`.glass-raised`: dock, account menu, sign-in cards). No nested blur, no
+continuous animation (the aurora is still; the status pulse runs three times), skeletons not spinners
+(`<Skeleton>` in `primitives.tsx`), a grid staggers once on mount (`.stagger` + `--i`).
+
+**Type (§4, §11).** Inter + Space Grotesk self-hosted, and Noto Naskh Arabic's arabic subset only
+(declared by hand in `index.css` — the package's own CSS would take over arrows and ✓). **Tabular
+digits are on numeric classes, NOT on `body`**: Inter's `tnum` also widens the hyphen and parentheses,
+and globally it put "thank - you" into every sentence. Add a class to the list in `app.css`, or use
+`.num`.
+
+**Right to left (§6).** `dir` follows the dashboard's language; `lang` stays `"en"` because the copy
+is English (a screen reader would otherwise read English with Arabic rules). In `[dir=rtl]` every text
+element is `unicode-bidi: plaintext`, so an English sentence keeps its punctuation. Things with no
+letters (phone numbers, codes, URLs, amount inputs) carry `dir="ltr"`; icons that point along the line
+carry `.rtl-flip`. **Never put loose text beside a `<b>`/`<a>` directly in a flex container** — they
+become separate flex items and swap round in RTL; wrap the sentence in one `<span>`. `?dir=rtl` in the
+address forces it for one load, to look. On Android the keyboard, number pads and the reader-side hint
+are forced LTR/absolute on purpose (physical things).
+
+**Dialogs (§7).** `web/src/modal.tsx` — a native `<dialog>` with `showModal()`: focus trap, Escape,
+backdrop click and focus return. Never hand-roll one again. Busy controls use `aria-disabled` + an
+early return, not `disabled`, so focus is not dropped (styled at the end of `app.css`).
+
+**Dates (§10).** `web/src/dates.ts` and `server/src/dates.ts` (kept identical — `dates-parity.test.ts`)
+format every date as Gregorian · Hijri in the MASJID'S time zone and 12/24-hour choice, from the
+masjid details (`timeZone`, `clock24h`, `hijriOffset`; locale `en-<country>`). Never
+`toLocaleString()` with the browser's locale, never `dateStyle` + `timeZoneName` (that combination
+throws — it is why every receipt used to print a raw ISO string). A zone-less `YYYY-MM-DD` goes
+through `formatCalendarDate`, never `new Date()`.
+
+**Money (§10).** `formatMoney` on all three surfaces uses `Intl.NumberFormat` in the masjid locale with
+STRIPE'S decimals, never ICU's (ICU gives PKR 0 decimals). A row is formatted in its own currency.
+`grossUpForFees(base, currency)` takes the currency on purpose: the tablet and the server must compute
+the same cover-the-fee total.
+
+**Voice (§9).** `api.ts` turns network errors, 5xx and 401s into plain sentences; technical text goes
+in `<details className="tech-details">`; an outcome is a `<ResultLine>` (icon, colour and live role
+together); a queued WhatsApp is never "sent".
+
+**Not covered by the shared design system, by decision:** the donor giving screen is Compose, and its
+colours are the campaign's own design — the OS accent is NOT forwarded to tablets. Android does not
+bundle Inter/Space Grotesk (Roboto's digits are already tabular, and a font change on a screen we
+cannot run here is a risk the spec does not require); `tnum` is set on every style. Stripe.js in
+`kioskpay.html` is the one external script, and PCI requires it.

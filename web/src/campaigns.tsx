@@ -9,9 +9,19 @@
  *  live: kiosks pick the change up on their next check-in. Amounts are edited in whole/decimal
  *  currency units but stored as integer MINOR units. Non-optimistic — every change re-hydrates
  *  from the server's response. */
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
-  CheckCircle2,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react';
+import {
   ChevronDown,
   ChevronUp,
   Megaphone,
@@ -26,6 +36,7 @@ import {
 import {
   createCampaign,
   deleteCampaign,
+  errorText,
   getCampaigns,
   getGiving,
   reorderCampaigns,
@@ -43,10 +54,18 @@ import {
   type StripeAccountRef,
   type TabSize,
 } from './api';
-import { formatMoney, symbolFor, toMajorStr, toMinor } from './money';
-import { safeImageUrl } from './ui';
-
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
+import {
+  bestInkOn,
+  contrastRatio,
+  DEFAULT_CAMPAIGN_ACCENT,
+  defaultCampaignPrimary,
+  INK_BLACK,
+  mixHex,
+  relLuminance,
+  THEME_PRESETS,
+} from './contrast';
+import { factor, formatMoney, symbolFor, toMajorStr, toMinor } from './money';
+import { ResultLine, safeImageUrl, Skeleton, Toggle, useClock } from './ui';
 
 const MAX_PRESETS = 6;
 
@@ -63,49 +82,15 @@ const TAB_SIZES: { id: TabSize; label: string; font: number; padX: number; padY:
  *  or get cut off on the giving screen. */
 const TITLE_MAX = 48;
 const DESC_MAX = 150;
-/** Shown in the color picker while a campaign inherits the default accent (it needs a value). */
-const DEFAULT_ACCENT = '#22d3ee';
-/** Shown in the primary-color picker while a campaign inherits the default background. */
-const DEFAULT_PRIMARY = '#a8f2b7';
+/** The server's cap on an image address (index.ts campaign schema). Enforced on the box too, so a
+ *  pasted address that is too long stops at the limit while typing instead of failing the whole save
+ *  with a message that names no field. */
+const IMAGE_URL_MAX = 500;
 
-/** Curated theme presets — a primary (background) + accent (buttons) that go well together. Picking
- *  one just POPULATES the two color fields; the admin can still tweak either afterwards. */
-const THEME_PRESETS: { name: string; primary: string; accent: string }[] = [
-  { name: 'Emerald', primary: '#a8f2b7', accent: '#1fa37a' },
-  { name: 'Ocean', primary: '#bfe3ff', accent: '#2563eb' },
-  { name: 'Sunset', primary: '#ffd9b3', accent: '#ea580c' },
-  { name: 'Royal', primary: '#e0d4ff', accent: '#7c3aed' },
-  { name: 'Rose', primary: '#ffd6e5', accent: '#e11d63' },
-  { name: 'Gold', primary: '#fdeec2', accent: '#c99a2e' },
-  { name: 'Teal', primary: '#bff2ee', accent: '#0d9488' },
-  { name: 'Midnight', primary: '#1e293b', accent: '#38bdf8' },
-];
+// The colour helpers, the curated THEME_PRESETS and the two default campaign colours live in
+// contrast.ts, which is React-free so server/src/ink-contrast.test.ts can prove every preset gets
+// readable ink. They used to be private to this file, where no test could reach them.
 
-// ── Color helpers (mirror the kiosk's scene logic so the preview matches the device) ─────────────
-function hexToRgb(hex: string): [number, number, number] | null {
-  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
-  if (!m) return null;
-  const n = parseInt(m[1], 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-/** Mix `hex` toward `toward` by fraction `t` (0..1), returning a #rrggbb string. */
-function mixHex(hex: string, toward: string, t: number): string {
-  const a = hexToRgb(hex);
-  const b = hexToRgb(toward);
-  if (!a || !b) return hex;
-  const c = a.map((v, i) => Math.round(v + (b[i] - v) * t));
-  return `#${c.map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('')}`;
-}
-/** WCAG relative luminance of a #rrggbb color (0 = black, 1 = white). */
-function relLuminance(hex: string): number {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return 0.5;
-  const [r, g, b] = rgb.map((v) => {
-    const s = v / 255;
-    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
 /** A friendly starting set for a brand-new campaign (major units; the admin edits them). */
 const DEFAULT_NEW_PRESETS = ['5', '10', '25', '50', '100'];
 
@@ -154,15 +139,21 @@ export function openCampaignEditor(e: ReactMouseEvent<HTMLAnchorElement>, href: 
 export function CampaignsSection() {
   const [data, setData] = useState<CampaignsData | null>(null);
   const [loadErr, setLoadErr] = useState('');
+  const [retrying, setRetrying] = useState(false);
   const [actErr, setActErr] = useState('');
   const [pending, setPending] = useState(''); // id of the campaign a list action is mutating
+  // Where focus goes when the control that had it is gone: a deleted row, or the "Try again" button
+  // once the list it was standing in for has loaded. Focusable by script only (tabIndex -1).
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (): Promise<boolean> => {
     try {
       setData(await getCampaigns());
       setLoadErr('');
+      return true;
     } catch (e) {
-      setLoadErr(errMsg(e));
+      setLoadErr(errorText(e));
+      return false;
     }
   }, []);
 
@@ -170,15 +161,27 @@ export function CampaignsSection() {
     void reload();
   }, [reload]);
 
-  // Run a list action (make-main / reorder / delete), then re-hydrate from the server.
-  const runAction = async (id: string, fn: () => Promise<unknown>) => {
+  // A real retry. The failure line used to promise "trying again shortly", but the list only ever
+  // loaded once, so an admin waited for something that never came.
+  const retry = async () => {
+    if (retrying) return; // aria-disabled, not disabled: the button keeps focus while it works
+    setRetrying(true);
+    const ok = await reload();
+    setRetrying(false);
+    if (ok) headingRef.current?.focus();
+  };
+
+  // Run a list action (make-main / reorder / delete), then re-hydrate from the server. `after` runs
+  // only once the action and the re-hydrate have both finished, for moving focus off a row that is gone.
+  const runAction = async (id: string, fn: () => Promise<unknown>, after?: () => void) => {
     setActErr('');
     setPending(id);
     try {
       await fn();
       await reload();
+      after?.();
     } catch (e) {
-      setActErr(errMsg(e));
+      setActErr(errorText(e));
     } finally {
       setPending('');
     }
@@ -200,35 +203,47 @@ export function CampaignsSection() {
     <>
       <GlobalSettingsCard />
 
-      <section className="glass panel">
+      <section className="glass panel" aria-busy={!data && !loadErr}>
         <div className="card-head">
           <Megaphone size={18} className="panel-ico" aria-hidden="true" />
           <div className="card-head__main">
-            <h2 className="section-title-inline">Campaigns</h2>
+            <h2 className="section-title-inline" ref={headingRef} tabIndex={-1}>Campaigns</h2>
             <p className="muted">Each appeal is its own giving screen (a tab on the kiosk). Your main campaign always shows first.</p>
           </div>
           {data && (
             <a
               className="btn btn--primary btn--sm"
-              style={{ marginInlineStart: 'auto' }}
+              style={{ marginInlineStart: 'auto', flex: 'none', whiteSpace: 'nowrap' }}
               href={campaignEditorHref('new')}
               target="_blank"
               onClick={(e) => openCampaignEditor(e, campaignEditorHref('new'))}
             >
-              <Plus size={15} /> New campaign
+              <Plus size={15} aria-hidden="true" /> New campaign
             </a>
           )}
         </div>
 
         {!data ? (
           loadErr ? (
-            <p className="hint">We couldn't load your campaigns just now — trying again shortly.</p>
+            <>
+              <ResultLine ok={false}>We couldn’t load your campaigns. {loadErr}</ResultLine>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                style={{ marginBlockStart: '0.6rem' }}
+                aria-disabled={retrying}
+                onClick={() => void retry()}
+              >
+                {retrying ? 'Trying again…' : 'Try again'}
+              </button>
+            </>
           ) : (
-            <p className="muted">Loading…</p>
+            // Shaped like the rows it stands in for.
+            <Skeleton rows={3} height="3.4rem" label="Loading your campaigns…" />
           )
         ) : (
           <>
-            {actErr && <p className="form-error">{actErr}</p>}
+            {actErr && <ResultLine ok={false}>{actErr}</ResultLine>}
             <div className="camp-list">
               {data.campaigns.map((c) => (
                 <CampaignRow
@@ -241,7 +256,9 @@ export function CampaignsSection() {
                   onMakeMain={() => void runAction(c.id, () => setMainCampaign(c.id))}
                   onMoveUp={() => move(c.id, -1)}
                   onMoveDown={() => move(c.id, 1)}
-                  onDelete={() => void runAction(c.id, () => deleteCampaign(c.id))}
+                  // The row, and the button that had focus, disappear with the campaign — so focus goes
+                  // to the list's heading rather than falling back to the top of the page.
+                  onDelete={() => void runAction(c.id, () => deleteCampaign(c.id), () => headingRef.current?.focus())}
                 />
               ))}
             </div>
@@ -255,8 +272,11 @@ export function CampaignsSection() {
 
 // ── Kiosk-wide settings (shared by every campaign) ────────────────────────────────
 function GlobalSettingsCard() {
+  useClock(); // the amount boxes' currency symbol follows the masjid's locale once it loads
   const [loaded, setLoaded] = useState<GivingSettings | null>(null);
   const [loadErr, setLoadErr] = useState('');
+  const [retrying, setRetrying] = useState(false);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const [masjidName, setMasjidName] = useState('');
   const [namePolicy, setNamePolicy] = useState<PromptPolicy>('optional');
   const [emailPolicy, setEmailPolicy] = useState<PromptPolicy>('optional');
@@ -293,13 +313,30 @@ function GlobalSettingsCard() {
     let alive = true;
     getGiving()
       .then((s) => alive && hydrate(s))
-      .catch((e) => alive && setLoadErr(errMsg(e)));
+      .catch((e) => alive && setLoadErr(errorText(e)));
     return () => {
       alive = false;
     };
   }, [hydrate]);
 
+  // The failure line used to say "try again shortly" with nothing to press but the browser's reload.
+  const retry = async () => {
+    if (retrying) return; // aria-disabled, so the button keeps focus while it works
+    setRetrying(true);
+    try {
+      hydrate(await getGiving());
+      setLoadErr('');
+      // The button is about to be replaced by the form; land on the card's heading, not the page top.
+      headingRef.current?.focus();
+    } catch (e) {
+      setLoadErr(errorText(e));
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   const save = async () => {
+    if (busy) return; // aria-disabled rather than disabled, so the pressed button keeps focus
     setErr('');
     setSaved(false);
     setBusy(true);
@@ -321,27 +358,39 @@ function GlobalSettingsCard() {
       hydrate(fresh);
       setSaved(true);
     } catch (e) {
-      setErr(errMsg(e));
+      setErr(errorText(e));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <section className="glass panel">
+    <section className="glass panel" aria-busy={!loaded && !loadErr}>
       <div className="card-head">
         <SlidersHorizontal size={18} className="panel-ico" aria-hidden="true" />
         <div className="card-head__main">
-          <h2 className="section-title-inline">Kiosk settings</h2>
+          <h2 className="section-title-inline" ref={headingRef} tabIndex={-1}>Kiosk settings</h2>
           <p className="muted">Shared by every campaign. Changes reach your kiosks within a few seconds.</p>
         </div>
       </div>
 
       {!loaded ? (
         loadErr ? (
-          <p className="hint">Couldn't load these settings just now — try again shortly.</p>
+          <>
+            <ResultLine ok={false}>We couldn’t load these settings. {loadErr}</ResultLine>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              style={{ marginBlockStart: '0.6rem' }}
+              aria-disabled={retrying}
+              onClick={() => void retry()}
+            >
+              {retrying ? 'Trying again…' : 'Try again'}
+            </button>
+          </>
         ) : (
-          <p className="muted">Loading…</p>
+          // Shaped like the first few fields it stands in for.
+          <Skeleton rows={4} height="2.4rem" widths={['100%', '100%', '70%', '85%']} label="Loading your kiosk settings…" />
         )
       ) : (
         <>
@@ -358,7 +407,7 @@ function GlobalSettingsCard() {
 
           <TabSizeField value={tabSize} onChange={setTabSize} />
 
-          <p className="hint" style={{ marginTop: '0.25rem' }}>
+          <p className="hint" style={{ marginBlock: '0.25rem 0.9rem' }}>
             Donors can always tap “Enter card details” to pay by typing their card — with or without a
             reader connected. (Your Stripe account must have online card payments enabled.)
           </p>
@@ -386,10 +435,11 @@ function GlobalSettingsCard() {
               <div className="field" style={{ flex: 1, minWidth: '10rem' }}>
                 <label className="label" htmlFor="g-large">Show it at or above <span className="faint">({currency})</span></label>
                 <div className="preset-input">
-                  <span className="preset-sym" aria-hidden="true">{symbolFor(currency) || currency}</span>
+                  <span className="preset-sym" aria-hidden="true">{symbolFor(currency)}</span>
                   <input
                     id="g-large"
                     className="input"
+                    dir="ltr"
                     value={largeThreshold}
                     inputMode="decimal"
                     placeholder="e.g. 250"
@@ -430,10 +480,11 @@ function GlobalSettingsCard() {
             <div className="field" style={{ maxWidth: '16rem' }}>
               <label className="label" htmlFor="g-celebrate">Only for gifts of at least <span className="faint">({currency})</span></label>
               <div className="preset-input">
-                <span className="preset-sym" aria-hidden="true">{symbolFor(currency) || currency}</span>
+                <span className="preset-sym" aria-hidden="true">{symbolFor(currency)}</span>
                 <input
                   id="g-celebrate"
                   className="input"
+                  dir="ltr"
                   value={celebrateThreshold}
                   inputMode="decimal"
                   placeholder="e.g. 100"
@@ -444,17 +495,14 @@ function GlobalSettingsCard() {
             </div>
           )}
 
-          {err && <p className="form-error">{err}</p>}
           <div className="row" style={{ gap: '0.6rem', flexWrap: 'wrap', marginBlockStart: '0.4rem' }}>
-            <button className="btn btn--primary" onClick={() => void save()} disabled={busy}>
+            <button className="btn btn--primary" onClick={() => void save()} aria-disabled={busy}>
               {busy ? 'Saving…' : 'Save & push to kiosks'}
             </button>
-            {saved && (
-              <span className="status-pill status-pill--ok">
-                <CheckCircle2 size={14} /> Saved — kiosks update shortly
-              </span>
-            )}
           </div>
+          {/* The outcome, announced as it appears. "Update shortly" is honest: saving reaches the server,
+              and each kiosk picks the change up on its next check-in. */}
+          {err ? <ResultLine ok={false}>{err}</ResultLine> : saved ? <ResultLine ok>Saved — kiosks update shortly</ResultLine> : null}
         </>
       )}
     </section>
@@ -517,7 +565,11 @@ function TabSizeField({ value, onChange }: { value: TabSize; onChange: (v: TabSi
                 borderRadius: '18px 18px 6px 6px',
                 border: `2px solid ${s.color}`,
                 background: selected ? s.color : `${s.color}33`,
-                color: selected ? '#fff' : '#0a2b38',
+                // The same inks the tablet draws: on the filled tab, whichever of near-black and white
+                // reads better on THAT fill (CampaignTabs uses bestTextOn) — a fixed white measured
+                // 3.2–3.7:1 on these very samples, and the kiosk never showed it; off it, the scene ink,
+                // which on a light wash like this one is near-black.
+                color: selected ? bestInkOn(s.color) : INK_BLACK,
                 boxShadow: selected ? '0 6px 14px rgba(0,0,0,0.22)' : 'none',
                 whiteSpace: 'nowrap',
               }}
@@ -557,7 +609,33 @@ function CampaignRow({
 }) {
   const [confirming, setConfirming] = useState(false);
   // An empty accent inherits the default — show the default swatch color so the chip isn't blank.
-  const swatch = c.accentColor || 'var(--color-primary)';
+  // The KIOSK's default, not the viewer's OS accent: the tablet paints a blank accent as cyan whatever
+  // the dashboard's theme, so a gold OS accent here would misreport what donors see.
+  const swatch = c.accentColor || DEFAULT_CAMPAIGN_ACCENT;
+
+  const deleteRef = useReturnFocus(confirming);
+  const upRef = useRef<HTMLButtonElement>(null);
+  const downRef = useRef<HTMLButtonElement>(null);
+  const mainRef = useRef<HTMLButtonElement>(null);
+  const editRef = useRef<HTMLAnchorElement>(null);
+  // Which control started the action in flight, so focus can go back to it once the list has
+  // re-hydrated. Moving a row re-inserts its DOM node, which drops focus; and "Make main" removes its
+  // own button, so focus goes to the row's Edit link, which is still there.
+  const started = useRef<'up' | 'down' | 'main' | null>(null);
+  useEffect(() => {
+    if (busy || !started.current) return;
+    const which = started.current;
+    started.current = null;
+    const target = which === 'up' ? upRef.current : which === 'down' ? downRef.current : (mainRef.current ?? editRef.current);
+    target?.focus();
+  }, [busy]);
+  // aria-disabled rather than disabled on every control that can be pressed while a request runs: a
+  // disabled button loses focus, and the keyboard user is thrown back to the top of the page.
+  const press = (which: 'up' | 'down' | 'main', allowed: boolean, fn: () => void) => () => {
+    if (busy || !allowed) return;
+    started.current = which;
+    fn();
+  };
 
   return (
     <div className="camp-row glass-inset">
@@ -578,34 +656,55 @@ function CampaignRow({
       <div className="camp-actions">
         {!c.isMain && (
           <span className="camp-reorder">
-            <button className="icon-btn icon-btn--sm" onClick={onMoveUp} disabled={busy || !canUp} aria-label="Move up" title="Move up">
-              <ChevronUp size={16} />
+            <button
+              ref={upRef}
+              className="icon-btn icon-btn--sm"
+              onClick={press('up', canUp, onMoveUp)}
+              aria-disabled={busy || !canUp}
+              aria-label="Move up"
+              title="Move up"
+            >
+              <ChevronUp size={16} aria-hidden="true" />
             </button>
-            <button className="icon-btn icon-btn--sm" onClick={onMoveDown} disabled={busy || !canDown} aria-label="Move down" title="Move down">
-              <ChevronDown size={16} />
+            <button
+              ref={downRef}
+              className="icon-btn icon-btn--sm"
+              onClick={press('down', canDown, onMoveDown)}
+              aria-disabled={busy || !canDown}
+              aria-label="Move down"
+              title="Move down"
+            >
+              <ChevronDown size={16} aria-hidden="true" />
             </button>
           </span>
         )}
         {!c.isMain && (
-          <button className="btn btn--ghost btn--sm" onClick={onMakeMain} disabled={busy} title="Show this campaign first, always">
+          <button
+            ref={mainRef}
+            className="btn btn--ghost btn--sm"
+            onClick={press('main', true, onMakeMain)}
+            aria-disabled={busy}
+            title="Show this campaign first, always"
+          >
             <Star size={14} aria-hidden="true" /> Make main
           </button>
         )}
-        <a className="btn btn--ghost btn--sm" href={editHref} target="_blank" onClick={(e) => openCampaignEditor(e, editHref)}>
+        <a ref={editRef} className="btn btn--ghost btn--sm" href={editHref} target="_blank" onClick={(e) => openCampaignEditor(e, editHref)}>
           <Pencil size={14} aria-hidden="true" /> Edit
         </a>
         {!c.isMain &&
           (confirming ? (
             <>
-              <button className="btn btn--sm device-danger" onClick={onDelete} disabled={busy}>
-                {busy ? 'Deleting…' : 'Confirm delete'}
+              <button className="btn btn--sm device-danger" onClick={() => !busy && onDelete()} aria-disabled={busy}>
+                {busy ? 'Deleting…' : 'Yes, delete this campaign'}
               </button>
-              <button className="btn btn--ghost btn--sm" onClick={() => setConfirming(false)} disabled={busy}>
+              {/* Focus lands on the harmless choice, so a double press of Delete cannot delete. */}
+              <button className="btn btn--ghost btn--sm" onClick={() => setConfirming(false)} disabled={busy} autoFocus>
                 Cancel
               </button>
             </>
           ) : (
-            <button className="btn btn--ghost btn--sm device-remove-btn" onClick={() => setConfirming(true)}>
+            <button ref={deleteRef} className="btn btn--ghost btn--sm device-remove-btn" onClick={() => setConfirming(true)}>
               <Trash2 size={14} aria-hidden="true" /> Delete
             </button>
           ))}
@@ -614,7 +713,24 @@ function CampaignRow({
   );
 }
 
-// ── The campaign editor (modal with a live preview) ───────────────────────────────
+/**
+ * The Delete button behind a Confirm/Cancel pair, focused again when the pair closes without deleting.
+ *
+ * The pair REPLACES the button that opened it, so backing out (Cancel, or a failed delete) would
+ * otherwise leave focus on nothing and a keyboard user back at the top of the page. A successful delete
+ * never gets here: the row, or the whole editor tab, is gone.
+ */
+function useReturnFocus(open: boolean) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    if (wasOpen.current && !open) ref.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
+  return ref;
+}
+
+// ── The campaign editor (a page with a live preview) ──────────────────────────────
 function CampaignEditor({
   campaign,
   currency,
@@ -636,6 +752,7 @@ function CampaignEditor({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  useClock(); // the amount boxes' symbol and the preview's amounts follow the masjid's locale
   const editing = !!campaign;
   const isMain = campaign?.isMain ?? false;
 
@@ -668,6 +785,8 @@ function CampaignEditor({
   const [del, setDel] = useState(false);
   const [confirmingDel, setConfirmingDel] = useState(false);
   const [err, setErr] = useState('');
+  const deleteRef = useReturnFocus(confirmingDel);
+  const tabRefs = useRef<Partial<Record<CampaignTabId, HTMLButtonElement | null>>>({});
 
   // Keep the local fee state honest with the type→fee rule as the admin switches type, so the labels
   // match what the server will actually save (the server re-derives authoritatively via deriveFees).
@@ -681,14 +800,28 @@ function CampaignEditor({
     // tuition: leave forceCoverFees to the admin's "require" toggle.
   }, [type]);
 
-  // Close on Escape (matches the Devices logs modal).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  // No Escape handler, deliberately. This used to close on Escape "like the Devices logs modal", from
+  // when it was a dialog — but it is a page now, and a stray Escape in the title or a hex box threw away
+  // every unsaved edit and closed the tab without asking. Escape closes dialogs; nothing on a page.
+
+  // The settings tabs follow the ARIA tabs pattern: one tab stop for the whole strip (roving tabIndex),
+  // arrows move between tabs and select as they go, Home/End jump to the ends. The arrows follow the
+  // reading direction, so under dir="rtl" the RIGHT arrow walks back along the strip.
+  const onTabKey = (e: ReactKeyboardEvent<HTMLButtonElement>, from: CampaignTabId) => {
+    const n = CAMPAIGN_TABS.length;
+    const i = CAMPAIGN_TABS.findIndex((t) => t.id === from);
+    const forward = getComputedStyle(e.currentTarget).direction === 'rtl' ? -1 : 1;
+    let j: number;
+    if (e.key === 'ArrowRight') j = i + forward;
+    else if (e.key === 'ArrowLeft') j = i - forward;
+    else if (e.key === 'Home') j = 0;
+    else if (e.key === 'End') j = n - 1;
+    else return;
+    e.preventDefault();
+    const next = CAMPAIGN_TABS[(j + n) % n].id;
+    setTab(next);
+    tabRefs.current[next]?.focus();
+  };
 
   const setPreset = (i: number, v: string) => setPresets((ps) => ps.map((p, j) => (j === i ? v.replace(/[^\d.]/g, '') : p)));
   const removePreset = (i: number) => setPresets((ps) => ps.filter((_, j) => j !== i));
@@ -705,6 +838,7 @@ function CampaignEditor({
   const showAccountPicker = accounts.length > 0 || hasLocal;
 
   const save = async () => {
+    if (busy || del) return; // aria-disabled rather than disabled, so the pressed button keeps focus
     setErr('');
     const t = title.trim();
     if (!t) {
@@ -719,8 +853,11 @@ function CampaignEditor({
       setErr('Add at least one suggested amount.');
       return;
     }
-    const min = toMinor(customMin, currency) || 100;
-    const max = toMinor(customMax, currency) || 1_000_000;
+    // Blank bounds fall back to one whole unit and ten thousand — scaled by the currency's own minor
+    // unit, never a raw 100. As literals these were 0.100 KWD and 1,000 KWD for a Gulf masjid, and
+    // ¥100 and ¥1,000,000 for a yen one.
+    const min = toMinor(customMin, currency) || factor(currency);
+    const max = toMinor(customMax, currency) || 10_000 * factor(currency);
     if (type !== 'tuition' && allowCustom && max < min) {
       setTab('amounts');
       setErr('The maximum custom amount must be at least the minimum.');
@@ -756,22 +893,22 @@ function CampaignEditor({
       else await createCampaign(patch);
       onSaved(); // parent closes + re-hydrates; this component unmounts
     } catch (e) {
-      setErr(errMsg(e));
+      setErr(errorText(e));
       setBusy(false);
     }
   };
 
   const remove = async () => {
-    if (!campaign) return;
+    if (!campaign || del) return;
     setErr('');
     setDel(true);
     try {
       await deleteCampaign(campaign.id);
       onSaved();
     } catch (e) {
-      setErr(errMsg(e));
+      setErr(errorText(e));
       setDel(false);
-      setConfirmingDel(false);
+      setConfirmingDel(false); // closes the pair; useReturnFocus puts focus back on Delete
     }
   };
 
@@ -832,25 +969,32 @@ function CampaignEditor({
               <div className="field">
                 <label className="label" htmlFor="c-title">Title</label>
                 <input id="c-title" className="input" value={title} maxLength={TITLE_MAX} placeholder="e.g. General fund, Zakat, Building fund" onChange={(e) => setTitle(e.target.value)} autoFocus />
-                <span className={title.length > TITLE_MAX ? 'form-error' : 'hint'} style={{ textAlign: 'end' }}>{title.length}/{TITLE_MAX} — this is the tab name, so keep it short.</span>
+                <span className={`char-count ${title.length > TITLE_MAX ? 'form-error' : 'hint'}`}>{title.length}/{TITLE_MAX} — this is the tab name, so keep it short.</span>
               </div>
 
               <div className="ce-tabs" role="tablist" aria-label="Campaign settings">
                 {CAMPAIGN_TABS.map((t) => (
                   <button
                     key={t.id}
+                    ref={(el) => {
+                      tabRefs.current[t.id] = el;
+                    }}
                     type="button"
                     role="tab"
+                    id={`ce-tab-${t.id}`}
                     aria-selected={tab === t.id}
+                    aria-controls="ce-panel"
+                    tabIndex={tab === t.id ? 0 : -1}
                     className={`ce-tab${tab === t.id ? ' ce-tab--on' : ''}`}
                     onClick={() => setTab(t.id)}
+                    onKeyDown={(e) => onTabKey(e, t.id)}
                   >
                     {t.label}
                   </button>
                 ))}
               </div>
 
-              <div className="ce-panel" role="tabpanel">
+              <div className="ce-panel" role="tabpanel" id="ce-panel" aria-labelledby={`ce-tab-${tab}`}>
                 {tab === 'design' && (
                   <>
                     <div className="field">
@@ -861,14 +1005,16 @@ function CampaignEditor({
                             key={p.name}
                             type="button"
                             className={`theme-preset${primaryColor === p.primary && accentColor === p.accent ? ' theme-preset--on' : ''}`}
+                            // The ring is not the only sign of the chosen preset: a screen reader hears it too.
+                            aria-pressed={primaryColor === p.primary && accentColor === p.accent}
                             title={`${p.name} — sets the colors below (still editable)`}
                             onClick={() => {
                               setPrimaryColor(p.primary);
                               setAccentColor(p.accent);
                             }}
                           >
-                            <span className="theme-preset-sw" style={{ background: p.primary }} />
-                            <span className="theme-preset-sw" style={{ background: p.accent }} />
+                            <span className="theme-preset-sw" style={{ background: p.primary }} aria-hidden="true" />
+                            <span className="theme-preset-sw" style={{ background: p.accent }} aria-hidden="true" />
                             <span className="theme-preset-name">{p.name}</span>
                           </button>
                         ))}
@@ -881,7 +1027,7 @@ function CampaignEditor({
                       label="Primary color"
                       sub="(background)"
                       value={primaryColor}
-                      fallback={DEFAULT_PRIMARY}
+                      fallback={defaultCampaignPrimary(accentColor)}
                       unsetLabel="Using the default background"
                       onChange={setPrimaryColor}
                       hint="Tints the giving screen's background — a soft wash of this color behind the amount tiles."
@@ -891,8 +1037,10 @@ function CampaignEditor({
                       label="Accent color"
                       sub="(buttons)"
                       value={accentColor}
-                      fallback={DEFAULT_ACCENT}
-                      unsetLabel="Using your default accent"
+                      fallback={DEFAULT_CAMPAIGN_ACCENT}
+                      // "the", not "your": a blank accent is the kiosk's fixed default, not the
+                      // dashboard's accent — tablets are not themed from OpenMasjidOS.
+                      unsetLabel="Using the default accent"
                       onChange={setAccentColor}
                       hint="The color of the “Donate” band on each amount tile, and the buttons."
                     />
@@ -909,7 +1057,10 @@ function CampaignEditor({
 
                     <ImageField id="c-cover" label="Cover image (optional)" hint="Shown on the giving card." value={coverImage} onChange={setCoverImage} />
                     <ImageField id="c-bg" label="Background image (optional)" hint="This tab's full-screen background. Leave empty for the default look." value={backgroundImage} onChange={setBackgroundImage} />
-                    <ImageField id="c-logo" label="Campaign logo (optional)" hint="Shown at the top of this campaign. Leave empty to use your masjid logo." value={logo} onChange={setLogo} />
+                    {/* The hint used to promise "Leave empty to use your masjid logo", but neither the tablet
+                        nor the preview has ever fallen back to one — a blank logo shows nothing and the
+                        title leads. Say what actually happens. */}
+                    <ImageField id="c-logo" label="Campaign logo (optional)" hint="Shown at the top of this campaign. Leave empty for no logo — the campaign title leads." value={logo} onChange={setLogo} />
                   </>
                 )}
 
@@ -929,17 +1080,18 @@ function CampaignEditor({
                       <div className="preset-grid">
                         {presets.map((p, i) => (
                           <div className="preset-input" key={i}>
-                            <span className="preset-sym" aria-hidden="true">{symbolFor(currency) || currency}</span>
-                            <input className="input" value={p} inputMode="decimal" aria-label={`Suggested amount ${i + 1}`} onChange={(e) => setPreset(i, e.target.value)} />
-                            <button className="preset-rm" onClick={() => removePreset(i)} aria-label="Remove amount" title="Remove">
-                              <X size={13} strokeWidth={3} />
+                            <span className="preset-sym" aria-hidden="true">{symbolFor(currency)}</span>
+                            <input className="input" dir="ltr" value={p} inputMode="decimal" aria-label={`Suggested amount ${i + 1}`} onChange={(e) => setPreset(i, e.target.value)} />
+                            {/* Numbered like the box beside it: six buttons all called "Remove amount" could not be told apart. */}
+                            <button className="preset-rm" onClick={() => removePreset(i)} aria-label={`Remove amount ${i + 1}`} title="Remove">
+                              <X size={13} strokeWidth={3} aria-hidden="true" />
                             </button>
                           </div>
                         ))}
                       </div>
                       {presets.length < MAX_PRESETS && (
                         <button className="btn btn--ghost btn--sm" onClick={addPreset} style={{ marginBlockStart: '0.5rem' }}>
-                          <Plus size={14} /> Add amount
+                          <Plus size={14} aria-hidden="true" /> Add amount
                         </button>
                       )}
                     </div>
@@ -949,11 +1101,11 @@ function CampaignEditor({
                       <div className="row row--top" style={{ gap: '0.8rem', flexWrap: 'wrap' }}>
                         <div className="field" style={{ flex: 1, minWidth: '8rem' }}>
                           <label className="label" htmlFor="c-min">Minimum custom amount</label>
-                          <input id="c-min" className="input" value={customMin} inputMode="decimal" onChange={(e) => setCustomMin(e.target.value.replace(/[^\d.]/g, ''))} />
+                          <input id="c-min" className="input" dir="ltr" value={customMin} inputMode="decimal" onChange={(e) => setCustomMin(e.target.value.replace(/[^\d.]/g, ''))} />
                         </div>
                         <div className="field" style={{ flex: 1, minWidth: '8rem' }}>
                           <label className="label" htmlFor="c-max">Maximum custom amount</label>
-                          <input id="c-max" className="input" value={customMax} inputMode="decimal" onChange={(e) => setCustomMax(e.target.value.replace(/[^\d.]/g, ''))} />
+                          <input id="c-max" className="input" dir="ltr" value={customMax} inputMode="decimal" onChange={(e) => setCustomMax(e.target.value.replace(/[^\d.]/g, ''))} />
                         </div>
                       </div>
                     )}
@@ -1046,10 +1198,20 @@ function CampaignEditor({
                         choose it here.
                       </p>
                     )}
-                    <p className="hint">
-                      Stripe accounts and secret keys are managed in <strong>OpenMasjidOS → Settings → Payments</strong> — they
-                      never live in this app. Here you just choose which linked account this campaign settles to.
-                    </p>
+                    {/* Two different truths. Linked through OpenMasjidOS, the keys stay in the platform; on a
+                        standalone install they were typed into this app's own Settings → Payments and are
+                        kept here, so "they never live in this app" would be false. */}
+                    {hasLocal ? (
+                      <p className="hint">
+                        This app is using the Stripe keys entered in <strong>Settings → Payments</strong>. Here you just
+                        choose which account this campaign’s donations are paid into.
+                      </p>
+                    ) : (
+                      <p className="hint">
+                        Stripe accounts and secret keys are managed in <strong>OpenMasjidOS → Settings → Payments</strong> — they
+                        never live in this app. Here you just choose which linked account this campaign’s donations are paid into.
+                      </p>
+                    )}
                   </>
                 )}
 
@@ -1104,7 +1266,7 @@ function CampaignEditor({
                     <div className="field">
                       <label className="label" htmlFor="c-desc">Description <span className="faint">(optional)</span></label>
                       <textarea id="c-desc" className="input" rows={3} maxLength={DESC_MAX} value={description} placeholder="A short line about this appeal." onChange={(e) => setDescription(e.target.value)} />
-                      <span className={description.length > DESC_MAX ? 'form-error' : 'hint'} style={{ textAlign: 'end' }}>{description.length}/{DESC_MAX} — keep it brief so it fits the kiosk screen without being cut off.</span>
+                      <span className={`char-count ${description.length > DESC_MAX ? 'form-error' : 'hint'}`}>{description.length}/{DESC_MAX} — keep it brief so it fits the kiosk screen without being cut off.</span>
                     </div>
 
                     <div className="field">
@@ -1123,21 +1285,22 @@ function CampaignEditor({
                 disabled={isMain}
               />
 
-              {err && <p className="form-error">{err}</p>}
+              {err && <ResultLine ok={false}>{err}</ResultLine>}
 
               <div className="row-between" style={{ marginBlockStart: '0.6rem' }}>
                 {editing && !isMain ? (
                   confirmingDel ? (
                     <div className="row" style={{ gap: '0.4rem' }}>
-                      <button className="btn btn--sm device-danger" onClick={() => void remove()} disabled={del}>
-                        {del ? 'Deleting…' : 'Confirm delete'}
+                      <button className="btn btn--sm device-danger" onClick={() => void remove()} aria-disabled={del}>
+                        {del ? 'Deleting…' : 'Yes, delete this campaign'}
                       </button>
-                      <button className="btn btn--ghost btn--sm" onClick={() => setConfirmingDel(false)} disabled={del}>
+                      {/* Focus lands on the harmless choice, so a double press of Delete cannot delete. */}
+                      <button className="btn btn--ghost btn--sm" onClick={() => setConfirmingDel(false)} disabled={del} autoFocus>
                         Cancel
                       </button>
                     </div>
                   ) : (
-                    <button className="btn btn--ghost btn--sm device-remove-btn" onClick={() => setConfirmingDel(true)}>
+                    <button ref={deleteRef} className="btn btn--ghost btn--sm device-remove-btn" onClick={() => setConfirmingDel(true)}>
                       <Trash2 size={14} aria-hidden="true" /> Delete
                     </button>
                   )
@@ -1148,7 +1311,7 @@ function CampaignEditor({
                   <button className="btn btn--ghost btn--sm" onClick={onClose} disabled={busy || del}>
                     Cancel
                   </button>
-                  <button className="btn btn--primary btn--sm" onClick={() => void save()} disabled={busy || del}>
+                  <button className="btn btn--primary btn--sm" onClick={() => void save()} aria-disabled={busy || del}>
                     {busy ? 'Saving…' : editing ? 'Save campaign' : 'Create campaign'}
                   </button>
                 </div>
@@ -1169,17 +1332,33 @@ function CampaignEditor({
 export function CampaignEditorPage({ campaignId }: { campaignId: string }) {
   const [data, setData] = useState<CampaignsData | null>(null);
   const [err, setErr] = useState('');
+  const [retrying, setRetrying] = useState(false);
   const isNew = campaignId === 'new';
 
   useEffect(() => {
     let alive = true;
     getCampaigns()
       .then((d) => alive && setData(d))
-      .catch((e) => alive && setErr(errMsg(e)));
+      .catch((e) => alive && setErr(errorText(e)));
     return () => {
       alive = false;
     };
   }, []);
+
+  // Stays on the error view while it works (the button keeps focus); on success the editor replaces it
+  // and its title box takes focus, which is where anyone opening an editor wants to be.
+  const retry = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      setData(await getCampaigns());
+      setErr('');
+    } catch (e) {
+      setErr(errorText(e));
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   // Closing or saving returns this tab to the campaign list. window.close() only works for a tab the
   // page opened itself, so it is never relied on — navigating always works, whether this is a second
@@ -1198,12 +1377,24 @@ export function CampaignEditorPage({ campaignId }: { campaignId: string }) {
   if (err) {
     return (
       <section className="panel glass">
-        <p className="form-error">{err}</p>
-        <button className="btn btn--ghost btn--sm" onClick={backToList}>Back to campaigns</button>
+        <ResultLine ok={false}>We couldn’t open this campaign. {err}</ResultLine>
+        <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap', marginBlockStart: '0.6rem' }}>
+          <button type="button" className="btn btn--ghost btn--sm" aria-disabled={retrying} onClick={() => void retry()}>
+            {retrying ? 'Trying again…' : 'Try again'}
+          </button>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={backToList}>Back to campaigns</button>
+        </div>
       </section>
     );
   }
-  if (!data) return <section className="panel glass"><p className="muted">Loading…</p></section>;
+  if (!data) {
+    return (
+      <section className="panel glass" aria-busy="true">
+        {/* Shaped like the editor: its heading, the wide preview, then the first fields. */}
+        <Skeleton rows={4} height="3rem" widths={['40%', '100%', '100%', '70%']} label="Opening the campaign…" />
+      </section>
+    );
+  }
 
   const campaign = isNew ? null : data.campaigns.find((c) => c.id === campaignId) ?? null;
   if (!isNew && !campaign) {
@@ -1288,12 +1479,13 @@ function ColorField({
           type="color"
           className="accent-swatch-input"
           aria-label={`${label} — pick`}
-          value={normalize(draft) ?? value ?? fallback ?? '#000000'}
+          value={normalize(draft) || normalize(value) || normalize(fallback) || '#000000'}
           onChange={(e) => { setDraft(e.target.value); onChange(e.target.value); }}
         />
         <input
           id={id}
           className="input color-hex"
+          dir="ltr"
           value={draft}
           spellCheck={false}
           placeholder={fallback}
@@ -1316,27 +1508,8 @@ function ColorField({
 }
 
 // ── Shared sub-components ──────────────────────────────────────────────────────────
-function Toggle({ label, hint, checked, onChange, disabled }: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
-  return (
-    <label className="toggle-row">
-      <span className="toggle-text">
-        <span className="toggle-label">{label}</span>
-        {hint && <span className="hint">{hint}</span>}
-      </span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        disabled={disabled}
-        className={`switch${checked ? ' switch--on' : ''}`}
-        onClick={() => !disabled && onChange(!checked)}
-      >
-        <span className="switch-knob" />
-      </button>
-    </label>
-  );
-}
+// (The on/off switch is ui.tsx's Toggle, shared with the rest of the panel, which also ties each
+// switch to its hint so a screen reader hears what the setting does.)
 
 function PolicyField({ id, label, value, onChange, hint }: { id: string; label: string; value: PromptPolicy; onChange: (v: PromptPolicy) => void; hint?: string }) {
   return (
@@ -1359,6 +1532,10 @@ function ImageField({ id, label, hint, value, onChange }: { id: string; label: s
   const [err, setErr] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const preview = safeImageUrl(value);
+  // The field's own name, for the upload button and the thumbnail. Three of these sit on the Design tab,
+  // and three buttons all called "Upload" cannot be told apart by anyone who cannot see which box each
+  // one is beside.
+  const name = label.replace(/\s*\(optional\)\s*$/i, '');
 
   const onFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -1369,7 +1546,7 @@ function ImageField({ id, label, hint, value, onChange }: { id: string; label: s
     try {
       onChange(await uploadImage(f));
     } catch (x) {
-      setErr(errMsg(x));
+      setErr(errorText(x));
     } finally {
       setBusy(false);
     }
@@ -1379,20 +1556,38 @@ function ImageField({ id, label, hint, value, onChange }: { id: string; label: s
     <div className="field">
       <label className="label" htmlFor={id}>{label}</label>
       <div className="img-field">
-        {preview && <img className="img-preview" src={preview} alt="" />}
-        <input id={id} className="input" value={value} placeholder="https://…  — or upload a file" onChange={(e) => onChange(e.target.value)} />
-        <button type="button" className="btn btn--ghost btn--sm" onClick={() => inputRef.current?.click()} disabled={busy}>
+        {preview && <img className="img-preview" src={preview} alt={`${name} preview`} />}
+        {/* Upload leads: an uploaded file is served by this app, so it never depends on a third-party
+            host (or on the masjid's network reaching one). A pasted address still works. */}
+        <input
+          id={id}
+          className="input"
+          dir="ltr"
+          value={value}
+          maxLength={IMAGE_URL_MAX}
+          placeholder="Upload a file, or paste an image address"
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          aria-label={busy ? `Uploading ${name}…` : `Upload ${name}`}
+          // aria-disabled, not disabled: focus comes back here from the file picker, and a disabled
+          // button would drop it while the upload runs.
+          aria-disabled={busy}
+          onClick={() => !busy && inputRef.current?.click()}
+        >
           {busy ? (
             'Uploading…'
           ) : (
             <>
-              <Upload size={14} /> Upload
+              <Upload size={14} aria-hidden="true" /> Upload
             </>
           )}
         </button>
         <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={onFile} />
       </div>
-      {err ? <span className="form-error" style={{ margin: 0 }}>{err}</span> : hint ? <span className="hint">{hint}</span> : null}
+      {err ? <ResultLine ok={false}>{err}</ResultLine> : hint ? <span className="hint">{hint}</span> : null}
     </div>
   );
 }
@@ -1401,17 +1596,26 @@ function ImageField({ id, label, hint, value, onChange }: { id: string; label: s
 // These are the kiosk's own colors (android/.../GivingHome.kt `sceneStyleFor` + AmountTile), kept in
 // sync so the admin sees the real thing: white glassy tiles with big BLACK numbers on a bright primary
 // wash, or a calm dark scene with elevated tiles when the campaign is Dark / has a background image.
-const INK_BLACK = '#0a0f14';
-const INK_LIGHT = '#0c4a6e'; // dark ink for text on a LIGHT accent
-const INK_MUTED_LIGHT = '#2f3742'; // darker slate — secondary text stays clearly readable on a bright wash
-const INK_DARK = '#f4f7fb'; // near-white
-const INK_MUTED_DARK = '#aebacd';
+// INK_BLACK (the tablet's InkBlack) comes from contrast.ts with the rest of the ink arithmetic.
+const INK_DARK = '#f4f7fb'; // near-white (core Color.kt InkDark)
+const INK_MUTED_DARK = '#aebacd'; // core Color.kt InkMutedDark
 const SURFACE_OVERLAY_DARK = '#0f2040';
-const SCENE_DARK = 'linear-gradient(155deg, #0c3a4d, #082230 60%, #020a12)';
+/** The dark scene's middle stop (core Color.kt SceneMid): what text on the dark scene is measured
+ *  against, as the tablet does. */
+const SCENE_MID = '#082230';
+const SCENE_DARK = `linear-gradient(155deg, #0c3a4d, ${SCENE_MID} 60%, #020a12)`;
+/** WCAG AA for body text — the bar the accent has to clear to be used as text on the scene. */
+const AA_TEXT = 4.5;
 
 type Scene = {
   accent: string;
+  /** Ink ON a filled accent (the "Donate" band, the selected One-time segment). */
   onAccent: string;
+  /** The accent where it is drawn as TEXT on the scene itself: the accent when it reads there, the
+   *  scene ink when it does not. The tablet uses it for the amount being charged and the "hold your
+   *  card" line; nothing in this scale model draws accent text yet, but it is resolved here, from the
+   *  same rule, so the day something does it cannot quietly pick a different one. */
+  accentInk: string;
   onScene: string;
   onSceneMuted: string;
   tile: string;
@@ -1423,18 +1627,29 @@ type Scene = {
 };
 
 /** Resolve the giving-screen color set from the campaign, exactly as the tablet does (bright primary
- *  wash with white tiles + black numbers, or the calm dark scene with elevated tiles). */
+ *  wash with white tiles + black numbers, or the calm dark scene with elevated tiles).
+ *
+ *  A line-for-line port of GivingHome.kt `sceneStyleFor`: change one, change the other. CONTRAST IS
+ *  COMPUTED, NOT ASSUMED — every ink is picked against what it is actually painted on, so any campaign
+ *  color a masjid chooses stays readable. `mixHex` blends in sRGB where Compose's `lerp` blends in
+ *  Oklab, so a blended shade can differ by a hair; the inks, which are what AA depends on, match. */
 function computeScene(primaryColor: string, accentColor: string, theme: CampaignTheme, bgUrl: string): Scene {
-  const accent = accentColor || DEFAULT_ACCENT;
-  const onAccent = relLuminance(accent) > 0.4 ? INK_LIGHT : '#ffffff';
+  const accent = accentColor || DEFAULT_CAMPAIGN_ACCENT;
+  // Whichever of near-black and white reads better on the accent fill. This was `luminance > 0.4 ?
+  // dark : white`, copied from the tablet, which is exactly wrong between L≈0.18 and 0.4: five of the
+  // editor's own eight presets drew white at 2.6–3.7:1. Both sides now use the same bestInkOn rule.
+  const onAccent = bestInkOn(accent);
   const bright = !bgUrl && theme !== 'dark';
   if (!bright) {
     // Dark theme, or a background image → the calm dark scene, light text on solid elevated tiles.
+    const onScene = INK_DARK;
     return {
       accent,
       onAccent,
-      onScene: INK_DARK,
-      onSceneMuted: INK_MUTED_DARK,
+      accentInk: contrastRatio(accent, SCENE_MID) >= AA_TEXT ? accent : onScene,
+      onScene,
+      // Brighter than the dashboard's muted ink, as on the tablet: halfway back toward the main ink.
+      onSceneMuted: mixHex(INK_MUTED_DARK, INK_DARK, 0.5),
       tile: SURFACE_OVERLAY_DARK,
       tileInk: INK_DARK,
       tileBorder: 'rgba(255,255,255,0.08)',
@@ -1443,15 +1658,20 @@ function computeScene(primaryColor: string, accentColor: string, theme: Campaign
       bgCover: !!bgUrl,
     };
   }
-  // Bright: a soft PRIMARY-color wash. A light base → dark text; a dark base → a deepened wash + white
-  // text (so headings stay readable). Tiles are white with big black numbers either way.
-  const sceneBase = primaryColor || mixHex(accent, '#ffffff', 0.35);
+  // Bright: a soft PRIMARY-color wash. A light base → dark text; a darker base → a deepened wash and
+  // whichever ink wins on that base (the gradient's mid stop). It used to be white regardless, which is
+  // not what the tablet draws on a mid-tone primary. Tiles are white with big black numbers either way.
+  const sceneBase = primaryColor || defaultCampaignPrimary(accent);
   const lightScene = relLuminance(sceneBase) > 0.35;
+  const onScene = lightScene ? INK_BLACK : bestInkOn(sceneBase);
   return {
     accent,
     onAccent,
-    onScene: lightScene ? INK_BLACK : '#ffffff',
-    onSceneMuted: lightScene ? INK_MUTED_LIGHT : 'rgba(255,255,255,0.85)',
+    accentInk: contrastRatio(accent, sceneBase) >= AA_TEXT ? accent : onScene,
+    onScene,
+    // Secondary text is a step down from the heading — 12% toward the background, never a washed-out
+    // grey — so it keeps the hierarchy and the legibility (the tablet's rule).
+    onSceneMuted: mixHex(onScene, sceneBase, 0.12),
     tile: 'rgba(255,255,255,0.92)',
     tileInk: INK_BLACK,
     tileBorder: 'rgba(0,0,0,0.06)',
@@ -1489,6 +1709,7 @@ function GivingPreview({
   logo: string;
   footerText: string;
 }) {
+  useClock(); // the tile amounts are formatted in the masjid's locale
   const portrait = orientation === 'portrait';
   const safeLogo = safeImageUrl(logo);
   const n = presetsMinor.length;

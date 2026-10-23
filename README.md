@@ -526,9 +526,6 @@ receipts, iOS app, offline payments, or Play Store distribution.
   fallback, and there is no admin control for it.
 - The **audit trail** of admin actions that reach outside the app is recorded and readable at
   `GET /api/admin/audit`, but has no screen in the panel yet.
-- **Donation totals use UTC day boundaries.** The container sets no timezone, so "today" rolls
-  over at UTC midnight rather than the masjid's — a treasurer in California sees the day's total
-  reset at 5pm. The figures are right; only the day boundary is.
 - The container **runs as root** (with no Linux capabilities at all and `no-new-privileges`).
   Dropping to an unprivileged user needs a coordinated one-time migration of the data volume,
   since dropping it alone would break every existing install. See

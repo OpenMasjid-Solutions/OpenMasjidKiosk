@@ -12,6 +12,9 @@ test('the kiosk surface is reachable over the tunnel', () => {
   for (const p of [
     '/api/app',
     '/api/public/appearance',
+    // The same-origin relay for the masjid's logo, which the appearance answer now points at. Public
+    // on the platform too, and needed wherever the appearance is — a remote kiosk's setup page.
+    '/api/public/logo',
     '/api/kiosk/pair',
     '/api/kiosk/heartbeat',
     '/api/kiosk/config',
@@ -102,7 +105,7 @@ test('dot-segment spellings cannot reach the password routes', () => {
 test('an encoded spelling of an ALLOWED path is still allowed (no false positives)', () => {
   // The kiosk prefixes contain nothing that percent-decoding can change, so every form still
   // matches the allowlist — a remote kiosk must not start 404ing because of this guard.
-  for (const p of ['/api/kiosk/payment-intents/pi_%2e%2e/complete', '/api/kiosk/tuition/lookup', '/api/public/appearance']) {
+  for (const p of ['/api/kiosk/payment-intents/pi_%2e%2e/complete', '/api/kiosk/tuition/lookup', '/api/public/appearance', '/api/public/logo']) {
     assert.equal(blockedOverTunnel(p), false, `${p} must stay reachable`);
   }
 });

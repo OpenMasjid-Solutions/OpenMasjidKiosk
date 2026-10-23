@@ -158,7 +158,8 @@ before(async () => {
 after(() => {
   for (const c of children) c.kill();
   fake.close();
-  for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+  // Retried: on Windows a just-killed server still holds kiosk.db open for a moment (EPERM/EBUSY).
+  for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 test('on the LAN nothing changes: password login, the admin API, and the SSO upgrade', { timeout: 30_000 }, async () => {

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -33,7 +34,6 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
-import org.openmasjidos.kiosk.ui.theme.SuccessDark
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -52,6 +52,16 @@ import kotlin.math.sin
  * explicitly instead of inferred, and the hint lays itself out along it.
  *
  * Called from within a full-screen Box (see GivingHome); it aligns itself to the chosen edge.
+ *
+ * LEFT AND RIGHT ARE PHYSICAL HERE, and deliberately so. Everywhere else in the app a layout follows
+ * the reading direction (spec §6), but the reader is bolted to one side of the mount, and on an
+ * Arabic- or Urdu-locale tablet a logical "start" is its RIGHT edge — so the hint used to point a donor
+ * at the side with no reader, with the Canvas chevrons (which are drawn physically) aimed away from
+ * the symbol. So the left/right branch uses AbsoluteAlignment and Arrangement.Absolute, which never
+ * mirror. Do not "fix" them back to Start/End.
+ *
+ * [success] is the scene's success colour (SceneStyle.success) for the cleared state, so the green
+ * reads on whichever scene it lands on.
  */
 @Composable
 fun BoxScope.NfcReaderHint(
@@ -59,10 +69,11 @@ fun BoxScope.NfcReaderHint(
     active: Boolean,
     cleared: Boolean,
     accent: Color,
+    success: Color,
     modifier: Modifier = Modifier,
 ) {
     if (!(active || cleared)) return
-    val color = if (cleared) SuccessDark else accent
+    val color = if (cleared) success else accent
     val pulsing = !cleared
     val arrowsOn = active && !cleared
 
@@ -75,10 +86,12 @@ fun BoxScope.NfcReaderHint(
             val onLeft = side == "left"
             Row(
                 modifier = modifier
-                    .align(if (onLeft) Alignment.CenterStart else Alignment.CenterEnd)
+                    // Absolute, not Start/End: the physical edge the reader is on (see the KDoc).
+                    .align(if (onLeft) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight)
                     .padding(horizontal = 18.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                // Absolute too, so the symbol stays on the reader's side of its chevrons.
+                horizontalArrangement = Arrangement.Absolute.spacedBy(14.dp),
             ) {
                 // Symbol hugs the edge; arrows sit inboard of it and point back toward it.
                 if (onLeft) {

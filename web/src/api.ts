@@ -9,6 +9,8 @@ import { withBase } from './base';
 export interface AppInfo {
   name: string;
   version: string;
+  /** The masjid's name as entered in Settings, for the public setup page's header ('' if not set). */
+  masjidName: string;
   /** True when running embedded under OpenMasjidOS (Fabric available). */
   embedded: boolean;
   /** Whether the Android kiosk app is bundled in this server image (false in dev / before
@@ -78,6 +80,10 @@ export interface Plan {
   cancelAt: string;
   cancelAtPeriodEnd: boolean;
   deviceId: string;
+  /** The Stripe account's own label from OpenMasjidOS ('' = the primary account, or unknown). */
+  accountLabel: string;
+  /** The kiosk's current name ('' when that kiosk has since been removed). */
+  deviceName: string;
 }
 
 /** One renewal attempt on a plan. */
@@ -102,17 +108,62 @@ export interface NotifyTestResult {
   reason?: string;
 }
 
+/**
+ * A failed call, in words a volunteer can act on. `detail` carries technical text the server chose to
+ * attach (a Stripe message, say) for a "Technical details" disclosure — never for the main line.
+ */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly detail = '') {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+/** Fired when an admin call comes back 401, so the shell can re-check the session (which re-mints
+ *  an SSO one from the dashboard cookie when it can) instead of every button saying "sign in". */
+export const SIGNED_OUT_EVENT = 'kiosk:signed-out';
+
+const NETWORK_ERROR = 'Couldn’t reach the kiosk app. Check this computer is still on the masjid’s network, then try again.';
+const RESTARTING = 'The kiosk app isn’t answering right now — it may be restarting after an update. Wait a minute, then try again.';
+const SIGNED_OUT = 'You’ve been signed out. Reload this page — or press Open on the Kiosk app in your OpenMasjidOS dashboard — to sign back in.';
+
+/** Turn a response that failed into an ApiError. Shared by the JSON, upload and CSV calls, so a
+ *  browser's own "Failed to fetch" or a bare HTTP status never reaches the screen (spec §9). */
+async function failure(res: Response, path: string, fallback: string): Promise<ApiError> {
+  const body = (await res.json().catch(() => ({}))) as { error?: string; detail?: string };
+  if (res.status === 401 && path.startsWith('/api/admin')) {
+    window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+    return new ApiError(SIGNED_OUT, 401);
+  }
+  if (body.error) return new ApiError(body.error, res.status, typeof body.detail === 'string' ? body.detail : '');
+  if (res.status === 502 || res.status === 503 || res.status === 504) return new ApiError(RESTARTING, res.status);
+  return new ApiError(fallback, res.status);
+}
+
+async function send(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(withBase(path), init);
+  } catch {
+    // The browser's own wording ("Failed to fetch", "NetworkError when attempting…", "Load failed")
+    // says nothing a volunteer can act on.
+    throw new ApiError(NETWORK_ERROR, 0);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(withBase(path), {
+  const res = await send(path, {
     ...init,
     headers: { accept: 'application/json', ...(init?.body ? { 'content-type': 'application/json' } : {}), ...init?.headers },
   });
-  const body = (await res.json().catch(() => ({}))) as { data?: T; error?: string };
-  if (!res.ok || body.error) {
-    throw new Error(body.error || 'Something went wrong. Please try again.');
-  }
+  if (!res.ok) throw await failure(res, path, 'Something went wrong. Please try again.');
+  const body = (await res.json().catch(() => ({}))) as { data?: T; error?: string; detail?: string };
+  if (body.error) throw new ApiError(body.error, res.status, typeof body.detail === 'string' ? body.detail : '');
   return body.data as T;
 }
+
+/** The message to show for a caught error. */
+export const errorText = (e: unknown, fallback = 'Something went wrong. Please try again.'): string =>
+  e instanceof Error && e.message ? e.message : fallback;
 
 export const getAppInfo = () => request<AppInfo>('/api/app');
 export const getSession = () => request<Session>('/api/session');
@@ -315,7 +366,9 @@ export interface MasjidAddress {
 }
 
 /** The masjid details the platform injects no profile for — this app collects them itself. `logo`
- *  + the contact fields are optional and only used on the emailed donation receipt. */
+ *  + the contact fields are optional and only used on the emailed donation receipt. The clock
+ *  settings are what every date on screen, on a receipt and in the CSV is formatted with — the
+ *  masjid's, never the viewer's device (app UI spec §10). */
 export interface Masjid {
   name: string;
   address: MasjidAddress;
@@ -323,6 +376,11 @@ export interface Masjid {
   email: string;
   phone: string;
   website: string;
+  /** IANA time zone, e.g. "America/Chicago". '' until it is first set. */
+  timeZone: string;
+  clock24h: boolean;
+  /** −3..3 days, for a masjid whose Hijri date follows a local sighting. */
+  hijriOffset: number;
 }
 
 /** Non-secret facts about a set of Stripe keys. `publishableKey` is safe to expose; the
@@ -416,13 +474,27 @@ export const setStripeAccount = (accountId: string) =>
 export const setLocalKeys = (body: { publishableKey?: string; secretKey?: string }) =>
   request<SetLocalKeysResult>('/api/admin/payments/local', { method: 'PUT', body: JSON.stringify(body) });
 
+/** Changing to a currency with a different number of decimals (USD → KWD, USD → JPY) rescales every
+ *  suggested amount so it means the same thing; `rescaled` says that happened, so the screen can say
+ *  so rather than let a $10 tile quietly become 0.100 KWD. */
 export const setCurrency = (currency: string) =>
-  request<PaymentsStatus>('/api/admin/payments/currency', { method: 'PUT', body: JSON.stringify({ currency }) });
+  request<PaymentsStatus & { rescaled?: boolean }>('/api/admin/payments/currency', { method: 'PUT', body: JSON.stringify({ currency }) });
 
 export const getMasjid = () => request<Masjid>('/api/admin/masjid');
 
-export const saveMasjid = (body: { name?: string; address?: Partial<MasjidAddress>; logo?: string; email?: string; phone?: string; website?: string }) =>
-  request<Masjid>('/api/admin/masjid', { method: 'PUT', body: JSON.stringify(body) });
+export type MasjidPatch = {
+  name?: string;
+  address?: Partial<MasjidAddress>;
+  logo?: string;
+  email?: string;
+  phone?: string;
+  website?: string;
+  timeZone?: string;
+  clock24h?: boolean;
+  hijriOffset?: number;
+};
+
+export const saveMasjid = (body: MasjidPatch) => request<Masjid>('/api/admin/masjid', { method: 'PUT', body: JSON.stringify(body) });
 
 // ── Emailed donation receipt + admin alerts (via the OpenMasjidOS Fabric) ────────
 /** Whether the OS provider has proven it can send email this process — 'ok' after a successful
@@ -447,6 +519,11 @@ export const saveEmailReceipt = (patch: Partial<Pick<EmailReceipt, 'enabled' | '
 
 // `sendTestAlert` lives with the other notification calls above — it now follows the SAME per-alert
 // routing a real alert does, so what it proves is the admin's actual configuration.
+
+/** Email a sample of the branded receipt, with made-up donation details, to one address — the only
+ *  way to see the real thing arrive, and a successful send is what switches branded receipts on. */
+export const sendSampleReceipt = (to: string) =>
+  request<{ sent: boolean; reason: string }>('/api/admin/email-receipt/test', { method: 'POST', body: JSON.stringify({ to }) });
 
 export const listLocations = () => request<{ locations: TerminalLocation[] }>('/api/admin/payments/locations');
 
@@ -729,11 +806,10 @@ export const setMainCampaign = (id: string) =>
 export async function uploadImage(file: File): Promise<string> {
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(withBase('/api/admin/upload'), { method: 'POST', body: form });
+  const res = await send('/api/admin/upload', { method: 'POST', body: form });
+  if (!res.ok) throw await failure(res, '/api/admin/upload', 'That image couldn’t be uploaded — please try another.');
   const body = (await res.json().catch(() => ({}))) as { data?: { url: string }; error?: string };
-  if (!res.ok || body.error || !body.data) {
-    throw new Error(body.error || 'That image couldn’t be uploaded — please try another.');
-  }
+  if (body.error || !body.data) throw new ApiError(body.error || 'That image couldn’t be uploaded — please try another.', res.status);
   return body.data.url;
 }
 
@@ -805,10 +881,7 @@ export const refundDonation = (id: string, body: { amountMinor?: number; reason?
 /** Fetch the donations CSV as a Blob. Uses fetch (not a plain <a download>) so an expired session
  *  surfaces an error instead of silently saving the 401 JSON body as "donations.csv". */
 export async function fetchDonationsCsv(): Promise<Blob> {
-  const res = await fetch(withBase('/api/admin/donations.csv'), { headers: { accept: 'text/csv' } });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || 'Couldn’t export — please sign in again and retry.');
-  }
+  const res = await send('/api/admin/donations.csv', { headers: { accept: 'text/csv' } });
+  if (!res.ok) throw await failure(res, '/api/admin/donations.csv', 'Couldn’t export the donations just now. Please try again.');
   return res.blob();
 }

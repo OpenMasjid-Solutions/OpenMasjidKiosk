@@ -225,6 +225,13 @@ Worth coordinating across the other OpenMasjid apps, since they share this postu
 
 ## 6. "Today's donations" resets at the wrong time
 
+**Resolved in 0.14.0.** The masjid now has a time zone of its own — Settings → Payments → Masjid
+details — and `donationTotals()` starts "today" and "this month" at the masjid's midnight
+(`startOfDay` / `startOfMonth` in `server/src/dates.ts`); "this week" is a rolling seven days, which
+needs no zone. It is filled in from the signed-in admin's own computer the first time the panel
+loads, shown, and changeable — a starting point the admin can see, not a silent guess. Until then the
+container's zone (UTC) is used, as before. The rest of this section is kept as written.
+
 [KIOSK-013](SECURITY_AUDIT.md#kiosk-013). The container sets no `TZ`, so it is UTC, and `donationTotals()` treats UTC midnight as the start of "today". A masjid in California sees today's total reset at 5 pm local; one in Auckland at midday. "This week" and "this month" drift the same way. The conversion code itself is correct — it just has no idea where the masjid is.
 
 Not a security issue, but it is the number a treasurer reads out, so it is worth deciding on. Two options:

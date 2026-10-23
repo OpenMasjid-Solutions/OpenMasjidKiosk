@@ -10,11 +10,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.openmasjidos.kiosk.ui.theme.SakinaTheme
@@ -47,10 +45,11 @@ class MainActivity : ComponentActivity() {
                     when (val s = screen) {
                         // Reading DataStore. Brief, but it must not flash the pairing form at
                         // someone who IS paired — at an event that reads as "it forgot my masjid".
-                        Screen.Loading -> Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
-                        ) { CircularProgressIndicator() }
+                        // The themed page and nothing on it: the read takes milliseconds, so a
+                        // spinner would only ever flicker for a frame — a bare spinner is what the
+                        // app UI spec (§5) rules out — and the screen that follows is the first
+                        // thing anyone actually sees.
+                        Screen.Loading -> Box(modifier = Modifier.fillMaxSize())
 
                         Screen.Pair -> PairScreen(
                             ui = pairUi,

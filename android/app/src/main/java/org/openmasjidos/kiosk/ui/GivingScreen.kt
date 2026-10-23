@@ -30,6 +30,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
@@ -41,6 +42,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,10 +55,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.openmasjidos.kiosk.GivingState
@@ -68,21 +75,28 @@ import org.openmasjidos.kiosk.TuitionFeeQuote
 import org.openmasjidos.kiosk.TuitionState
 import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.local.KioskConfig
-import org.openmasjidos.kiosk.ui.theme.DangerDark
-import org.openmasjidos.kiosk.ui.theme.SuccessDark
 
 /**
  * Resolved per-campaign appearance for the giving screen (computed in [GivingHome]). Lets one bright
  * or dark, accent-tinted look flow through every step without hard-coding colors.
+ *
+ * [accent] is for FILLS — buttons, the "Donate" band, rings, borders — and is never text on its own.
+ * Text that should carry the campaign's colour uses [accentInk] (on the scene) or [tileAccentInk] (on a
+ * tile), which fall back to the surface's own ink whenever the accent would not read there. Every ink
+ * here is measured against what it is painted on; see sceneStyleFor.
  */
 data class SceneStyle(
     val bright: Boolean,
-    val accent: Color,
+    val accent: Color,         // FILLS: buttons, the Donate band, rings and borders
     val onAccent: Color,       // text on a filled accent button
+    val accentInk: Color,      // the accent as TEXT on the scene, or the scene ink where it wouldn't read
     val onScene: Color,        // headings on the background
     val onSceneMuted: Color,   // subtitles / secondary
+    val danger: Color,         // error text on the scene
+    val success: Color,        // success text and the ✓ on the scene
     val tile: Color,           // amount tile fill (glass)
     val tileInk: Color,        // amount text on a tile
+    val tileAccentInk: Color,  // the accent as a mark ON a tile (a chosen bill's ✓), or the tile ink
     val card: Color,           // the central giving card (liquid glass)
     val cardBorder: Color,     // its hairline border
 )
@@ -139,8 +153,10 @@ fun GivingScreen(
             TuitionLookupStep(giving.tuition, campaign, style, onTuitionStart, onTuitionStudentCode, onTuitionIdentify, onCancel, modifier)
         isTuition && giving.step == GivingStep.TuitionConfirm ->
             TuitionConfirmStep(giving.tuition, style, onTuitionConfirmStudent, onTuitionRejectStudent, modifier)
+        // The masjid's own currency rides along as the fallback for a tuition reply that names none —
+        // a blank there used to be rendered in dollars, whatever the masjid actually charges in.
         isTuition && giving.step == GivingStep.TuitionInvoices ->
-            TuitionInvoicesStep(giving.tuition, style, onTuitionPayFull, onTuitionToggleUnit, onTuitionToggleInvoice, onTuitionPay, onTuitionPayAmount, onCancel, modifier)
+            TuitionInvoicesStep(giving.tuition, currency, style, onTuitionPayFull, onTuitionToggleUnit, onTuitionToggleInvoice, onTuitionPay, onTuitionPayAmount, onCancel, modifier)
         // Only reached when the school passes Stripe's cut to the payer. It sits between "pay" and the
         // reader being armed, because the parent has to see the total — and whose money the extra is —
         // before they commit to it (§11.4).
@@ -190,6 +206,28 @@ private fun CenteredScene(modifier: Modifier = Modifier, content: @Composable Co
     }
 }
 
+/** The border for an outlined button on the scene (Cancel, Done, Leave, "No — try another ID"). The
+ *  theme's own outline is the dark theme's faint grey, which measured 2.1:1 on the default bright
+ *  wash — the edge of the button was all but invisible, and a button's boundary needs 3:1 (spec §7).
+ *  The scene's muted ink is measured against the scene, so it clears that on every campaign colour. */
+private fun sceneOutline(style: SceneStyle) = BorderStroke(2.dp, style.onSceneMuted)
+
+/** Colours for the One-time / Monthly and Full balance / Choose segments: the scene's accent and its
+ *  ink for the chosen side, a tile for the other. Material's defaults come from the forced-dark theme
+ *  — a navy segment with a brown chosen pill, sat on a bright campaign wash — so the one control the
+ *  donor must read before giving was the one control that ignored the campaign's colours. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun sceneSegmentColors(style: SceneStyle) = SegmentedButtonDefaults.colors(
+    activeContainerColor = style.accent,
+    activeContentColor = style.onAccent,
+    activeBorderColor = style.accent,
+    inactiveContainerColor = style.tile,
+    inactiveContentColor = style.tileInk,
+    // The same boundary rule as the outlined buttons: an edge you can see against the scene.
+    inactiveBorderColor = style.onSceneMuted,
+)
+
 // ── Step: choose an amount (FULL-SCREEN: header + a big-tile grid + a small "Other") ──────────
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -233,13 +271,23 @@ private fun AmountStep(
                 )
             }
         }
+        val title = campaign.title.ifBlank { "Support your masjid" }
         Text(
-            text = campaign.title.ifBlank { "Support your masjid" },
-            style = MaterialTheme.typography.displayMedium,
+            text = title,
+            // Wraps to two lines and steps DOWN in size for a long appeal name, instead of cutting it to
+            // "Winter Appeal for the…" on one (spec §10: render names as given). The admin's title is
+            // capped at 48 characters (campaigns.tsx TITLE_MAX), so two lines of the smallest step hold
+            // it on any tablet; the ellipsis is only a backstop. The web preview's .gv-title wraps and
+            // clamps at two lines too, so the admin sees the same break.
+            style = when {
+                title.length <= 22 -> MaterialTheme.typography.displayMedium
+                title.length <= 34 -> MaterialTheme.typography.displaySmall
+                else -> MaterialTheme.typography.headlineLarge
+            },
             color = style.onScene,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
         Text(
@@ -256,16 +304,23 @@ private fun AmountStep(
         // connected right now — monthly needs a card-present charge).
         if (campaign.monthlyEnabled && readerConnected) {
             Spacer(Modifier.height(16.dp))
+            val segColors = sceneSegmentColors(style)
             SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
-                SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("One-time", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                SegmentedButton(selected = giving.monthly, onClick = { onSetMonthly(true) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Monthly", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                SegmentedButton(selected = !giving.monthly, onClick = { onSetMonthly(false) }, shape = SegmentedButtonDefaults.itemShape(0, 2), colors = segColors) { Text("One-time", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                SegmentedButton(selected = giving.monthly, onClick = { onSetMonthly(true) }, shape = SegmentedButtonDefaults.itemShape(1, 2), colors = segColors) { Text("Monthly", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
         }
         Spacer(Modifier.height(20.dp))
 
         // The big-tile grid fills the whole screen. In PORTRAIT use 2 wide columns (taller tiles read
         // better on a narrow screen); in landscape use 3 (2 when there are only a few presets).
-        val presets = campaign.presetsMinor.take(6).ifEmpty { listOf(500L, 1000L, 2000L, 5000L, 10000L, 25000L) }
+        // The fallback tiles (only ever seen by a campaign that has no presets of its own) are written
+        // in MAJOR units and scaled by the currency's own factor. They used to be two-decimal minor
+        // units (500 = $5), which on a Kuwaiti masjid's three-decimal dinar offered a tile of half a
+        // dinar (spec §10: mind zero- and three-decimal currencies).
+        val presets = campaign.presetsMinor.take(6).ifEmpty {
+            listOf(5L, 10L, 20L, 50L, 100L, 250L).map { it * factorFor(currency) }
+        }
         val cols = when {
             portrait -> if (presets.size <= 2) 1 else 2
             presets.size <= 4 -> 2
@@ -353,6 +408,9 @@ private fun AmountTile(label: String, style: SceneStyle, modifier: Modifier = Mo
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
+                    // Tabular digits (spec §4), so a row of amounts lines up and "$100" is exactly as
+                    // wide as "$200". Roboto's digits already are, but the face is not ours to promise.
+                    style = LocalTextStyle.current.copy(fontFeatureSettings = "tnum"),
                 )
             }
             // A tall, prominent accent "Donate" band — the clear call to action on every tile.
@@ -391,29 +449,35 @@ private fun ColumnScope.Numpad(
     Spacer(Modifier.height(20.dp))
 
     val rows = listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf("⌫", "0", "OK"))
-    rows.forEach { r ->
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            r.forEach { key ->
-                val isOk = key == "OK"
-                Button(
-                    onClick = {
-                        when (key) {
-                            "⌫" -> if (digits.isNotEmpty()) digits = digits.dropLast(1)
-                            "OK" -> if (valid) onConfirm(minor)
-                            else -> if (digits.length < 7) digits = (digits + key).trimStart('0').ifEmpty { "" }
-                        }
-                    },
-                    enabled = !isOk || valid,
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isOk) style.accent else style.tile,
-                        contentColor = if (isOk) style.onAccent else style.tileInk,
-                    ),
-                    modifier = Modifier.weight(1f).height(78.dp),
-                ) { Text(key, style = MaterialTheme.typography.titleLarge) }
+    // A number pad keeps 1-2-3 left to right in every language, as Android's own dialer and lock
+    // screen do. Left to follow the layout direction, an Arabic- or Urdu-locale tablet mirrored it to
+    // 3-2-1 with ⌫ and OK swapped (spec §6). Scoped to the keys only; the text above still follows
+    // the tablet.
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        rows.forEach { r ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                r.forEach { key ->
+                    val isOk = key == "OK"
+                    Button(
+                        onClick = {
+                            when (key) {
+                                "⌫" -> if (digits.isNotEmpty()) digits = digits.dropLast(1)
+                                "OK" -> if (valid) onConfirm(minor)
+                                else -> if (digits.length < 7) digits = (digits + key).trimStart('0').ifEmpty { "" }
+                            }
+                        },
+                        enabled = !isOk || valid,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isOk) style.accent else style.tile,
+                            contentColor = if (isOk) style.onAccent else style.tileInk,
+                        ),
+                        modifier = Modifier.weight(1f).height(78.dp),
+                    ) { Text(key, style = MaterialTheme.typography.titleLarge) }
+                }
             }
+            Spacer(Modifier.height(12.dp))
         }
-        Spacer(Modifier.height(12.dp))
     }
     TextButton(onClick = onBack) { Text("Back", color = style.onSceneMuted) }
 }
@@ -432,7 +496,7 @@ private fun ColumnScope.LargeAmountStep(
     Text("Before you give", style = MaterialTheme.typography.headlineSmall, color = style.onScene)
     Spacer(Modifier.height(8.dp))
     if (giving.amountMinor > 0) {
-        Text(formatMoney(giving.amountMinor, currency), style = MaterialTheme.typography.displaySmall, color = style.accent, fontWeight = FontWeight.Bold)
+        Text(formatMoney(giving.amountMinor, currency), style = MaterialTheme.typography.displaySmall, color = style.accentInk, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(16.dp))
     }
     val note = config?.largeAmountNote.orEmpty()
@@ -565,14 +629,16 @@ private fun DetailsStep(
                         color = style.onScene,
                         modifier = Modifier.weight(1f).padding(end = 12.dp),
                     )
-                    Switch(checked = giving.coverFees, onCheckedChange = onSetCoverFees, colors = SwitchDefaults.colors(checkedTrackColor = style.accent))
+                    // The thumb sits ON the accent track, so it takes the accent's ink, like every other
+                    // accent fill here; the theme's fixed dark thumb vanished on a deep accent.
+                    Switch(checked = giving.coverFees, onCheckedChange = onSetCoverFees, colors = SwitchDefaults.colors(checkedTrackColor = style.accent, checkedThumbColor = style.onAccent))
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(feeClarify, style = MaterialTheme.typography.bodySmall, color = style.onSceneMuted)
             }
             giving.error?.let {
                 Spacer(Modifier.height(12.dp))
-                Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium)
+                Text(it, color = style.danger, style = MaterialTheme.typography.bodyMedium)
             }
             Spacer(Modifier.height(20.dp))
             Button(
@@ -718,14 +784,14 @@ private fun TuitionLookupStep(
                     Spacer(Modifier.height(12.dp))
                     Text(
                         "We couldn't find that — please check the Student ID, or ask the office.",
-                        color = DangerDark,
+                        color = style.danger,
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
                     )
                 }
                 t.error?.let {
                     Spacer(Modifier.height(12.dp))
-                    Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+                    Text(it, color = style.danger, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
                 }
                 Spacer(Modifier.height(20.dp))
                 Button(
@@ -778,18 +844,20 @@ private fun TuitionConfirmStep(
         ) {
             Text("Is this your child?", style = MaterialTheme.typography.headlineSmall, color = style.onSceneMuted, textAlign = TextAlign.Center)
             Spacer(Modifier.height(14.dp))
+            // The name in full, however long, wrapping as it needs to — never cut to "Abdul Rahman…". This
+            // is the one line the parent is asked to check, so a truncated name defeats the screen
+            // (spec §10: render names as given). The column scrolls, so a long one cannot push the
+            // buttons off.
             Text(
                 t.identifiedName.ifBlank { "This student" },
                 style = MaterialTheme.typography.displaySmall,
-                color = style.accent,
+                color = style.accentInk,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
             t.error?.let {
                 Spacer(Modifier.height(14.dp))
-                Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+                Text(it, color = style.danger, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
             }
             Spacer(Modifier.height(28.dp))
             Button(
@@ -804,6 +872,7 @@ private fun TuitionConfirmStep(
                 onClick = onReject,
                 enabled = !t.looking,
                 shape = RoundedCornerShape(16.dp),
+                border = sceneOutline(style),
                 modifier = Modifier.fillMaxWidth().height(68.dp),
             ) { Text("No — try another ID", color = style.onScene, style = MaterialTheme.typography.titleMedium) }
         }
@@ -888,6 +957,7 @@ private fun TuitionFeeStep(
             OutlinedButton(
                 onClick = onCancel,
                 shape = RoundedCornerShape(16.dp),
+                border = sceneOutline(style),
                 modifier = Modifier.fillMaxWidth().height(68.dp),
             ) { Text(stringResource(R.string.tuition_fee_cancel), color = style.onScene, style = MaterialTheme.typography.titleMedium) }
         }
@@ -913,7 +983,7 @@ private fun FeeRow(label: String, amount: String, style: SceneStyle, emphasised:
         Text(
             amount,
             style = if (emphasised) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
-            color = if (emphasised) style.accent else style.onScene,
+            color = if (emphasised) style.accentInk else style.onScene,
             fontWeight = if (emphasised) FontWeight.Bold else FontWeight.Normal,
             maxLines = 1,
         )
@@ -931,6 +1001,8 @@ private fun FeeRow(label: String, amount: String, style: SceneStyle, emphasised:
 @Composable
 private fun TuitionInvoicesStep(
     tuition: TuitionState?,
+    /** The masjid's configured currency, for a tuition reply that names none. */
+    fallbackCurrency: String,
     style: SceneStyle,
     onPayFull: (Boolean) -> Unit,
     onToggleUnit: (String) -> Unit,
@@ -941,7 +1013,7 @@ private fun TuitionInvoicesStep(
     modifier: Modifier = Modifier,
 ) {
     val t = tuition ?: TuitionState()
-    val currency = t.currency.ifBlank { "USD" }
+    val currency = t.currency.ifBlank { fallbackCurrency }
     // What can be paid is what the BILLS come to, never the household balance: that figure is netted,
     // so one child being in credit hides another child's real, payable bills behind a $0 total.
     val owes = t.dueMinor > 0
@@ -958,8 +1030,9 @@ private fun TuitionInvoicesStep(
         val kid = kids.firstOrNull { it.key == padKey && padKey.isNotBlank() }
         TuitionAmountPad(
             t = t,
+            fallbackCurrency = fallbackCurrency,
             style = style,
-            forName = kid?.name.orEmpty(),
+            forName = kid?.let { it.firstName.ifBlank { it.name } }.orEmpty(),
             balanceMinor = kid?.balanceMinor ?: t.balanceMinor,
             onConfirm = { minor -> onPayAmount(minor, padKey) },
             onBack = { padFor = null },
@@ -983,9 +1056,10 @@ private fun TuitionInvoicesStep(
             TuitionAccountLine(t.dueMinor, t.creditMinor, currency, style, big = true)
             Spacer(Modifier.height(16.dp))
             if (owes) {
+                val segColors = sceneSegmentColors(style)
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
-                    SegmentedButton(selected = t.payFull, onClick = { onPayFull(true) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Full balance", maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                    SegmentedButton(selected = !t.payFull, onClick = { onPayFull(false) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Choose what to pay", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    SegmentedButton(selected = t.payFull, onClick = { onPayFull(true) }, shape = SegmentedButtonDefaults.itemShape(0, 2), colors = segColors) { Text("Full balance", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    SegmentedButton(selected = !t.payFull, onClick = { onPayFull(false) }, shape = SegmentedButtonDefaults.itemShape(1, 2), colors = segColors) { Text("Choose what to pay", maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             }
             Spacer(Modifier.height(14.dp))
@@ -1004,13 +1078,13 @@ private fun TuitionInvoicesStep(
                 if (perChild) {
                     Spacer(Modifier.height(10.dp))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        // Wraps onto a second line rather than ending in "…": the balance keeps its
+                        // place beside it, and the name is shown as given (spec §10).
                         Text(
                             kid.name.ifBlank { "Other" },
                             style = MaterialTheme.typography.titleLarge,
                             color = style.onScene,
                             fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
                         Spacer(Modifier.size(10.dp))
@@ -1049,24 +1123,27 @@ private fun TuitionInvoicesStep(
                     OutlinedButton(
                         onClick = { padFor = kid.key },
                         shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth().height(64.dp),
+                        border = sceneOutline(style),
+                        // At least the old fixed height, growing if a long first name wraps.
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
                     ) {
-                        val first = kid.name.substringBefore(' ').ifBlank { "this child" }
+                        // The first name the SCHOOL holds, never the name cut at its first space: that
+                        // turned "Abdul Rahman K" into "Abdul" and "Nur Aisha K" into "Nur" (§10).
+                        val first = kid.firstName.ifBlank { kid.name }.ifBlank { "this child" }
                         Text(
                             // "Add money" is the right words for a child who is square; for one who
                             // owes, it's a part payment against a bill they can see above.
                             if (kidDue > 0) "Pay another amount for $first" else "Add money for $first",
                             style = MaterialTheme.typography.titleMedium,
                             color = style.onScene,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
                         )
                     }
                 }
             }
             t.error?.let {
                 Spacer(Modifier.height(12.dp))
-                Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+                Text(it, color = style.danger, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -1110,6 +1187,7 @@ private fun TuitionInvoicesStep(
         OutlinedButton(
             onClick = onCancel,
             shape = RoundedCornerShape(16.dp),
+            border = sceneOutline(style),
             modifier = Modifier.fillMaxWidth().height(64.dp),
         ) { Text("Leave", style = MaterialTheme.typography.titleMedium, color = style.onScene) }
     }
@@ -1138,7 +1216,7 @@ private fun TuitionAccountLine(
             Text(
                 if (compact) formatMoney(dueMinor, currency) else "Balance due ${formatMoney(dueMinor, currency)}",
                 style = text,
-                color = style.accent,
+                color = style.accentInk,
                 fontWeight = FontWeight.Bold,
             )
             if (creditMinor > 0 && !compact) {
@@ -1158,7 +1236,7 @@ private fun TuitionAccountLine(
             Text(
                 "${formatMoney(creditMinor, currency)} paid ahead",
                 style = text,
-                color = SuccessDark,
+                color = style.success,
                 fontWeight = FontWeight.Bold,
             )
             if (!compact) {
@@ -1191,9 +1269,12 @@ private fun TuitionBillCard(
     onToggleUnit: (String) -> Unit,
     onToggleInvoice: (String) -> Unit,
 ) {
+    // The due date in words, Gregorian and Hijri together, as the server formats it for this masjid
+    // (spec §10) — "Due Jul 1, 2026 · Muharram 16, 1448 AH", not the wire's "Due 2026-07-01". The raw
+    // value is only a fallback for a server too old to send the label.
     val sub = listOfNotNull(
         inv.studentName.takeIf { showStudentName && it.isNotBlank() },
-        inv.dueDate.takeIf { it.isNotBlank() }?.let { "Due $it" },
+        inv.dueLabel.ifBlank { inv.dueDate }.takeIf { it.isNotBlank() }?.let { "Due $it" },
     ).joinToString(" · ")
     // Lines only when EVERY bill on the screen has them — a half-itemized selection can't be expressed
     // on the wire, so the choice is made once for the whole account, not per bill.
@@ -1245,7 +1326,7 @@ private fun TuitionBillCard(
                     Text(formatMoney(inv.balanceMinor, currency), style = MaterialTheme.typography.titleMedium, color = style.tileInk, fontWeight = FontWeight.Bold)
                     if (choosing) {
                         Spacer(Modifier.size(10.dp))
-                        Text(if (allOn) "✓" else "○", style = MaterialTheme.typography.titleLarge, color = if (allOn) style.accent else style.tileInk.copy(alpha = 0.6f))
+                        Text(if (allOn) "✓" else "○", style = MaterialTheme.typography.titleLarge, color = if (allOn) style.tileAccentInk else style.tileInk.copy(alpha = 0.6f))
                     }
                 }
             }
@@ -1293,7 +1374,7 @@ private fun TuitionBillCard(
                             Text(
                                 if (!item.payable) " " else if (ticked) "✓" else "○",
                                 style = MaterialTheme.typography.titleLarge,
-                                color = if (ticked) style.accent else style.tileInk.copy(alpha = 0.6f),
+                                color = if (ticked) style.tileAccentInk else style.tileInk.copy(alpha = 0.6f),
                             )
                         }
                     }
@@ -1335,7 +1416,7 @@ private fun TuitionRow(
             Text(amount, style = MaterialTheme.typography.titleMedium, color = style.tileInk, fontWeight = FontWeight.Bold)
             if (tickable) {
                 Spacer(Modifier.size(10.dp))
-                Text(if (ticked) "✓" else "○", style = MaterialTheme.typography.titleLarge, color = if (ticked) style.accent else style.tileInk.copy(alpha = 0.6f))
+                Text(if (ticked) "✓" else "○", style = MaterialTheme.typography.titleLarge, color = if (ticked) style.tileAccentInk else style.tileInk.copy(alpha = 0.6f))
             }
         }
     }
@@ -1343,25 +1424,28 @@ private fun TuitionRow(
 
 /** A number pad for a typed tuition amount — a part payment, or money paid ahead. Floored at the
  *  school's minimum (the server re-checks it), and capped so a slipped finger can't charge a fortune.
- *  [forName] is the child it is for, when the parent picked one; [balanceMinor] is that child's own
- *  balance, so the wording matches whose money this is. */
+ *  [forName] is the FIRST NAME of the child it is for, when the parent picked one — already the
+ *  school's own first name, so it is shown whole and never split here; [balanceMinor] is that child's
+ *  own balance, so the wording matches whose money this is. */
 @Composable
 private fun TuitionAmountPad(
     t: TuitionState,
+    /** The masjid's configured currency, for a tuition reply that names none. */
+    fallbackCurrency: String,
     style: SceneStyle,
     forName: String,
     balanceMinor: Long,
     onConfirm: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
-    val currency = t.currency.ifBlank { "USD" }
+    val currency = t.currency.ifBlank { fallbackCurrency }
     val factor = factorFor(currency)
     var digits by remember(t.session, forName) { mutableStateOf("") }
     val major = digits.toLongOrNull() ?: 0L
     val minor = major * factor
     val min = t.minAmountMinor
     val valid = minor >= min && minor <= TUITION_MAX_MINOR
-    val first = forName.substringBefore(' ').takeIf { it.isNotBlank() }
+    val first = forName.takeIf { it.isNotBlank() }
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1379,42 +1463,45 @@ private fun TuitionAmountPad(
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(12.dp))
-        Text(formatMoney(minor, currency), style = MaterialTheme.typography.displayMedium, color = style.accent, fontWeight = FontWeight.Bold)
+        Text(formatMoney(minor, currency), style = MaterialTheme.typography.displayMedium, color = style.accentInk, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
         Text(
             if (minor in 1 until min) "Smallest payment is ${formatMoney(min, currency)}" else "Smallest payment ${formatMoney(min, currency)}",
             style = MaterialTheme.typography.bodyMedium,
-            color = if (minor in 1 until min) DangerDark else style.onSceneMuted,
+            color = if (minor in 1 until min) style.danger else style.onSceneMuted,
             textAlign = TextAlign.Center,
         )
         t.error?.let {
             Spacer(Modifier.height(10.dp))
-            Text(it, color = DangerDark, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+            Text(it, color = style.danger, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
         }
         Spacer(Modifier.height(18.dp))
-        listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf("⌫", "0", "OK")).forEach { row ->
-            Row(Modifier.fillMaxWidth().widthIn(max = 520.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                row.forEach { keyLabel ->
-                    val isOk = keyLabel == "OK"
-                    Button(
-                        onClick = {
-                            when (keyLabel) {
-                                "⌫" -> if (digits.isNotEmpty()) digits = digits.dropLast(1)
-                                "OK" -> if (valid) onConfirm(minor)
-                                else -> if (digits.length < 7) digits = (digits + keyLabel).trimStart('0')
-                            }
-                        },
-                        enabled = !isOk || valid,
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isOk) style.accent else style.tile,
-                            contentColor = if (isOk) style.onAccent else style.tileInk,
-                        ),
-                        modifier = Modifier.weight(1f).height(78.dp),
-                    ) { Text(keyLabel, style = MaterialTheme.typography.titleLarge) }
+        // 1-2-3 left to right in every language, like the donation pad above (see Numpad).
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf("⌫", "0", "OK")).forEach { row ->
+                Row(Modifier.fillMaxWidth().widthIn(max = 520.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { keyLabel ->
+                        val isOk = keyLabel == "OK"
+                        Button(
+                            onClick = {
+                                when (keyLabel) {
+                                    "⌫" -> if (digits.isNotEmpty()) digits = digits.dropLast(1)
+                                    "OK" -> if (valid) onConfirm(minor)
+                                    else -> if (digits.length < 7) digits = (digits + keyLabel).trimStart('0')
+                                }
+                            },
+                            enabled = !isOk || valid,
+                            shape = RoundedCornerShape(16.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isOk) style.accent else style.tile,
+                                contentColor = if (isOk) style.onAccent else style.tileInk,
+                            ),
+                            modifier = Modifier.weight(1f).height(78.dp),
+                        ) { Text(keyLabel, style = MaterialTheme.typography.titleLarge) }
+                    }
                 }
+                Spacer(Modifier.height(12.dp))
             }
-            Spacer(Modifier.height(12.dp))
         }
         TextButton(onClick = onBack) { Text("Back", color = style.onSceneMuted, style = MaterialTheme.typography.titleMedium) }
     }
@@ -1432,7 +1519,7 @@ private fun ColumnScope.CardStep(
     onEnterManually: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    Text(formatMoney(chargeMinor, currency), style = MaterialTheme.typography.displayMedium, color = style.accent, fontWeight = FontWeight.Bold)
+    Text(formatMoney(chargeMinor, currency), style = MaterialTheme.typography.displayMedium, color = style.accentInk, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(20.dp))
     CircularProgressIndicator(color = style.accent)
     Spacer(Modifier.height(20.dp))
@@ -1445,18 +1532,22 @@ private fun ColumnScope.CardStep(
         style = MaterialTheme.typography.headlineMedium,
         color = style.onScene,
         textAlign = TextAlign.Center,
+        // A live region (spec §7): the READER rewrites this line on its own — "Remove card", "Try
+        // another card" — so TalkBack says each new instruction without the donor having to find it.
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
     )
     if (!preparing) {
         // The single most common failure at the reader is lifting the card too early — a contactless
         // read plus the online authorisation takes a few seconds, and a card pulled away mid-read
-        // reads to the donor as "it didn't work". Say the quiet part out loud, in the accent color
+        // reads to the donor as "it didn't work". Say the quiet part out loud, big and bold, in the
+        // accent colour where the accent reads on this scene (the scene's own ink where it does not),
         // so it is not mistaken for fine print.
         Spacer(Modifier.height(14.dp))
         Text(
             "Hold your card on the reader for at least 5 seconds",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
-            color = style.accent,
+            color = style.accentInk,
             textAlign = TextAlign.Center,
         )
     }
@@ -1469,13 +1560,13 @@ private fun ColumnScope.CardStep(
         ) { Text("Enter card details") }
     }
     Spacer(Modifier.height(16.dp))
-    OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp)) { Text("Cancel", color = style.onSceneMuted) }
+    OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp), border = sceneOutline(style)) { Text("Cancel", color = style.onSceneMuted) }
 }
 
 // ── Step: processing (card read; server verifying) ───────────────────────────
 @Composable
 private fun ColumnScope.ProcessingStep(chargeMinor: Long, currency: String, style: SceneStyle) {
-    Text(formatMoney(chargeMinor, currency), style = MaterialTheme.typography.displayMedium, color = style.accent, fontWeight = FontWeight.Bold)
+    Text(formatMoney(chargeMinor, currency), style = MaterialTheme.typography.displayMedium, color = style.accentInk, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(20.dp))
     CircularProgressIndicator(color = style.accent)
     Spacer(Modifier.height(20.dp))
@@ -1496,7 +1587,7 @@ private fun ColumnScope.ThanksStep(
     val isTuition = campaign.type == "tuition"
     val msg = campaign.thankYouMessage.takeIf { it.isNotBlank() }
         ?: if (isTuition) "JazākAllāhu khayran — your payment was received." else "JazākAllāhu khayran — thank you for your generous donation."
-    Text("✓", style = MaterialTheme.typography.displayLarge, color = SuccessDark)
+    Text("✓", style = MaterialTheme.typography.displayLarge, color = style.success)
     Spacer(Modifier.height(12.dp))
     if (chargeMinor > 0) {
         Text(
@@ -1506,7 +1597,7 @@ private fun ColumnScope.ThanksStep(
                 else -> "You gave ${formatMoney(chargeMinor, currency)}"
             },
             style = MaterialTheme.typography.headlineMedium,
-            color = style.accent,
+            color = style.accentInk,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
         )
@@ -1516,7 +1607,7 @@ private fun ColumnScope.ThanksStep(
     when (giving.monthlyOutcome) {
         MonthlyOutcome.Created -> {
             Spacer(Modifier.height(10.dp))
-            Text("Your monthly donation is set up — we'll email your receipts.", style = MaterialTheme.typography.bodyLarge, color = SuccessDark, textAlign = TextAlign.Center)
+            Text("Your monthly donation is set up — we'll email your receipts.", style = MaterialTheme.typography.bodyLarge, color = style.success, textAlign = TextAlign.Center)
         }
         MonthlyOutcome.NotSupported -> {
             Spacer(Modifier.height(10.dp))
@@ -1525,7 +1616,7 @@ private fun ColumnScope.ThanksStep(
         MonthlyOutcome.None -> Unit
     }
     Spacer(Modifier.height(28.dp))
-    OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp)) { Text("Done", color = style.onScene) }
+    OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(14.dp), border = sceneOutline(style)) { Text("Done", color = style.onScene) }
 }
 
 // ── Step: error ──────────────────────────────────────────────────────────────

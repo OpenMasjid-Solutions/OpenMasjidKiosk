@@ -24,6 +24,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -32,10 +33,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -48,7 +51,8 @@ import org.openmasjidos.kiosk.ui.theme.InkMutedDark
 private const val MAX_PIN_LENGTH = 12
 
 /**
- * The unlock PIN pad, shown as a full-screen overlay after the hidden corner gesture.
+ * The unlock PIN pad, shown as a full-screen overlay after the hidden gesture (10 taps on the giving
+ * screen's background — not a corner, which on a multi-appeal kiosk is a campaign tab).
  * The entered digits live in local state and are handed to the ViewModel for OFFLINE scrypt
  * verification. Backoff/lockout is enforced by [state.lockedUntilMs] (computed in the VM).
  */
@@ -119,42 +123,48 @@ fun PinPad(
             Spacer(Modifier.height(12.dp))
 
             val enabled = !locked && !state.verifying
-            for (row in listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"))) {
-                Row(horizontalArrangement = Arrangement.spacedBy(KEY_GAP)) {
-                    row.forEach { d ->
-                        Key(label = d, enabled = enabled) {
-                            if (entry.length < MAX_PIN_LENGTH) entry += d
+            // The key grid keeps 1-2-3 left to right, Delete on the left and Unlock on the right, in
+            // every language — as Android's own lock-screen PIN pad does. Left to the layout direction,
+            // an Arabic- or Urdu-locale tablet mirrored it to 3-2-1 (spec §6). The title and messages
+            // above still follow the tablet.
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                for (row in listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"))) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(KEY_GAP)) {
+                        row.forEach { d ->
+                            Key(label = d, enabled = enabled) {
+                                if (entry.length < MAX_PIN_LENGTH) entry += d
+                            }
                         }
                     }
+                    Spacer(Modifier.height(KEY_GAP))
                 }
-                Spacer(Modifier.height(KEY_GAP))
-            }
-            // Pin the last row to the SAME width as the three digit rows and let Delete/Unlock split
-            // what's left beside the "0" key. Without this the two word keys size to their labels, and
-            // at kiosk type sizes that overflows the pad's 360dp column — which is how "Unlock" ended
-            // up hyphen-less across two lines.
-            Row(
-                modifier = Modifier.width(PAD_WIDTH),
-                horizontalArrangement = Arrangement.spacedBy(KEY_GAP),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SmallKey(
-                    label = stringResource(R.string.pin_delete),
-                    enabled = enabled && entry.isNotEmpty(),
-                    modifier = Modifier.weight(1f),
+                // Pin the last row to the SAME width as the three digit rows and let Delete/Unlock split
+                // what's left beside the "0" key. Without this the two word keys size to their labels,
+                // and at kiosk type sizes that overflows the pad's 360dp column — which is how "Unlock"
+                // ended up hyphen-less across two lines.
+                Row(
+                    modifier = Modifier.width(PAD_WIDTH),
+                    horizontalArrangement = Arrangement.spacedBy(KEY_GAP),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    entry = entry.dropLast(1)
-                }
-                Key(label = "0", enabled = enabled) {
-                    if (entry.length < MAX_PIN_LENGTH) entry += "0"
-                }
-                SmallKey(
-                    label = stringResource(R.string.pin_unlock),
-                    enabled = enabled && entry.isNotEmpty(),
-                    emphasised = true,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    onSubmit(entry)
+                    SmallKey(
+                        label = stringResource(R.string.pin_delete),
+                        enabled = enabled && entry.isNotEmpty(),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        entry = entry.dropLast(1)
+                    }
+                    Key(label = "0", enabled = enabled) {
+                        if (entry.length < MAX_PIN_LENGTH) entry += "0"
+                    }
+                    SmallKey(
+                        label = stringResource(R.string.pin_unlock),
+                        enabled = enabled && entry.isNotEmpty(),
+                        emphasised = true,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        onSubmit(entry)
+                    }
                 }
             }
 

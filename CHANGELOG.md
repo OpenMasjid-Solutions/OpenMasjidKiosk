@@ -7,6 +7,65 @@
 _Development builds after 0.13.0. This section is on the `dev` branch only and carries the full
 detail of every change — it is distilled into a major-changes-only entry when 0.14.0 is released._
 
+- **The admin panel now looks and behaves like part of your OpenMasjidOS dashboard** — built to the
+  platform's app UI spec. Opened from the dashboard it takes the masjid's theme, wallpaper, color
+  and writing direction *before the first frame*, so there is no flash of the wrong look.
+  - **Every one of the five dashboard colors now reads properly, in light and dark.** Buttons in
+    teal, sky, violet and gold used to have white writing on a bright fill — gold measured 1.7:1 —
+    and in light mode the links, focus ring and highlighted tab were the same bright color on a pale
+    page. Each color now carries its own ink, and light mode uses a deeper shade of it for text.
+  - **Delete, Remove, Refund and End-plan buttons** get ink chosen for red, rather than borrowing the
+    ordinary button's.
+  - **Status words in light mode** ("Saved", "Live", "Test mode", warnings, errors) were about 3:1 on
+    white; they are now a deeper shade of the same color that clears the accessibility bar
+    everywhere they appear. Every color pair is measured by the test suite.
+  - **The dashboard's typefaces**, Inter and Space Grotesk, are bundled with the app (no internet
+    needed), plus a proper Naskh face for any Arabic you type — a campaign name, a thank-you, a
+    donor's name — instead of whatever the computer falls back to.
+- **Every date now shows the Hijri date beside the Gregorian, in your masjid's time zone.** New
+  under Settings → Payments → Masjid details: the masjid's **time zone** (taken from your computer
+  the first time you sign in — change it if your masjid is elsewhere), a **12- or 24-hour clock**, and
+  a **Hijri adjustment** of up to three days either way for a masjid that follows a local sighting.
+  - **Fixed: every emailed receipt showed its date as a raw timestamp** —
+    `2026-09-30T18:03:11.123Z` — because the formatter could never have worked. Receipts, refund and
+    monthly emails now read "Sep 30, 2026, 1:03 PM · Rabiʻ II 19, 1448 AH".
+  - **Fixed: dates were in the server's time zone**, which in a container is UTC — so an evening gift
+    in America was dated the next day, and "Today" on the Donations screen ended at the wrong hour.
+  - The top-bar clock, the donations log, recurring plans, the WhatsApp `recent` reply, the donor's
+    cancel page and the Students due date on the tablet all follow the same settings.
+  - The donations CSV keeps its UTC timestamp for spreadsheets and adds **Date (masjid time)** and
+    **Hijri date** columns; it now opens correctly in Excel with Arabic or accented names, and its
+    Status column is in plain words.
+- **Money is written the way your currency writes it** — "$1,234,500", "₹1,00,000", "KWD 2.500" —
+  on the panel, in emails and on the tablets. Fixed: a Rs 25.50 gift appeared as "PKR 26" in emails,
+  and a donation in an old currency was shown in the current one.
+  - Changing to a currency with a different number of decimals (dollars to dinars or yen) now
+    converts your suggested amounts so they still mean the same, and says so.
+  - Fixed, before it could ship: the cover-the-fee total for a yen or dinar masjid would have
+    differed between what the tablet showed and what was charged.
+- **Right-to-left.** When your dashboard is in Arabic or Urdu, the panel mirrors with it. The words
+  are still English for now, and each sentence keeps its full stop in the right place; phone numbers,
+  codes and addresses always read left to right. On the tablets, the keyboard, number pads and the
+  "hold your card here" hint stay the right way round on an Arabic- or Urdu-language tablet.
+- **Keyboard and screen readers.** Every window now keeps focus inside it, closes on Escape and hands
+  focus back to what opened it. Tabs, toggles and menus announce their state; a kiosk going offline
+  or a new donation is announced; buttons stay focused while they work.
+- **Plainer words everywhere.** No more "Failed to fetch", Stripe codes like
+  `requires_payment_method`, or "embedded / standalone"; a WhatsApp message that was only queued is no
+  longer called "sent"; a failed refund says clearly that no money moved, with Stripe's own message
+  under *Technical details*. **Settings → Email receipts** can now email you a sample of the real
+  branded receipt.
+- **Lighter and faster, especially on a Raspberry Pi.** Cards are solid rather than frosted, with the
+  glass kept to the dock and menus; the background no longer animates forever; the public setup page
+  and the sign-in screen no longer download the whole panel; and the app's files are sent compressed
+  and cached.
+- **The app icon no longer shows a hand** (the spec keeps default artwork to geometric and
+  architectural shapes). On the tablets, a failed card-reader connection now says what to do rather
+  than showing the reader's own error text, and the "hold your card here" hint is visible on the
+  default colors.
+- **Fixed: renaming the masjid in Settings → Masjid details didn't reach the tablets** until some
+  other setting changed — the card-entry page kept the old name. It now updates on the next check-in.
+
 ## 0.13.0
 **A security update — please install it. Kiosk now runs on the patched Node.js that Stripe has been
 emailing masjids about, and you can now manage Kiosk from outside the masjid.**

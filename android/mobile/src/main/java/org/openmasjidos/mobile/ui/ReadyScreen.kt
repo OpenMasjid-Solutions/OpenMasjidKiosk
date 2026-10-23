@@ -138,10 +138,12 @@ fun ReadyScreen(
                 )
             },
             confirmButton = {
+                // Says what it does. A bare "Disconnect" next to "Cancel" is easy to hit meaning the
+                // other one, and this is the button a volunteer cannot undo on their own.
                 TextButton(onClick = {
                     confirming = false
                     onUnpair()
-                }) { Text("Disconnect") }
+                }) { Text("Yes, disconnect this phone") }
             },
             dismissButton = {
                 TextButton(onClick = { confirming = false }) { Text("Cancel") }

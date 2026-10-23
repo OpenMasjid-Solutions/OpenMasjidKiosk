@@ -13,7 +13,11 @@
  * can inject markup. Images (the masjid logo) and links (website) are only emitted for http(s)
  * URLs; the accent is gated to a hex color so it can't break out of the inline style.
  *
- * Mirrors OpenMasjidDonations/server/src/email.ts so both apps send an identical-looking receipt.
+ * Mirrors OpenMasjidDonations/server/src/email.ts so both apps send an identical-looking receipt —
+ * with three deliberate departures, all for the app UI spec: the accent is inked to read as text
+ * ([textInkFor]) and shown as-is only as the card's top rule, the small-print greys are AA-measured,
+ * and the document declares its language and direction. Donations still has the old greys and the
+ * raw accent as text; bringing it along is that repo's change to make.
  */
 
 export interface ReceiptTemplate {
@@ -49,6 +53,78 @@ export interface RenderedEmail {
 
 const ACCENT_DEFAULT = '#1FA37A';
 
+/**
+ * The receipt's greys. Every one of these is small text on the white card (or, for the footer, on the
+ * #f4f6f9 page), and the ones they replace were chosen by eye: #7a8892 measured 3.64:1 and #9aa7af
+ * 2.46:1, against WCAG AA's 4.5:1 for text this size (app UI spec §7, "measured, not eyeballed").
+ *
+ * They are EXACTLY the admin panel's `--er-label` and `--er-faint` (web/src/styles/tokens.css), which
+ * is what its receipt designer paints its preview with — so the preview the admin approves is the
+ * email the donor gets, down to the grey of the small print.
+ */
+const LABEL_INK = '#44515F'; // 8.1:1 on white — row labels and the contact lines
+const FAINT_INK = '#5B6978'; // 5.6:1 on white, 5.2:1 on the page — the reference, footer and "keep this email"
+
+/** #rgb, #rgba, #rrggbb or #rrggbbaa — every shape the accent gate admits — as RGB. Alpha is ignored:
+ *  text is drawn opaque. Kept identical to web/src/contrast.ts hexToRgb. */
+function hexRgb(hex: string): [number, number, number] | null {
+  let h = (hex ?? '').trim().replace(/^#/, '');
+  if (/^[0-9a-fA-F]{3,4}$/.test(h)) h = h.slice(0, 3).replace(/./g, (c) => c + c);
+  else if (/^[0-9a-fA-F]{8}$/.test(h)) h = h.slice(0, 6);
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function luminance(rgb: [number, number, number]): number {
+  const [r, g, b] = rgb.map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** WCAG contrast against the white card, written as the general ratio (not 1.05 / …) so it rounds
+ *  exactly as contrast.ts's `contrastRatio` does. */
+const WHITE_L = luminance([255, 255, 255]);
+function onWhite(rgb: [number, number, number]): number {
+  const l = luminance(rgb);
+  return (Math.max(l, WHITE_L) + 0.05) / (Math.min(l, WHITE_L) + 0.05);
+}
+
+/**
+ * The admin's accent as TEXT on the white receipt card: darkened toward black just far enough to read
+ * (WCAG AA, 4.5:1), and left exactly as it is when it already does.
+ *
+ * The accent used to be the colour of the heading and every link, verbatim — and it is a brand colour,
+ * picked to look good as a FILL. The default emerald #1FA37A is 3.19:1 as text on white; a gold like
+ * #D4AF37 is 2.10:1 (spec §3: "a filled button needs ink chosen for its fill" — the same holds for
+ * text chosen from a fill). The brand colour itself is not lost: it stays on the card as a solid rule
+ * along the top, which is where a colour that cannot be read belongs.
+ *
+ * IDENTICAL to web/src/contrast.ts `readableOn(fg)` — same luminance formula, same 2% steps toward
+ * pure black, same fallback — so the admin's receipt preview inks its heading exactly as the email
+ * will; email.test.ts runs both over the same colours. It accepts #rgb, #rgba, #rrggbb and
+ * #rrggbbaa (alpha ignored — and when it has to darken, the result is always #rrggbb). Anything else is
+ * returned unchanged, as `readableOn` does, for the caller's own gate to deal with.
+ */
+export function textInkFor(accent: string): string {
+  const rgb = hexRgb(accent);
+  if (!rgb) return accent;
+  if (onWhite(rgb) >= 4.5) return accent;
+  for (let t = 0.02; t < 1; t += 0.02) {
+    const c = rgb.map((v) => Math.max(0, Math.min(255, Math.round(v + (0 - v) * t)))) as [number, number, number];
+    if (onWhite(c) >= 4.5) return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  }
+  return '#000000';
+}
+
+/** The accent a template asked for, or the default — gated to a hex so it can never leave the style
+ *  attribute it is written into. */
+function accentOf(tpl: Pick<ReceiptTemplate, 'accent'>): string {
+  return /^#[0-9a-fA-F]{3,8}$/.test((tpl.accent || '').trim()) ? tpl.accent.trim() : ACCENT_DEFAULT;
+}
+
 /** Shared with the server’s donor-facing pages, so every place we emit donor-supplied text escapes
  *  it the same way. */
 export function escapeHtml(s: string): string {
@@ -74,16 +150,86 @@ function safeUrl(url: string): string {
   return /^https?:\/\/[^"'\\\s]+$/i.test(u) ? u : '';
 }
 
-/** One "label / value" row of the receipt details table. */
-function row(label: string, value: string, opts: { bold?: boolean; first?: boolean } = {}): string {
+/**
+ * One "label / value" row of the receipt details table.
+ *
+ * The value cell is `text-align:right`, a PHYSICAL value — which the app UI spec (§6) bans in the
+ * panel, and which is deliberately kept here. Email clients do not reliably understand `end`
+ * (Outlook's Word-based renderer among them), and every email this file writes declares
+ * `dir="ltr"` on its root ([shellOpen]), so right IS the end of the line by construction. A logical
+ * value would be the more correct spelling that some donors' mail programs cannot read.
+ *
+ * `auto` is for a value somebody typed — the fund's name — so an Arabic or Urdu one takes its own
+ * direction instead of being laid out left-to-right with its punctuation on the wrong side.
+ * Tabular figures, so the amounts and dates in the column line up digit for digit (spec §4).
+ */
+function row(label: string, value: string, opts: { bold?: boolean; first?: boolean; auto?: boolean } = {}): string {
   const border = opts.first ? '' : 'border-top:1px solid #eef1f3;';
-  const val = `padding:11px 0;text-align:right;color:#16242b;${border}${opts.bold ? 'font-weight:700;font-size:16px;' : ''}`;
-  return `<tr><td style="padding:11px 0;color:#7a8892;${border}">${escapeHtml(label)}</td><td style="${val}">${escapeHtml(value)}</td></tr>`;
+  const val = `padding:11px 0;text-align:right;color:#16242b;font-variant-numeric:tabular-nums;${border}${opts.bold ? 'font-weight:700;font-size:16px;' : ''}`;
+  return `<tr><td style="padding:11px 0;color:${LABEL_INK};${border}">${escapeHtml(label)}</td><td${opts.auto ? ' dir="auto"' : ''} style="${val}">${escapeHtml(value)}</td></tr>`;
+}
+
+/**
+ * The document and card every email here opens with.
+ *
+ * `lang="en" dir="ltr"`: the labels and the fixed copy are English, so the direction is DECLARED
+ * rather than left to each mail client's guess — which is also what makes [row]'s `text-align:right`
+ * correct. Anything a person typed (the admin's heading and paragraph, the masjid's and the fund's
+ * names, the donor's) carries `dir="auto"` where it appears, so it keeps its own direction inside
+ * that.
+ *
+ * The admin's accent is the 4px rule along the top of the card: the one place their colour appears
+ * exactly as they chose it, because as text it is darkened until it reads ([textInkFor]).
+ */
+function shellOpen(accent: string): string {
+  return `<!doctype html><html lang="en" dir="ltr"><body style="margin:0;padding:0;background:#f4f6f9">
+  <div style="max-width:540px;margin:0 auto;padding:24px 16px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#16242b">
+    <div style="background:#ffffff;border:1px solid #e6eaed;border-top:4px solid ${escapeHtml(accent)};border-radius:14px">`;
+}
+
+const SHELL_CLOSE = `
+    </div>
+    <p style="text-align:center;font-size:11px;color:${FAINT_INK};margin-top:14px">Sent by OpenMasjid Kiosk · Secured by Stripe</p>
+  </div>
+</body></html>`;
+
+/** The masjid's name as the header when there is no logo — `dir="auto"`, because it is theirs. */
+function headerFor(logo: string, masjid: string): string {
+  return logo
+    ? `<img src="${escapeHtml(logo)}" alt="${escapeHtml(masjid)}" style="max-height:60px;max-width:220px;height:auto">`
+    : masjid
+      ? `<div dir="auto" style="font-size:20px;font-weight:700;color:#16242b">${escapeHtml(masjid)}</div>`
+      : '';
+}
+
+/** A link in the admin's accent, inked to read on white. */
+function link(href: string, label: string, accent: string): string {
+  return `<a href="${escapeHtml(href)}" style="color:${escapeHtml(textInkFor(accent))};text-decoration:none">${escapeHtml(label)}</a>`;
+}
+
+/**
+ * A paragraph of FIXED English copy with names in it (the donor's, the masjid's).
+ *
+ * The names are isolated — each in its own `dir="auto"` span, the spelling of `<bdi>` that older mail
+ * clients also understand — so an Arabic or Urdu name keeps its own direction while the English
+ * sentence around it stays left-to-right. Without the isolation, the full stop or amount that follows
+ * a right-to-left name is pulled into it and lands on the wrong side. The plain-text part is the same
+ * words with nothing added.
+ */
+type Seg = string | { name: string };
+function paragraphOf(parts: Seg[][]): { text: string; html: string } {
+  const flat = parts.filter((p) => p.length > 0);
+  return {
+    text: flat.map((p) => p.map((s) => (typeof s === 'string' ? s : s.name)).join('')).join('\n\n'),
+    html: flat
+      .map((p) => p.map((s) => (typeof s === 'string' ? escapeHtml(s) : `<span dir="auto">${escapeHtml(s.name)}</span>`)).join(''))
+      .join('<br><br>'),
+  };
 }
 
 /** Build the subject/text/html of a receipt email. `html` is a light, Stripe-style receipt. */
 export function renderReceipt(tpl: ReceiptTemplate, ctx: ReceiptContext): RenderedEmail {
-  const accent = /^#[0-9a-fA-F]{3,8}$/.test((tpl.accent || '').trim()) ? tpl.accent.trim() : ACCENT_DEFAULT;
+  const accent = accentOf(tpl);
   const vars = { name: ctx.name, amount: ctx.amountText, campaign: ctx.campaignTitle, masjid: ctx.masjidName };
   const subject = (fillVars(tpl.subject || 'Your donation receipt', vars) || 'Your donation receipt').slice(0, 200);
   const heading = fillVars(tpl.heading || 'JazākAllāhu khayran!', vars) || 'JazākAllāhu khayran!';
@@ -111,39 +257,36 @@ export function renderReceipt(tpl: ReceiptTemplate, ctx: ReceiptContext): Render
   const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
   // ── HTML part (everything escaped) ──
-  const header = logo
-    ? `<img src="${escapeHtml(logo)}" alt="${escapeHtml(masjid)}" style="max-height:60px;max-width:220px;height:auto">`
-    : masjid
-      ? `<div style="font-size:20px;font-weight:700;color:#16242b">${escapeHtml(masjid)}</div>`
-      : '';
-  const refLine = ctx.reference ? `<div style="margin-top:12px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#9aa7af">Receipt · ${escapeHtml(ctx.reference)}</div>` : '';
+  const header = headerFor(logo, masjid);
+  const refLine = ctx.reference ? `<div style="margin-top:12px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:${FAINT_INK}">Receipt · ${escapeHtml(ctx.reference)}</div>` : '';
   const bodyHtml = escapeHtml(paragraph).replace(/\n/g, '<br>');
   const details = [
     row('Amount paid', ctx.amountText, { bold: true, first: true }),
     row('Date paid', ctx.datePaid),
     row('Payment method', ctx.paymentMethod),
-    ctx.campaignTitle ? row('Fund', ctx.campaignTitle) : '',
+    ctx.campaignTitle ? row('Fund', ctx.campaignTitle, { auto: true }) : '',
   ].join('');
 
   // Contact line — a mailto link (accent) when an email is set, plus phone, plus a website link.
   const contactInner: string[] = [];
-  if (ctx.contactEmail.trim()) contactInner.push(`<a href="mailto:${escapeHtml(ctx.contactEmail.trim())}" style="color:${escapeHtml(accent)};text-decoration:none">${escapeHtml(ctx.contactEmail.trim())}</a>`);
+  if (ctx.contactEmail.trim()) contactInner.push(link(`mailto:${ctx.contactEmail.trim()}`, ctx.contactEmail.trim(), accent));
   if (ctx.contactPhone.trim()) contactInner.push(escapeHtml(ctx.contactPhone.trim()));
   const contactLine = contactInner.length
-    ? `<p style="margin:0;font-size:13px;line-height:1.6;color:#7a8892">Questions about this donation? Contact ${escapeHtml(masjid || 'us')} — ${contactInner.join(' · ')}.</p>`
-    : `<p style="margin:0;font-size:13px;color:#7a8892">Questions about this donation? Please contact ${escapeHtml(masjid || 'the masjid')}.</p>`;
-  const websiteLine = website ? `<p style="margin:6px 0 0;font-size:13px"><a href="${escapeHtml(website)}" style="color:${escapeHtml(accent)};text-decoration:none">${escapeHtml(website.replace(/^https?:\/\//, ''))}</a></p>` : '';
+    ? `<p style="margin:0;font-size:13px;line-height:1.6;color:${LABEL_INK}">Questions about this donation? Contact <span dir="auto">${escapeHtml(masjid || 'us')}</span> — ${contactInner.join(' · ')}.</p>`
+    : `<p style="margin:0;font-size:13px;color:${LABEL_INK}">Questions about this donation? Please contact <span dir="auto">${escapeHtml(masjid || 'the masjid')}</span>.</p>`;
+  const websiteLine = website ? `<p style="margin:6px 0 0;font-size:13px">${link(website, website.replace(/^https?:\/\//, ''), accent)}</p>` : '';
 
-  const html = `<!doctype html><html><body style="margin:0;padding:0;background:#f4f6f9">
-  <div style="max-width:540px;margin:0 auto;padding:24px 16px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#16242b">
-    <div style="background:#ffffff;border:1px solid #e6eaed;border-radius:14px">
+  // The heading and the paragraph are the ADMIN'S words, in whatever language they wrote them, so
+  // each takes its own direction (`dir="auto"`) — an Arabic heading reads right-to-left in an
+  // otherwise English email. The heading is in the accent, inked to read on white.
+  const html = `${shellOpen(accent)}
       <div style="padding:30px 30px 6px;text-align:center">
         ${header}
         ${refLine}
       </div>
       <div style="padding:14px 30px 4px;text-align:center">
-        <h1 style="margin:0 0 12px;font-size:21px;line-height:1.25;color:${escapeHtml(accent)}">${escapeHtml(heading)}</h1>
-        <p style="margin:0;font-size:15px;line-height:1.6;color:#42535c">${bodyHtml}</p>
+        <h1 dir="auto" style="margin:0 0 12px;font-size:21px;line-height:1.25;color:${escapeHtml(textInkFor(accent))}">${escapeHtml(heading)}</h1>
+        <p dir="auto" style="margin:0;font-size:15px;line-height:1.6;color:#42535c">${bodyHtml}</p>
       </div>
       <div style="padding:14px 30px 4px">
         <table role="presentation" width="100%" style="border-collapse:collapse;font-size:14px">${details}</table>
@@ -151,11 +294,7 @@ export function renderReceipt(tpl: ReceiptTemplate, ctx: ReceiptContext): Render
       <div style="padding:16px 30px 28px;margin-top:8px;border-top:1px solid #eef1f3;text-align:center">
         ${contactLine}
         ${websiteLine}
-      </div>
-    </div>
-    <p style="text-align:center;font-size:11px;color:#9aa7af;margin-top:14px">Sent by OpenMasjid Kiosk · Secured by Stripe</p>
-  </div>
-</body></html>`;
+      </div>${SHELL_CLOSE}`;
 
   return { subject, text, html };
 }
@@ -182,7 +321,7 @@ export interface MonthlyStartedContext extends ReceiptContext {
  * Same shell and same escaping as the receipt.
  */
 export function renderMonthlyStarted(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: MonthlyStartedContext): RenderedEmail {
-  const accent = /^#[0-9a-fA-F]{3,8}$/.test((tpl.accent || '').trim()) ? tpl.accent.trim() : ACCENT_DEFAULT;
+  const accent = accentOf(tpl);
   const masjid = ctx.masjidName.trim();
   const logo = safeUrl(ctx.masjidLogo);
   const website = safeUrl(ctx.contactWebsite);
@@ -191,16 +330,18 @@ export function renderMonthlyStarted(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: 
 
   const subject = (masjid ? `Your monthly donation to ${masjid} is set up` : 'Your monthly donation is set up').slice(0, 200);
   const heading = 'Your monthly donation is set up';
-  const paragraph = [
-    who ? `${who},` : '',
-    `Thank you — your ${ctx.amountText} donation will now repeat every month${masjid ? ` to ${masjid}` : ''}. ` +
-      `You have already given this month at the kiosk, so the next payment is on ${ctx.nextChargeDate}.`,
+  const para = paragraphOf([
+    who ? [{ name: who }, ','] : [],
+    [
+      `Thank you — your ${ctx.amountText} donation will now repeat every month`,
+      ...(masjid ? [' to ', { name: masjid }] : []),
+      `. You have already given this month at the kiosk, so the next payment is on ${ctx.nextChargeDate}.`,
+    ],
     cancel
-      ? 'You can stop it at any time, yourself, using the link below. PLEASE KEEP THIS EMAIL — the link is the quickest way to stop your monthly donation, and this message is the only place it appears.'
-      : `You can stop it at any time — just contact ${masjid || 'the masjid'} using the details below and they will end it for you.`,
-  ]
-    .filter(Boolean)
-    .join('\n\n');
+      ? ['You can stop it at any time, yourself, using the link below. PLEASE KEEP THIS EMAIL — the link is the quickest way to stop your monthly donation, and this message is the only place it appears.']
+      : ['You can stop it at any time — just contact ', { name: masjid || 'the masjid' }, ' using the details below and they will end it for you.'],
+  ]);
+  const paragraph = para.text;
 
   const lines = [
     heading,
@@ -221,17 +362,13 @@ export function renderMonthlyStarted(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: 
   if (ctx.contactWebsite.trim()) lines.push(ctx.contactWebsite.trim());
   const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
-  const header = logo
-    ? `<img src="${escapeHtml(logo)}" alt="${escapeHtml(masjid)}" style="max-height:60px;max-width:220px;height:auto">`
-    : masjid
-      ? `<div style="font-size:20px;font-weight:700;color:#16242b">${escapeHtml(masjid)}</div>`
-      : '';
+  const header = headerFor(logo, masjid);
   const details = [
     row('Amount', `${ctx.amountText} each month`, { bold: true, first: true }),
     row('Next payment', ctx.nextChargeDate),
     row('Started', ctx.datePaid),
     row('Payment method', ctx.paymentMethod),
-    ctx.campaignTitle ? row('Fund', ctx.campaignTitle) : '',
+    ctx.campaignTitle ? row('Fund', ctx.campaignTitle, { auto: true }) : '',
   ].join('');
 
   // The cancel control is a button, not a bare URL: a donor who wants to stop should not have to hunt
@@ -239,32 +376,25 @@ export function renderMonthlyStarted(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: 
   const cancelBlock = cancel
     ? `<div style="padding:6px 30px 4px;text-align:center">
          <a href="${escapeHtml(cancel)}" style="display:inline-block;padding:11px 18px;border:1px solid #d6dde2;border-radius:10px;color:#42535c;text-decoration:none;font-size:14px">Stop my monthly donation</a>
-         <p style="margin:10px 0 0;font-size:12px;line-height:1.6;color:#9aa7af">Keep this email — this is the only place that link appears.</p>
+         <p style="margin:10px 0 0;font-size:12px;line-height:1.6;color:${FAINT_INK}">Keep this email — this is the only place that link appears.</p>
        </div>`
     : `<div style="padding:6px 30px 4px;text-align:center">
-         <p style="margin:0;font-size:13px;line-height:1.6;color:#7a8892">To stop your monthly donation, contact ${escapeHtml(masjid || 'the masjid')} using the details below.</p>
+         <p style="margin:0;font-size:13px;line-height:1.6;color:${LABEL_INK}">To stop your monthly donation, contact <span dir="auto">${escapeHtml(masjid || 'the masjid')}</span> using the details below.</p>
        </div>`;
 
   const contactInner: string[] = [];
-  if (ctx.contactEmail.trim())
-    contactInner.push(
-      `<a href="mailto:${escapeHtml(ctx.contactEmail.trim())}" style="color:${escapeHtml(accent)};text-decoration:none">${escapeHtml(ctx.contactEmail.trim())}</a>`,
-    );
+  if (ctx.contactEmail.trim()) contactInner.push(link(`mailto:${ctx.contactEmail.trim()}`, ctx.contactEmail.trim(), accent));
   if (ctx.contactPhone.trim()) contactInner.push(escapeHtml(ctx.contactPhone.trim()));
   const contactLine = contactInner.length
-    ? `<p style="margin:0;font-size:13px;line-height:1.6;color:#7a8892">Questions about this donation? Contact ${escapeHtml(masjid || 'us')} — ${contactInner.join(' · ')}.</p>`
-    : `<p style="margin:0;font-size:13px;color:#7a8892">Questions about this donation? Please contact ${escapeHtml(masjid || 'the masjid')}.</p>`;
-  const websiteLine = website
-    ? `<p style="margin:6px 0 0;font-size:13px"><a href="${escapeHtml(website)}" style="color:${escapeHtml(accent)};text-decoration:none">${escapeHtml(website.replace(/^https?:\/\//, ''))}</a></p>`
-    : '';
+    ? `<p style="margin:0;font-size:13px;line-height:1.6;color:${LABEL_INK}">Questions about this donation? Contact <span dir="auto">${escapeHtml(masjid || 'us')}</span> — ${contactInner.join(' · ')}.</p>`
+    : `<p style="margin:0;font-size:13px;color:${LABEL_INK}">Questions about this donation? Please contact <span dir="auto">${escapeHtml(masjid || 'the masjid')}</span>.</p>`;
+  const websiteLine = website ? `<p style="margin:6px 0 0;font-size:13px">${link(website, website.replace(/^https?:\/\//, ''), accent)}</p>` : '';
 
-  const html = `<!doctype html><html><body style="margin:0;padding:0;background:#f4f6f9">
-  <div style="max-width:540px;margin:0 auto;padding:24px 16px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#16242b">
-    <div style="background:#ffffff;border:1px solid #e6eaed;border-radius:14px">
+  const html = `${shellOpen(accent)}
       <div style="padding:30px 30px 6px;text-align:center">${header}</div>
       <div style="padding:14px 30px 4px;text-align:center">
-        <h1 style="margin:0 0 12px;font-size:21px;line-height:1.25;color:${escapeHtml(accent)}">${escapeHtml(heading)}</h1>
-        <p style="margin:0;font-size:15px;line-height:1.6;color:#42535c">${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>
+        <h1 style="margin:0 0 12px;font-size:21px;line-height:1.25;color:${escapeHtml(textInkFor(accent))}">${escapeHtml(heading)}</h1>
+        <p style="margin:0;font-size:15px;line-height:1.6;color:#42535c">${para.html}</p>
       </div>
       <div style="padding:14px 30px 4px">
         <table role="presentation" width="100%" style="border-collapse:collapse;font-size:14px">${details}</table>
@@ -273,11 +403,7 @@ export function renderMonthlyStarted(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: 
       <div style="padding:16px 30px 28px;margin-top:8px;border-top:1px solid #eef1f3;text-align:center">
         ${contactLine}
         ${websiteLine}
-      </div>
-    </div>
-    <p style="text-align:center;font-size:11px;color:#9aa7af;margin-top:14px">Sent by OpenMasjid Kiosk · Secured by Stripe</p>
-  </div>
-</body></html>`;
+      </div>${SHELL_CLOSE}`;
 
   return { subject, text, html };
 }
@@ -308,7 +434,7 @@ export interface RefundContext extends ReceiptContext {
  * contact details still come through, which is the part that matters for the donor recognizing it.
  */
 export function renderRefund(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: RefundContext): RenderedEmail {
-  const accent = /^#[0-9a-fA-F]{3,8}$/.test((tpl.accent || '').trim()) ? tpl.accent.trim() : ACCENT_DEFAULT;
+  const accent = accentOf(tpl);
   const masjid = ctx.masjidName.trim();
   const logo = safeUrl(ctx.masjidLogo);
   const website = safeUrl(ctx.contactWebsite);
@@ -317,17 +443,17 @@ export function renderRefund(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: RefundCo
   const subject = (masjid ? `Your donation to ${masjid} has been refunded` : 'Your donation has been refunded').slice(0, 200);
   const heading = ctx.full ? 'Your donation has been refunded' : 'Part of your donation has been refunded';
   // Say the money is on its way back, then the one thing every donor actually asks next: when.
-  // 5–10 working days is the card-network norm Stripe documents; promising faster would be a
+  // 5–10 business days is the card-network norm Stripe documents; promising faster would be a
   // promise neither we nor the masjid control.
-  const paragraph = [
-    who ? `${who},` : '',
+  const atMasjid: Seg[] = masjid ? [' at ', { name: masjid }] : [];
+  const para = paragraphOf([
+    who ? [{ name: who }, ','] : [],
     ctx.full
-      ? `${ctx.refundAmountText} has been refunded to the card you used${masjid ? ` at ${masjid}` : ''}.`
-      : `${ctx.refundAmountText} of your ${ctx.amountText} donation has been refunded to the card you used${masjid ? ` at ${masjid}` : ''}.`,
-    'It goes back to the same card automatically — most banks show it within 5 to 10 working days. There is nothing for you to do.',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
+      ? [`${ctx.refundAmountText} has been refunded to the card you used`, ...atMasjid, '.']
+      : [`${ctx.refundAmountText} of your ${ctx.amountText} donation has been refunded to the card you used`, ...atMasjid, '.'],
+    ['It goes back to the same card automatically — most banks show it within 5 to 10 business days. There is nothing for you to do.'],
+  ]);
+  const paragraph = para.text;
 
   const lines = [
     heading,
@@ -348,13 +474,9 @@ export function renderRefund(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: RefundCo
   if (ctx.contactWebsite.trim()) lines.push(ctx.contactWebsite.trim());
   const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 
-  const header = logo
-    ? `<img src="${escapeHtml(logo)}" alt="${escapeHtml(masjid)}" style="max-height:60px;max-width:220px;height:auto">`
-    : masjid
-      ? `<div style="font-size:20px;font-weight:700;color:#16242b">${escapeHtml(masjid)}</div>`
-      : '';
+  const header = headerFor(logo, masjid);
   const refLine = ctx.reference
-    ? `<div style="margin-top:12px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#9aa7af">Refund · ${escapeHtml(ctx.reference)}</div>`
+    ? `<div style="margin-top:12px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:${FAINT_INK}">Refund · ${escapeHtml(ctx.reference)}</div>`
     : '';
   const details = [
     row('Refunded', ctx.refundAmountText, { bold: true, first: true }),
@@ -362,32 +484,25 @@ export function renderRefund(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: RefundCo
     row('Date refunded', ctx.dateRefunded),
     row('Date paid', ctx.datePaid),
     row('Payment method', ctx.paymentMethod),
-    ctx.campaignTitle ? row('Fund', ctx.campaignTitle) : '',
+    ctx.campaignTitle ? row('Fund', ctx.campaignTitle, { auto: true }) : '',
   ].join('');
 
   const contactInner: string[] = [];
-  if (ctx.contactEmail.trim())
-    contactInner.push(
-      `<a href="mailto:${escapeHtml(ctx.contactEmail.trim())}" style="color:${escapeHtml(accent)};text-decoration:none">${escapeHtml(ctx.contactEmail.trim())}</a>`,
-    );
+  if (ctx.contactEmail.trim()) contactInner.push(link(`mailto:${ctx.contactEmail.trim()}`, ctx.contactEmail.trim(), accent));
   if (ctx.contactPhone.trim()) contactInner.push(escapeHtml(ctx.contactPhone.trim()));
   const contactLine = contactInner.length
-    ? `<p style="margin:0;font-size:13px;line-height:1.6;color:#7a8892">Questions about this refund? Contact ${escapeHtml(masjid || 'us')} — ${contactInner.join(' · ')}.</p>`
-    : `<p style="margin:0;font-size:13px;color:#7a8892">Questions about this refund? Please contact ${escapeHtml(masjid || 'the masjid')}.</p>`;
-  const websiteLine = website
-    ? `<p style="margin:6px 0 0;font-size:13px"><a href="${escapeHtml(website)}" style="color:${escapeHtml(accent)};text-decoration:none">${escapeHtml(website.replace(/^https?:\/\//, ''))}</a></p>`
-    : '';
+    ? `<p style="margin:0;font-size:13px;line-height:1.6;color:${LABEL_INK}">Questions about this refund? Contact <span dir="auto">${escapeHtml(masjid || 'us')}</span> — ${contactInner.join(' · ')}.</p>`
+    : `<p style="margin:0;font-size:13px;color:${LABEL_INK}">Questions about this refund? Please contact <span dir="auto">${escapeHtml(masjid || 'the masjid')}</span>.</p>`;
+  const websiteLine = website ? `<p style="margin:6px 0 0;font-size:13px">${link(website, website.replace(/^https?:\/\//, ''), accent)}</p>` : '';
 
-  const html = `<!doctype html><html><body style="margin:0;padding:0;background:#f4f6f9">
-  <div style="max-width:540px;margin:0 auto;padding:24px 16px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#16242b">
-    <div style="background:#ffffff;border:1px solid #e6eaed;border-radius:14px">
+  const html = `${shellOpen(accent)}
       <div style="padding:30px 30px 6px;text-align:center">
         ${header}
         ${refLine}
       </div>
       <div style="padding:14px 30px 4px;text-align:center">
-        <h1 style="margin:0 0 12px;font-size:21px;line-height:1.25;color:${escapeHtml(accent)}">${escapeHtml(heading)}</h1>
-        <p style="margin:0;font-size:15px;line-height:1.6;color:#42535c">${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>
+        <h1 style="margin:0 0 12px;font-size:21px;line-height:1.25;color:${escapeHtml(textInkFor(accent))}">${escapeHtml(heading)}</h1>
+        <p style="margin:0;font-size:15px;line-height:1.6;color:#42535c">${para.html}</p>
       </div>
       <div style="padding:14px 30px 4px">
         <table role="presentation" width="100%" style="border-collapse:collapse;font-size:14px">${details}</table>
@@ -395,11 +510,7 @@ export function renderRefund(tpl: Pick<ReceiptTemplate, 'accent'>, ctx: RefundCo
       <div style="padding:16px 30px 28px;margin-top:8px;border-top:1px solid #eef1f3;text-align:center">
         ${contactLine}
         ${websiteLine}
-      </div>
-    </div>
-    <p style="text-align:center;font-size:11px;color:#9aa7af;margin-top:14px">Sent by OpenMasjid Kiosk · Secured by Stripe</p>
-  </div>
-</body></html>`;
+      </div>${SHELL_CLOSE}`;
 
   return { subject, text, html };
 }

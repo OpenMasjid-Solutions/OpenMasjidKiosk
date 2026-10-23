@@ -74,7 +74,7 @@ export const ALERT_META: {
   {
     id: 'payment-failed',
     label: 'A payment couldn’t be started',
-    description: 'Stripe refused to set a payment up — usually keys, or Stripe itself being down.',
+    description: 'Stripe refused to set a payment up — usually the Stripe account setup, or Stripe itself being down.',
     // Off for a new recipient ON PURPOSE. It is the only alert here with no natural bound.
     defaultOn: false,
     carriesDonorIdentity: false,
@@ -82,7 +82,7 @@ export const ALERT_META: {
   {
     id: 'monthly-failed',
     label: 'A monthly donation couldn’t be set up',
-    description: 'Someone was charged once but no standing order exists, so they may need telling.',
+    description: 'Someone was charged once but no monthly plan was set up, so they may need telling.',
     defaultOn: true,
     carriesDonorIdentity: false,
   },
@@ -299,13 +299,23 @@ export function canonicalAddress(kind: RecipientKind, address: string): string {
   return v.slice(0, 64);
 }
 
+/**
+ * The longest name an admin can give a recipient.
+ *
+ * The admin panel's label box carries the same `maxLength` (web/src/alerts.tsx, `rcp-label`), so the
+ * limit is visible while they type — a name is never cut behind their back, which is what this cap
+ * alone used to do: the box took any length and the save quietly kept the first 80 characters. This
+ * stays as the backstop for anything PUT to the API directly.
+ */
+export const RECIPIENT_LABEL_MAX = 80;
+
 /** Clean and bound one recipient as it arrives from the admin API. Unknown keys are dropped. */
 export function sanitizeRecipient(
   patch: Partial<AlertRecipient>,
   current: AlertRecipient,
 ): AlertRecipient {
   const next: AlertRecipient = { ...current, alerts: [...current.alerts] };
-  if (typeof patch.label === 'string') next.label = patch.label.trim().slice(0, 80);
+  if (typeof patch.label === 'string') next.label = patch.label.trim().slice(0, RECIPIENT_LABEL_MAX);
   if (typeof patch.includeNames === 'boolean') next.includeNames = patch.includeNames;
   if (typeof patch.address === 'string') {
     const a = canonicalAddress(next.kind, patch.address);
@@ -623,6 +633,56 @@ export function permitReasonText(reason: WhatsAppPermit['reason'], pacing: Whats
     default:
       return '';
   }
+}
+
+/**
+ * Why a channel did not deliver, in words a volunteer can act on (app UI spec §9).
+ *
+ * The senders in fabric.ts report failures as SHORT CODES — `http_503`, `unreachable`, `threw`,
+ * `no-fabric`, `not_configured` — because a code is what a caller can branch on. They were also
+ * what the admin read: the test button answered "Nothing was sent — OpenMasjidOS: http_503; email
+ * Treasurer: threw", which tells a trustee nothing about what to do next.
+ *
+ * ONLY OUR OWN CODES ARE TRANSLATED. A reason containing a space is a sentence the platform wrote
+ * for exactly this reader ("That group has not been approved for sending in OpenMasjidOS.") and is
+ * passed through untouched — that sentence is the whole point of showing a refusal beside the switch
+ * that caused it, and flattening it to "it didn't go through" would undo that.
+ *
+ * `empty` (a message with nothing in it, which we never send) and '' (no reason at all — e.g. a
+ * message that WAS queued) both read as nothing. Anything else we do not recognize reads as a plain
+ * failure rather than as the code: an unknown code on screen is still jargon.
+ *
+ * The phrases are written to follow a channel name — "OpenMasjidOS: …", "email Treasurer: …" — so
+ * they start lower-case and carry no full stop.
+ */
+export function reasonWords(code: string): string {
+  const c = typeof code === 'string' ? code.trim() : '';
+  if (!c || c === 'empty') return '';
+  if (/\s/.test(c)) return c;
+  switch (c) {
+    case 'no-fabric':
+      return 'this app isn’t connected to OpenMasjidOS';
+    case 'unreachable':
+    case 'threw':
+      return 'OpenMasjidOS didn’t answer — check it’s running, then try again';
+    case 'not_configured':
+      return 'no email provider is set up (OpenMasjidOS → Settings → Email)';
+    case 'rate_limited':
+      return 'the email provider asked us to slow down — try again in a few minutes';
+    case 'disabled_by_admin':
+      return 'switched off in OpenMasjidOS → Settings → Alerts';
+    case 'refused':
+      return 'OpenMasjidOS refused it';
+    case 'bad_recipient':
+      return 'the email provider refused that address — check it for a typo, then try again';
+  }
+  const http = /^http_(\d{3})$/.exec(c);
+  if (http) {
+    const status = Number(http[1]);
+    if (status >= 500) return 'OpenMasjidOS didn’t answer — check it’s running, then try again';
+    if (status >= 400) return 'OpenMasjidOS turned it down';
+  }
+  return 'it didn’t go through';
 }
 
 /** Append "and N more since" when a burst was held back, so suppression is visible to the reader. */

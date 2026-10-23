@@ -22,7 +22,7 @@ import { config, ssoConfigured } from './config';
 import { makeLog } from './logger';
 import { MAX_ALERT_RECIPIENTS, Store, grossUpForFees, type Device, type DonationRecord, type EmailReceipt, type PlanRecord } from './store';
 import { COOKIE, cookieOptions, hashPassword, hashPin, makeDeviceToken, makePairingCode, makeToken, verifyPassword, verifyToken, SSO_SESSION_MS } from './auth';
-import { notify, probePlatform, platformUser, fetchAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppGroup, fabricWhatsAppGroups, fabricWhatsAppSuspect, fabricWhatsAppStatus, fabricWhatsAppOutcome, clearWhatsAppCache, emailStatus, emailCanSend, type WhatsAppSuspectWindow } from './fabric';
+import { notify, probePlatform, platformUser, fetchAppearance, fetchPlatformLogo, relayedAppearance, fetchFabricStripe, fetchFabricStripeAccounts, clearFabricStripeCache, fetchFabricSite, cachedFabricSite, fabricEmail, fabricAlert, fabricWhatsApp, fabricWhatsAppGroup, fabricWhatsAppGroups, fabricWhatsAppSuspect, fabricWhatsAppStatus, fabricWhatsAppOutcome, clearWhatsAppCache, emailStatus, emailCanSend, type WhatsAppSuspectWindow } from './fabric';
 import {
   ALERT_IDS,
   ALERT_META,
@@ -37,6 +37,7 @@ import {
   pacingUsage,
   permitReasonText,
   phoneLooksValid,
+  reasonWords,
   recipientsFor,
   recordWhatsAppSends,
   whatsappPermit,
@@ -48,7 +49,19 @@ import { studentsInfo, studentsIdentify, studentsLookup, recordStudentPayment, c
 import { GlobalAttemptBudget, LoginLimiter } from './rateLimit';
 import { authorizeCommandCall, buildCommands, findCommand, runCommand, tidyReply, validFollowUpToken } from './commands';
 import { blockedOverTunnel } from './tunnel';
-import { toCsv } from './csv';
+import { CSV_BOM, donationCsvRows, toCsv } from './csv';
+import { formatCalendarDate, formatDate, formatDateTime, isValidTimeZone } from './dates';
+import { formatMoney as formatMoneyIn, isKnownCurrency } from './money';
+import {
+  CAMPAIGN_FIELD_WORDS,
+  GIVING_FIELD_WORDS,
+  MASJID_FIELD_WORDS,
+  issueSentence,
+  refundFailure,
+  sampleReceiptContext,
+  tooManyTries,
+  waitWords,
+} from './replies';
 import {
   completeCardPresentPaymentIntent,
   createCardPaymentIntent,
@@ -73,7 +86,6 @@ import {
   sendStripeReceipt,
   stripeConfigured,
   stripeMode,
-  toMajor,
   verifySecretKey,
   type StripeKeys,
 } from './stripe';
@@ -86,6 +98,7 @@ const LOOPBACK_RE = /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[?::1)/i;
  *  so ~35s is three missed beats — long enough not to flap on one dropped packet. Module-level so
  *  the Devices page and the WhatsApp `kiosks` command can never disagree about who is online. */
 const ONLINE_MS = 35_000;
+
 
 /** The download filenames we hand the device — versioned so a stale cached copy is obvious.
  *  The URL paths stay stable at /download/openmasjidkiosk.apk and /download/openmasjidmobile.apk. */
@@ -101,6 +114,18 @@ const viaTunnel = (req: { raw: unknown }): boolean => tunnelMark(req).omosViaTun
 async function main(): Promise<void> {
   const store = new Store();
   const loginLimiter = new LoginLimiter();
+
+  /**
+   * Minor units → the text a person reads, in the masjid's own conventions (money.ts). The one money
+   * formatter for everything the server writes: receipts, refund and monthly emails, alerts, WhatsApp
+   * replies, the donor's cancel page, the tuition floor message.
+   *
+   * It used to be a closure further down this function that let Intl choose the fraction digits, and
+   * ICU disagrees with Stripe for currencies the app offers — a Rs 25.50 gift printed "PKR 26". The
+   * scale now comes from Stripe's table, the symbol and grouping from the masjid's locale. Defined up
+   * here, before anything that formats, so no call site depends on hoisting to find it.
+   */
+  const formatMoney = (minor: number, currency: string): string => formatMoneyIn(minor, currency, store.getClock().locale);
 
   const app = Fastify({
     logger: false, // we log ourselves and never log secrets
@@ -135,6 +160,32 @@ async function main(): Promise<void> {
     },
   });
 
+  // Consistent JSON error envelope; never leak a stack trace or framework-internal text.
+  //
+  // REGISTERED FIRST, BEFORE ANY ROUTE, and that is load-bearing. Fastify fixes a route's error
+  // handler when the route is added, so this used to sit at the bottom of main() and govern nothing
+  // above it: a malformed JSON body came back as Fastify's own
+  // {"code":"FST_ERR_CTP_INVALID_JSON_BODY","message":"Body is not valid JSON…"}, and an
+  // unexpected throw in any handler returned its raw message — exactly what this exists to prevent.
+  //
+  // The 4xx fallback says what to do next. "We couldn’t process that request." was a verdict with no
+  // way forward, and what reaches it in practice — a malformed body, an unsupported content type — is
+  // almost always a page older than the server it is talking to, which a reload fixes.
+  app.setErrorHandler((err, req, reply) => {
+    const e = err as { message?: string; statusCode?: number; expose?: boolean };
+    log.error('request error', e.message ?? 'unknown');
+    const status = typeof e.statusCode === 'number' && e.statusCode >= 400 && e.statusCode < 600 ? e.statusCode : 500;
+    const friendly =
+      status === 413
+        ? 'That request was too large.'
+        : status < 500
+          ? req.method === 'GET' || req.method === 'HEAD'
+            ? 'We couldn’t load that. Reload the page and try again.'
+            : 'We couldn’t save that. Reload the page and try again.'
+          : 'Something went wrong. Please try again.';
+    reply.code(status).send({ error: e.expose && e.message ? e.message : friendly });
+  });
+
   await app.register(fastifyCookie);
   // Campaign images (background/cover/logo) are uploaded here. One small file per request; the
   // 5 MiB cap is generous for a wallpaper but bounded. Registered separately from the 1 MiB JSON
@@ -163,10 +214,23 @@ async function main(): Promise<void> {
   // Both headers, on purpose: `frame-ancestors` is the modern rule and the only one that governs
   // nested/`<object>` embedding, while `X-Frame-Options` still covers browsers that never
   // implemented CSP level 2. They agree, so neither can weaken the other.
+  //
+  // NO CDNS, ENFORCED RATHER THAN HOPED FOR. The app spec's rule (§8) is zero external requests: a
+  // masjid may be LAN-only with no route to the internet at all. Today every fetch the panel makes
+  // is same-origin (the API, and our own appearance and logo relays) and every font is bundled, so
+  // `connect-src 'self'` and `font-src 'self'` change nothing that works — they turn a future CDN
+  // font or a hard-coded outside fetch into a visible console error instead of a silent dependency.
+  //
+  // Three directives are deliberately NOT set:
+  //   • img-src — the platform's wallpaperImage and an admin's campaign/logo images are full https
+  //     URLs the admin chose, by design;
+  //   • script-src — index.html's inline pre-paint theme script and the tunnel's per-request
+  //     `window.__OMOS_BASE__` script (sendIndexHtml, below) would both need a hash or a nonce;
+  //   • style-src — the donor cancel page is a single inline <style>, and React sets inline styles.
   app.addHook('onSend', async (_req, reply) => {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'no-referrer');
-    reply.header('content-security-policy', "frame-ancestors 'none'");
+    reply.header('content-security-policy', "frame-ancestors 'none'; connect-src 'self'; font-src 'self'");
     reply.header('x-frame-options', 'DENY');
   });
 
@@ -271,11 +335,11 @@ async function main(): Promise<void> {
   // Refused over the tunnel (tunnel.ts blocks all of /fabric), so the caller is always on the LAN.
   // See commands.ts for the two-header trust boundary and why an absent secret fails closed.
   //
-  // `money` is passed as a closure rather than a value because formatMoney is defined further down
-  // this function; it is only ever called while handling a request, long after startup.
+  // `money` is the same locale-aware formatter the panel's figures and the receipts use, so an
+  // amount read out over WhatsApp matches the one on the screen character for character.
   const commands = buildCommands({
     store,
-    money: (minor, currency) => formatMoney(minor, currency),
+    money: formatMoney,
     onlineWithinMs: ONLINE_MS,
   });
   app.post('/fabric/commands/run', async (req, reply) => {
@@ -293,7 +357,7 @@ async function main(): Promise<void> {
       // Everything else is one flat 403 with no detail. Distinguishing "wrong secret" from "wrong
       // caller" on the wire would tell someone probing which half they had already got right.
       log.warn(`rejected a command call (${auth.reason})`);
-      return reply.code(403).send({ ok: false, error: 'Not authorised.' });
+      return reply.code(403).send({ ok: false, error: 'Not authorized.' });
     }
 
     const parsed = z
@@ -344,6 +408,9 @@ async function main(): Promise<void> {
     data: {
       name: 'OpenMasjid Kiosk',
       version: config.version,
+      // The masjid's own name, for the public setup page's header. Public already: it is on every
+      // kiosk's attract screen and every receipt, and this route carries nothing else of theirs.
+      masjidName: store.getMasjid().name,
       embedded: ssoConfigured(),
       // Whether the platform's base URL actually reached this container. If this is false while
       // running under OpenMasjidOS, the `environment:` block in docker-compose.yml didn't pass
@@ -368,9 +435,32 @@ async function main(): Promise<void> {
   // accent, lang) or {} (no secrets) — exactly like OpenMasjid Donations/Display. The admin
   // types a full image URL in OpenMasjidOS, so the browser renders wallpaperImage directly;
   // we do NOT proxy the image bytes (no SSRF surface, matches the other apps).
+  //
+  // ONE FIELD IS REWRITTEN: `logo`, to the same-origin relay below, because the platform's value is
+  // a path on ITS origin and the browser fetched this from ours (fabric.ts relayedAppearance).
   app.get('/api/public/appearance', async (_req, reply) => {
     reply.header('cache-control', 'no-store');
-    return await fetchAppearance();
+    return relayedAppearance(await fetchAppearance());
+  });
+
+  // ── Same-origin logo relay ──────────────────────────────────────────────────
+  // The masjid's logo from the platform, for the reason above. A fixed upstream path, never a URL
+  // from the request, so this is not an image proxy anyone can aim (fabric.ts fetchPlatformLogo has
+  // the bounds). Public, like the platform's own: it is on the masjid's dashboard and screens
+  // already. Cached by the browser for five minutes, which is the whole of our caching — nothing is
+  // held here, so a logo the admin changes shows up without a restart.
+  app.get('/api/public/logo', async (_req, reply) => {
+    const logo = await fetchPlatformLogo();
+    if (!logo) {
+      // Standalone, no logo set, or the platform could not be asked: all the same answer, and not
+      // cached, so a logo added a minute from now is not hidden behind a remembered 404.
+      return reply.code(404).header('cache-control', 'no-store').send({ error: 'Not found.' });
+    }
+    return reply
+      .header('content-type', logo.contentType)
+      .header('content-length', String(logo.body.length))
+      .header('cache-control', 'public, max-age=300')
+      .send(logo.body);
   });
 
   // ── Session: who am I? Also performs the SSO upgrade. ───────────────────────
@@ -444,7 +534,8 @@ async function main(): Promise<void> {
     // Key the brute-force limiter on the real, unspoofable TCP peer — never req.ip.
     const peer = req.socket.remoteAddress ?? 'unknown';
     const wait = loginLimiter.retryAfterMs(peer);
-    if (wait > 0) return reply.code(429).send({ error: `Too many attempts. Try again in ${Math.ceil(wait / 1000)}s.` });
+    // In minutes, not "Try again in 300s" — see replies.ts waitWords.
+    if (wait > 0) return reply.code(429).send({ error: tooManyTries(wait) });
     const admin = store.getAdmin();
     if (!admin) return reply.code(400).send({ error: 'This app hasn’t been set up yet.' });
     const parsed = LoginBody.safeParse(req.body);
@@ -454,7 +545,13 @@ async function main(): Promise<void> {
       return { data: { ok: true } };
     }
     loginLimiter.fail(peer);
-    return reply.code(401).send({ error: 'Incorrect password.' });
+    // A next step, not just a verdict. Under OpenMasjidOS there is a second way in that needs no
+    // password at all, and someone locked out of the local one is exactly who needs telling.
+    return reply.code(401).send({
+      error: ssoConfigured()
+        ? 'That password isn’t right. Check Caps Lock and try again — or open the app from your OpenMasjidOS dashboard.'
+        : 'That password isn’t right. Check Caps Lock and try again.',
+    });
   });
 
   app.post('/api/logout', async (req, reply) => {
@@ -598,11 +695,24 @@ async function main(): Promise<void> {
     return { data: { ...(await paymentsStatus()), verify } };
   });
 
+  // A real ISO 4217 code the runtime can format, or nothing. This took any 3–8 characters, and once
+  // money is formatted through Intl a stored nonsense code does not merely look odd: it throws a
+  // RangeError on every amount the panel, the receipts and the tablet render.
+  //
+  // CHANGING THE SCALE RESCALES THE AMOUNTS. Suggested amounts are stored in minor units, so moving
+  // USD → KWD (three decimals) would silently turn a $10 tile into 0.100 KWD, and USD → JPY into ¥1,000
+  // — a 10× or 100× shift on a donor-facing button, which is worse than an unexpected edit. The store
+  // converts every campaign's presets and bounds and the giving thresholds by 10^(Δdecimals), and
+  // `rescaled` tells the panel it happened so the admin is told rather than surprised.
   app.put('/api/admin/payments/currency', { preHandler: requireAdmin }, async (req, reply) => {
-    const parsed = z.object({ currency: z.string().min(3).max(8) }).safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'Please choose a currency.' });
-    store.setCurrency(parsed.data.currency);
-    return { data: await paymentsStatus() };
+    const parsed = z
+      .object({ currency: z.string().trim().regex(/^[A-Za-z]{3}$/).refine(isKnownCurrency) })
+      .safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'That isn’t a currency we can use. Choose one from the list.' });
+    const before = store.getCurrency();
+    const now = store.setCurrency(parsed.data.currency);
+    const rescaled = store.rescaleAmountsForCurrency(before, now);
+    return { data: { ...(await paymentsStatus()), rescaled } };
   });
 
   // Masjid name + address — used to name/address the Terminal Location (platform injects none).
@@ -626,9 +736,23 @@ async function main(): Promise<void> {
         email: z.string().max(200).optional(),
         phone: z.string().max(60).optional(),
         website: z.string().max(200).optional(),
+        // The masjid's clock (app spec §10): every date a person reads is shown in it — never the
+        // browser's, and never the container's, which is UTC. '' = not chosen yet. The store would
+        // quietly keep the old zone on an unknown one; refusing here tells the admin instead.
+        timeZone: z
+          .string()
+          .trim()
+          .max(64)
+          .refine((tz) => tz === '' || isValidTimeZone(tz))
+          .optional(),
+        clock24h: z.boolean().optional(),
+        // Days to move the Hijri date for a local moon sighting — the same range as Display's.
+        hijriOffset: z.number().int().min(-3).max(3).optional(),
       })
       .safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'Please check the details.' });
+    if (!parsed.success) {
+      return reply.code(400).send({ error: issueSentence(parsed.error, MASJID_FIELD_WORDS, 'We couldn’t save those details. Check each field and try again.') });
+    }
     return { data: store.setMasjid(parsed.data) };
   });
 
@@ -651,6 +775,59 @@ async function main(): Promise<void> {
     const parsed = EmailReceiptBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Please check the details and try again.' });
     return { data: emailReceiptView(store.setEmailReceipt(parsed.data)) };
+  });
+
+  /**
+   * "Email me a sample receipt": the branded receipt, with made-up donation details, to one address
+   * the admin types.
+   *
+   * WHY IT EXISTS. The Email receipts panel used to offer "Send me a test", which fired the `test`
+   * ALERT through the Notifications routing — a different message, sent by a different path, often
+   * to nobody by email at all. So it could not show the admin their receipt, and it could not prove
+   * email worked either: `emailStatus` only changes inside fabricEmail, which that path only reached
+   * if an email recipient happened to be ticked for `test`. This sends the real template through the
+   * real sender, so the admin sees exactly what a donor will, and a successful send is the proof
+   * that switches branded receipts on.
+   *
+   * Sent whether or not branded receipts are switched on yet — checking the design BEFORE turning
+   * it on is the point. Rate-limited because it is an admin-triggered send through the masjid's own
+   * mail provider, and a stuck key or a looping script should not be able to spend its reputation.
+   */
+  const sampleReceiptBudget = new GlobalAttemptBudget(10, 10 * 60_000);
+  app.post('/api/admin/email-receipt/test', { preHandler: requireAdmin }, async (req, reply) => {
+    const parsed = z.object({ to: z.string().trim().max(200).email() }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'That doesn’t look like an email address. Check it and try again.' });
+    const wait = sampleReceiptBudget.retryAfterMs();
+    if (wait > 0) {
+      return reply.code(429).send({ error: `That’s a lot of sample receipts in a row. Please wait ${waitWords(wait)} and send another.` });
+    }
+    sampleReceiptBudget.fail(); // every send spends, whether or not it lands — the provider saw it
+    const m = store.getMasjid();
+    const rendered = renderReceipt(
+      store.getEmailReceipt(),
+      sampleReceiptContext({
+        masjidName: m.name || '',
+        masjidLogo: resolveEmailImage(m.logo),
+        contactEmail: m.email || '',
+        contactPhone: m.phone || '',
+        contactWebsite: m.website || '',
+        currency: store.getCurrency(),
+        money: formatMoney,
+        datePaid: fmtReceiptDate(new Date().toISOString()),
+      }),
+    );
+    const res = await fabricEmail({
+      to: parsed.data.to,
+      // Marked in the subject too, so it is never filed with the real receipts in anyone's inbox.
+      subject: `Sample: ${rendered.subject}`,
+      text: rendered.text,
+      html: rendered.html,
+    }).catch(() => ({ sent: false, reason: 'threw' }));
+    // `reason` is the RAW code ("no-fabric", "not_configured", "http_502"…), and the panel turns it
+    // into a full sentence (email.tsx `sampleFailure`) with the code under Technical details. Not
+    // reasonWords(): those are lower-case fragments written to follow a channel name in an alert
+    // row, and shown on their own they read "it didn’t go through" with nothing to do next.
+    return { data: { sent: res.sent, reason: res.sent ? '' : String(res.reason ?? 'unknown').slice(0, 200) } };
   });
   // ── Raising an alert: one entry point, many possible destinations ───────────
   // EVERY alert in this app goes through here rather than calling fabricAlert directly, so the
@@ -831,7 +1008,19 @@ async function main(): Promise<void> {
   ): Promise<{ os: boolean; email: number; whatsapp: number; reasons: string[] }> => {
     const route = store.getAlertRoutes()[id] ?? DEFAULT_ROUTE;
     const subscribed = recipientsFor(store.getAlertRecipients(), id);
+    // TWO LISTS, because they have two readers. `reasons` goes back to the admin panel ("Didn’t go
+    // by: …") and so is written in words — it used to carry our internal codes straight through, and
+    // an admin read "Nothing was sent — OpenMasjidOS: http_503; email Treasurer: threw". `codes` is the
+    // same thing for the container log, where the raw code is exactly what someone diagnosing needs.
     const reasons: string[] = [];
+    const codes: string[] = [];
+    /** Record one leg's failure in both lists. A code that maps to no words (an empty message)
+     *  is not something an admin can act on, so it reaches only the log. */
+    const failed = (where: string, code: string): void => {
+      codes.push(`${where}: ${code}`);
+      const words = reasonWords(code);
+      if (words) reasons.push(`${where}: ${words}`);
+    };
     let os = false;
     let email = 0;
     let whatsapp = 0;
@@ -839,7 +1028,7 @@ async function main(): Promise<void> {
     if (route.os) {
       const r = await fabricAlert(id, title, text, level).catch(() => ({ delivered: false, reason: 'threw' }));
       os = r.delivered;
-      if (!r.delivered && r.reason) reasons.push(`OpenMasjidOS: ${r.reason}`);
+      if (!r.delivered && r.reason) failed('OpenMasjidOS', r.reason);
     }
 
     // ── Email: no pacing, because there is nothing here to protect. A real provider, a real
@@ -850,7 +1039,7 @@ async function main(): Promise<void> {
       const body = bodyForRecipient(r, text, textWithoutNames);
       const sent = await fabricEmail({ to: r.address, subject: title, text: body }).catch(() => ({ sent: false, reason: 'threw' }));
       if (sent.sent) email += 1;
-      else if (sent.reason) reasons.push(`email ${r.label || r.address}: ${sent.reason}`);
+      else if (sent.reason) failed(`Email to ${r.label || r.address}`, sent.reason);
     }
 
     // ── WhatsApp: numbers and groups, inside one budget.
@@ -862,6 +1051,7 @@ async function main(): Promise<void> {
       if (permit.allowed <= 0) {
         const why = permitReasonText(permit.reason, pacing);
         reasons.push(`WhatsApp: ${why}`);
+        codes.push(`WhatsApp: ${why}`);
         log.info(`alert ${id}: WhatsApp ${why}`);
         store.setWhatsAppLedger(recordWhatsAppSends(store.getWhatsAppLedger(), id, 0, now));
       } else {
@@ -873,7 +1063,9 @@ async function main(): Promise<void> {
         const going = ordered.slice(0, permit.allowed);
         const skipped = ordered.length - going.length;
         if (skipped > 0) {
-          reasons.push(`WhatsApp: ${skipped} recipient${skipped === 1 ? '' : 's'} not messaged — the hourly or daily limit was reached partway through`);
+          const note = `${skipped} recipient${skipped === 1 ? '' : 's'} not messaged — the hourly or daily limit was reached partway through`;
+          reasons.push(`WhatsApp: ${note}`);
+          codes.push(`WhatsApp: ${note}`);
         }
         for (const r of going) {
           const body = withSuppressedNote(`${title}\n\n${bodyForRecipient(r, text, textWithoutNames)}`, permit.suppressedBefore);
@@ -888,15 +1080,20 @@ async function main(): Promise<void> {
           // group, a number missing its country code, the masjid's own gateway number — looked
           // exactly like one that vanished into the queue. The settings screen reads this record and
           // shows the sentence on the row that caused it.
+          //
+          // IN WORDS. The platform's own refusal is already a plain sentence and reasonWords passes
+          // it through untouched — that sentence is the point of this record. What it translates is
+          // OUR fallback codes ('threw', 'unreachable', 'http_502'), which used to reach the row as
+          // "Last message refused: threw".
           store.setWhatsAppOutcome(r.id, {
             state: res.queued ? 'queued' : 'refused',
             at: Date.now(),
             messageId: res.queued ? (res.id ?? '') : '',
-            reason: res.queued ? '' : (res.reason ?? 'refused'),
+            reason: res.queued ? '' : reasonWords(res.reason ?? 'refused'),
             suppressed: permit.suppressedBefore,
             alertId: id,
           });
-          if (!res.queued && res.reason) reasons.push(`WhatsApp ${r.label || r.address}: ${res.reason}`);
+          if (!res.queued && res.reason) failed(`WhatsApp to ${r.label || r.address}`, res.reason);
           // Resolve queued -> sent/failed shortly afterwards, when the platform can say (0.51.1+).
           if (res.queued && res.id) scheduleWhatsAppFollowUp(r.id, id, res.id);
         }
@@ -914,7 +1111,7 @@ async function main(): Promise<void> {
       }
     }
 
-    if (reasons.length) log.warn(`alert ${id} partially undelivered — ${reasons.join('; ')}`);
+    if (codes.length) log.warn(`alert ${id} partially undelivered — ${codes.join('; ')}`);
     return { os, email, whatsapp, reasons };
   };
 
@@ -1316,14 +1513,11 @@ async function main(): Promise<void> {
 
   app.put('/api/admin/giving', { preHandler: requireAdmin }, async (req, reply) => {
     const parsed = GivingBody.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'Please check the giving-screen settings.' });
+    if (!parsed.success) return reply.code(400).send({ error: issueSentence(parsed.error, GIVING_FIELD_WORDS, 'We couldn’t save the giving-screen settings. Reload the page and try again.') });
     const { attractTitle, masjidName, ...giving } = parsed.data;
     store.setGiving(giving); // sanitizes (≤6 presets, sane bounds, known policies) + bumps configVersion
     if (attractTitle !== undefined) store.setAttractTitle(attractTitle.trim());
-    if (masjidName !== undefined) {
-      store.setMasjid({ name: masjidName.trim() });
-      store.bumpConfigVersion(); // masjidName is in the kiosk config but setMasjid doesn't bump
-    }
+    if (masjidName !== undefined) store.setMasjid({ name: masjidName.trim() }); // bumps the config when it changes
     return { data: { giving: store.getGiving(), currency: store.getCurrency(), masjidName: store.getMasjid().name, attractTitle: store.getAttractTitle() } };
   });
 
@@ -1331,6 +1525,10 @@ async function main(): Promise<void> {
   // Each campaign has its own amounts, color, background, thank-you, monthly/cover-fees, and
   // (optionally) its own Stripe account. Changes bump the config version → kiosks pick them up
   // on the next heartbeat. Amounts are integer MINOR units (same as the giving API).
+  //
+  // A refusal names the field that caused it (replies.ts CAMPAIGN_FIELD_WORDS, which quotes these
+  // caps — change one, change the other). "Please check the campaign settings." named nothing, and
+  // pasting a long image address was enough to reach it.
   const CampaignBody = z
     .object({
       title: z.string().max(120).optional(),
@@ -1379,14 +1577,14 @@ async function main(): Promise<void> {
 
   app.post('/api/admin/campaigns', { preHandler: requireAdmin }, async (req, reply) => {
     const parsed = CampaignBody.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'Please check the campaign settings.' });
+    if (!parsed.success) return reply.code(400).send({ error: issueSentence(parsed.error, CAMPAIGN_FIELD_WORDS, 'We couldn’t save the campaign. Reload the page and try again.') });
     if (!parsed.data.title || !parsed.data.title.trim()) return reply.code(400).send({ error: 'Please give the campaign a title.' });
     return { data: { campaign: store.createCampaign(parsed.data) } };
   });
 
   app.put('/api/admin/campaigns/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const parsed = CampaignBody.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'Please check the campaign settings.' });
+    if (!parsed.success) return reply.code(400).send({ error: issueSentence(parsed.error, CAMPAIGN_FIELD_WORDS, 'We couldn’t save the campaign. Reload the page and try again.') });
     const c = store.updateCampaign((req.params as { id: string }).id, parsed.data);
     if (!c) return reply.code(404).send({ error: 'Campaign not found.' });
     return { data: { campaign: c } };
@@ -1486,9 +1684,29 @@ async function main(): Promise<void> {
     return out;
   };
 
+  /**
+   * Stripe account id → the name the admin gave it in OpenMasjidOS, for the plan screens.
+   *
+   * A plan used to show its account as the raw vault id, and the kiosk it was set up on as a device
+   * UUID — both true, neither readable. The label list is the same one the Payments picker shows
+   * (ids and labels only, never keys), cached for a minute because the Recurring list reads it on
+   * every load. A failed read is an empty map, so the screen falls back to "Primary" rather than
+   * refusing to list anyone's plans over a label.
+   */
+  let accountLabelCache: { at: number; labels: Map<string, string> } | null = null;
+  const accountLabels = async (): Promise<Map<string, string>> => {
+    if (accountLabelCache && Date.now() - accountLabelCache.at < 60_000) return accountLabelCache.labels;
+    const list = ssoConfigured() ? await fetchFabricStripeAccounts().catch(() => []) : [];
+    const labels = new Map(list.map((a) => [a.id, a.label] as const));
+    accountLabelCache = { at: Date.now(), labels };
+    return labels;
+  };
+
   /** Join Stripe's live view of a plan to the local record. */
-  const toPlan = (sp: StripePlan, accountId: string) => {
+  const toPlan = (sp: StripePlan, accountId: string, labels: ReadonlyMap<string, string>) => {
     const rec = store.getPlanRecord(sp.id);
+    const deviceId = sp.deviceId || rec?.deviceId || '';
+    const device = deviceId ? store.getDevice(deviceId) : null;
     // Month one never appears in `invoices.list` — it was a card-present PaymentIntent on the reader.
     // Without the local record we cannot know it, so the total is flagged short rather than quietly
     // under-reported: "this plan has raised $X" being wrong by a month is the kind of number an
@@ -1505,7 +1723,13 @@ async function main(): Promise<void> {
       totalPartial: first <= 0,
       donorName: sp.donorName || rec?.donorName || '',
       donorEmail: sp.donorEmail || rec?.donorEmail || '',
-      deviceId: sp.deviceId || rec?.deviceId || '',
+      deviceId,
+      // The vault account's own name — the primary one included, when it is a vault account. '' for
+      // standalone keys, and when the platform could not be asked for its list this minute.
+      accountLabel: accountId && accountId !== 'local' ? (labels.get(accountId) ?? '') : '',
+      // The kiosk's name as it is NOW — renamed kiosks read their new name. '' once it has been
+      // removed from the fleet, which the panel words as such rather than showing a UUID.
+      deviceName: device && !device.revoked ? device.name : '',
     };
   };
 
@@ -1535,6 +1759,7 @@ async function main(): Promise<void> {
   app.get('/api/admin/plans', { preHandler: requireAdmin }, async () => {
     const accounts = await planAccounts();
     if (!accounts.length) return { data: { plans: [], unavailable: 'Payments aren’t set up yet.' } };
+    const labels = await accountLabels();
     const byId = new Map<string, ReturnType<typeof toPlan>>();
     let failures = 0;
     let truncated = false;
@@ -1545,7 +1770,7 @@ async function main(): Promise<void> {
         truncated = truncated || res.truncated;
         totalsCapped = totalsCapped || res.totalsCapped;
         for (const sp of res.plans) {
-          if (!byId.has(sp.id)) byId.set(sp.id, toPlan(sp, acct.id));
+          if (!byId.has(sp.id)) byId.set(sp.id, toPlan(sp, acct.id, labels));
         }
       } catch (e) {
         failures++;
@@ -1583,7 +1808,7 @@ async function main(): Promise<void> {
           continue;
         }
         if (!sp) continue; // resource_missing on this account — try the next one
-        byId.set(sp.id, toPlan(sp, acct.id));
+        byId.set(sp.id, toPlan(sp, acct.id, labels));
         found = true;
         break;
       }
@@ -1620,7 +1845,7 @@ async function main(): Promise<void> {
     const r = await withPlan(id, async (keys, accountId) => {
       const sp = await retrievePlan(keys.secretKey, id);
       if (!sp) return null;
-      return { plan: toPlan(sp, accountId), invoices: await listPlanInvoices(keys.secretKey, id) };
+      return { plan: toPlan(sp, accountId, await accountLabels()), invoices: await listPlanInvoices(keys.secretKey, id) };
     });
     if (!r.ok || !r.value) return reply.code(404).send({ error: 'That plan couldn’t be found in Stripe.' });
     return { data: r.value };
@@ -1639,7 +1864,7 @@ async function main(): Promise<void> {
       const r = await withPlan(id, async (keys, accountId) => {
         await act(keys, id);
         const sp = await retrievePlan(keys.secretKey, id);
-        return sp ? toPlan(sp, accountId) : null;
+        return sp ? toPlan(sp, accountId, await accountLabels()) : null;
       });
       if (!r.ok || !r.value) return reply.code(404).send({ error: 'That plan couldn’t be found in Stripe.' });
       return { data: { plan: r.value } };
@@ -1760,8 +1985,11 @@ async function main(): Promise<void> {
       const why = e instanceof Error ? e.message : String(e);
       log.warn(`refund failed for ${don.paymentIntentId}: ${why}`);
       // Loud on purpose. A refund the admin believes happened but didn't is how a donor gets told
-      // they've been repaid and then isn't.
-      return reply.code(502).send({ error: `Stripe couldn’t refund this donation: ${why.slice(0, 200)}` });
+      // they've been repaid and then isn't. So this stays a hard error whose every wording says no
+      // money moved — but in words (replies.ts refundFailure), with Stripe's own message moved into
+      // `detail` for the panel's "Technical details" disclosure instead of being the sentence.
+      const { error, detail } = refundFailure(e);
+      return reply.code(502).send({ error, detail });
     }
     // Trust Stripe's figure over ours — a partial it adjusted is still what actually left the account.
     const total = store.recordRefund(don.id, {
@@ -1849,35 +2077,16 @@ async function main(): Promise<void> {
   });
 
   app.get('/api/admin/donations.csv', { preHandler: requireAdmin }, async (_req, reply) => {
-    // 'Amount' stays the amount GIVEN, so an export never rewrites history; 'Refunded' and 'Net' carry
-    // what came back and what was kept. A spreadsheet summing the wrong column would otherwise report
-    // money the masjid no longer has — so Net is provided rather than left as an exercise.
-    const rows: string[][] = [
-      ['Date', 'Amount', 'Refunded', 'Net', 'Currency', 'Type', 'Campaign', 'Status', 'Donor name', 'Donor email', 'Kiosk', 'PaymentIntent', 'Refund ID', 'Refunded at'],
-    ];
-    for (const d of store.listDonations(-1)) {
-      rows.push([
-        d.createdAt,
-        String(toMajor(d.amountMinor, d.currency)),
-        String(toMajor(d.refundedMinor, d.currency)),
-        String(toMajor(d.amountMinor - d.refundedMinor, d.currency)),
-        d.currency,
-        d.kind === 'monthly' ? 'Monthly' : 'One-time',
-        d.campaignTitle,
-        d.status,
-        d.donorName,
-        d.donorEmail,
-        d.deviceName || '',
-        d.paymentIntentId,
-        d.refundId,
-        d.refundedAt,
-      ]);
-    }
+    // The rows (columns, plain status words, the masjid-time and Hijri dates, each row at its own
+    // currency's scale) are built in csv.ts, where they are tested; this route only fetches and sends.
+    const rows = donationCsvRows(store.listDonations(-1), store.getClock());
     reply
       .header('content-type', 'text/csv; charset=utf-8')
       .header('content-disposition', 'attachment; filename="donations.csv"')
       .header('cache-control', 'no-store');
-    return toCsv(rows);
+    // The byte-order mark is what makes Excel read the file as UTF-8, so a donor's Arabic or Urdu
+    // name arrives as written rather than as mojibake. See CSV_BOM for why it is added here.
+    return CSV_BOM + toCsv(rows);
   });
 
   // ── The donor's own "stop my monthly donation" page ──────────────────────────
@@ -1965,8 +2174,21 @@ async function main(): Promise<void> {
       }
     };
 
+    /**
+     * How far each donor route sits below the app's root, for the page's relative links.
+     *
+     * RELATIVE ON PURPOSE, like the form action below: the browser resolves a relative URL against
+     * the page's own address, and that address differs by route — /m/<token> on the LAN, and
+     * /<basePath>/m/<token> over the tunnel, where the OS forwards the full prefix. A leading slash
+     * would break the tunnel case. The POST's answer is a page too, rendered at
+     * /api/public/monthly/<token>/cancel, which is four levels down rather than one, so every page
+     * is told which of the two it is.
+     */
+    const FROM_LINK = '..';
+    const FROM_CANCEL = '../../../..';
+
     /** One page, two entry points: opening a spent link, and pressing a button that had already run. */
-    const alreadyStoppedPage = (money: string): string =>
+    const alreadyStoppedPage = (money: string, toRoot: string): string =>
       cancelPage(
         `<h1>This monthly donation has already stopped</h1>
          <p class="muted">Your ${escapeHtml(money)} monthly donation is no longer being collected, so there is nothing
@@ -1974,33 +2196,67 @@ async function main(): Promise<void> {
          <p class="muted">Nothing you have already given is affected. If you would like to give again,
          you can set it up at the kiosk any time, and thank you for your support.</p>`,
         'Already stopped',
+        toRoot,
       );
 
+  /**
+   * The masjid's own logo for the page header, as a URL the page can load — or '' to show the name.
+   *
+   * The same logo the emailed receipts carry (Settings → masjid details): an uploaded file, served
+   * from /uploads, or an https address the admin typed. An uploaded one is checked on disk first,
+   * because a donor opening this page is exactly who must never see a broken image — the app spec's
+   * rule is the name as a wordmark instead. The upload route names files itself, so anything else
+   * under /uploads is not one of ours and is not linked. Plain http is refused: this page is served
+   * over HTTPS, and a mixed-content image would not load anyway.
+   */
+  const cancelPageLogo = (logo: string, toRoot: string): string => {
+    const v = (logo ?? '').trim();
+    const up = /^\/uploads\/([A-Za-z0-9_-]+\.(?:png|jpe?g|webp|gif))$/i.exec(v);
+    if (up) return fs.existsSync(path.join(uploadsDir, up[1])) ? `${toRoot}${v}` : '';
+    return /^https:\/\/[^"'\s\\<>]+$/i.test(v) ? v : '';
+  };
+
   /** The shared page shell — plain server-rendered HTML, no SPA. A donor opening this from an email
-   *  on an unknown device should get something that works with nothing but a browser. */
-  const cancelPage = (body: string, title: string): string => {
+   *  on an unknown device should get something that works with nothing but a browser.
+   *
+   *  Deliberately NOT the admin panel's look: it is opened from an email, on a phone the masjid has
+   *  never seen, not from the dashboard, so it follows the donor's own light/dark setting with a
+   *  neutral, email-like palette rather than the masjid's accent. What it does share is the
+   *  discipline: colours as tokens with a dark override, measured AA (the greys used to be 2.46:1
+   *  and 3.64:1 on white — every line of explanatory copy on the page), the spec's card and button
+   *  radii, a visible focus ring on the one action there is, a press that honours reduced motion,
+   *  and the masjid's name exactly as the admin typed it (this used to upper-case it). */
+  const cancelPage = (body: string, title: string, toRoot: string): string => {
     const m = store.getMasjid();
     const name = escapeHtml(m.name || 'Our masjid');
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+    const logo = cancelPageLogo(m.logo, toRoot);
+    // dir="auto" on the name: an Arabic or Urdu masjid name then lays itself out right-to-left
+    // inside an otherwise English, left-to-right page.
+    const header = logo ? `<img class="logo" src="${escapeHtml(logo)}" alt="${name}">` : `<p class="masjid" dir="auto">${name}</p>`;
+    return `<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(title)}</title>
 <style>
- :root{color-scheme:light dark}
- body{margin:0;background:#f4f6f9;color:#16242b;font:16px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+ :root{color-scheme:light dark;--color-surface:#f4f6f9;--color-surface-raised:#fff;--color-ink:#16242b;--color-ink-muted:#44515f;--color-border:#e6eaed;--color-danger:#b3261e;--color-on-danger:#fff;--color-success-ink:#1f7a5c;--color-focus:#0369a1;--radius-card:16px;--radius-button:10px}
+ @media(prefers-color-scheme:dark){:root{--color-surface:#0f1720;--color-surface-raised:#16202b;--color-ink:#e7edf3;--color-ink-muted:#9fb0bf;--color-border:#243240;--color-success-ink:#34d399;--color-focus:#22d3ee}}
+ body{margin:0;background:var(--color-surface);color:var(--color-ink);font:16px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
  .wrap{max-width:520px;margin:0 auto;padding:32px 16px}
- .card{background:#fff;border:1px solid #e6eaed;border-radius:14px;padding:28px 26px}
+ .card{background:var(--color-surface-raised);border:1px solid var(--color-border);border-radius:var(--radius-card);padding:28px 26px}
  h1{margin:0 0 6px;font-size:20px}
- .masjid{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:#9aa7af;margin:0 0 18px}
+ .masjid{font-size:15px;font-weight:600;color:var(--color-ink-muted);margin:0 0 18px}
+ .logo{display:block;max-height:56px;max-width:200px;height:auto;margin:0 0 18px}
  dl{margin:18px 0;padding:0;font-size:15px}
- dt{color:#7a8892;font-size:13px;margin-top:12px}
- dd{margin:2px 0 0;font-weight:600}
- button{width:100%;margin-top:22px;padding:13px;font:inherit;font-weight:600;border:0;border-radius:10px;background:#b3261e;color:#fff;cursor:pointer}
+ dt{color:var(--color-ink-muted);font-size:13px;margin-top:12px}
+ dd{margin:2px 0 0;font-weight:600;font-variant-numeric:tabular-nums}
+ button{width:100%;margin-top:22px;padding:13px;font:inherit;font-weight:600;border:0;border-radius:var(--radius-button);background:var(--color-danger);color:var(--color-on-danger);cursor:pointer;transition:transform .14s cubic-bezier(.2,.9,.3,1.2)}
+ button:active:not(:disabled){transform:scale(.98)}
+ button:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px}
  button:disabled{opacity:.6;cursor:default}
- .muted{color:#7a8892;font-size:14px}
- .ok{color:#1f7a5c;font-weight:600}
- @media(prefers-color-scheme:dark){body{background:#0f1720;color:#e7edf3}.card{background:#16202b;border-color:#243240}.muted,.masjid,dt{color:#9fb0bf}}
+ .muted{color:var(--color-ink-muted);font-size:14px}
+ .ok{color:var(--color-success-ink);font-weight:600}
+ @media(prefers-reduced-motion:reduce){button{transition:none}}
 </style></head><body><div class="wrap"><div class="card">
-<p class="masjid">${name}</p>
+${header}
 ${body}
 </div></div></body></html>`;
   };
@@ -2018,6 +2274,7 @@ ${body}
            <p class="muted">It may already have been used to stop the donation, or it may have been mistyped.
            If you’re not sure whether your monthly donation is still running, please contact the masjid.</p>`,
           'Link not found',
+          FROM_LINK,
         ),
       );
     }
@@ -2034,7 +2291,7 @@ ${body}
     // who wants to stop must never be blocked by our uncertainty, and the POST re-checks anyway.
     if (donorLookups.retryAfterMs() === 0) {
       donorLookups.fail();
-      if (await donorPlanIsOver(plan)) return reply.send(alreadyStoppedPage(money));
+      if (await donorPlanIsOver(plan)) return reply.send(alreadyStoppedPage(money, FROM_LINK));
     }
 
     return reply.send(
@@ -2043,8 +2300,8 @@ ${body}
          <p class="muted">This ends the repeating payment. Nothing you have already given is affected, and you can start again at the kiosk whenever you like.</p>
          <dl>
            <dt>Amount</dt><dd>${escapeHtml(money)} each month</dd>
-           ${plan.campaignTitle ? `<dt>Fund</dt><dd>${escapeHtml(plan.campaignTitle)}</dd>` : ''}
-           <dt>Started</dt><dd>${escapeHtml(fmtReceiptDate(plan.createdAt))}</dd>
+           ${plan.campaignTitle ? `<dt>Fund</dt><dd dir="auto">${escapeHtml(plan.campaignTitle)}</dd>` : ''}
+           <dt>Started</dt><dd>${escapeHtml(formatDate(plan.createdAt, store.getClock()))}</dd>
          </dl>
          <!-- RELATIVE, and one level up on purpose. The browser resolves this against the page's own
               address, which differs by route: on the LAN it is /m/<token>, and over the tunnel the OS
@@ -2055,6 +2312,7 @@ ${body}
            <button type="submit">Stop my monthly donation</button>
          </form>`,
         'Stop your monthly donation',
+        FROM_LINK,
       ),
     );
   });
@@ -2065,14 +2323,14 @@ ${body}
     reply.header('x-robots-tag', 'noindex, nofollow, noarchive');
     const plan = PLAN_TOKEN_RE.test(token) ? store.getPlanByCancelToken(token) : null;
     if (!plan) {
-      return reply.code(404).send(cancelPage(`<h1>This link doesn’t work any more</h1><p class="muted">Please contact the masjid if you need help.</p>`, 'Link not found'));
+      return reply.code(404).send(cancelPage(`<h1>This link doesn’t work any more</h1><p class="muted">Please contact the masjid if you need help.</p>`, 'Link not found', FROM_CANCEL));
     }
     // Already stopped — by an earlier press of this same link, by the admin panel, or in Stripe's own
     // dashboard. Say so plainly instead of "we've stopped it", which would credit this press with
     // something it didn't do, and instead of an error, which would suggest it is still running.
     // No alert is raised either: nothing changed, so there is nothing to tell the masjid.
     if (await donorPlanIsOver(plan)) {
-      return reply.send(alreadyStoppedPage(formatMoney(plan.firstAmountMinor, plan.currency)));
+      return reply.send(alreadyStoppedPage(formatMoney(plan.firstAmountMinor, plan.currency), FROM_CANCEL));
     }
     const acct = await resolveAccountById(plan.stripeAccountId).catch(() => null);
     // immediately: the donor has already given this month at the kiosk and the next charge is still
@@ -2088,6 +2346,7 @@ ${body}
            <p class="muted">Something went wrong at our end and your monthly donation is still running.
            Please try this link again shortly, or contact the masjid and they will stop it for you.</p>`,
           'Couldn’t stop the donation',
+          FROM_CANCEL,
         ),
       );
     }
@@ -2109,6 +2368,7 @@ ${body}
          <p class="muted">Nothing more will be taken. Thank you for what you have already given —
          you can start again at the kiosk any time.</p>`,
         'Monthly donation stopped',
+        FROM_CANCEL,
       ),
     );
   });
@@ -2142,7 +2402,7 @@ ${body}
   app.post('/api/kiosk/pair', async (req, reply) => {
     const peer = req.socket.remoteAddress ?? 'unknown';
     const wait = Math.max(pairLimiter.retryAfterMs(peer), pairBudget.retryAfterMs());
-    if (wait > 0) return reply.code(429).send({ error: `Too many attempts. Try again in ${Math.ceil(wait / 1000)}s.` });
+    if (wait > 0) return reply.code(429).send({ error: tooManyTries(wait) });
     // Remote (over-the-tunnel) pairing is opt-in: refuse it unless the admin turned on "Allow
     // remote adoption". LAN pairing (no tunnel prefix, so omosViaTunnel is unset) is always allowed.
     if ((req.raw as unknown as { omosViaTunnel?: boolean }).omosViaTunnel === true && !store.getRemoteAdoption()) {
@@ -2349,14 +2609,7 @@ ${body}
   });
 
   // ── One-time donations (Terminal card-present) ───────────────────────────────
-  // Format an amount for the donation alert (best-effort; falls back to "<major> <CUR>").
-  const formatMoney = (minor: number, currency: string): string => {
-    try {
-      return new Intl.NumberFormat('en', { style: 'currency', currency }).format(toMajor(minor, currency));
-    } catch {
-      return `${toMajor(minor, currency)} ${currency}`;
-    }
-  };
+  // (Money is formatted by `formatMoney`, defined at the top of main — see the note there.)
 
   // ── Emailed donation receipt: build the context + send via the Fabric ────────
   // Resolve the masjid logo to an ABSOLUTE url an email client can load: an http(s) URL is used
@@ -2371,15 +2624,16 @@ ${body}
     }
     return '';
   };
-  /** Format the receipt "date paid" using the server locale + timezone (best-effort). */
-  const fmtReceiptDate = (iso: string): string => {
-    const d = new Date(iso);
-    try {
-      return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZoneName: 'short' }).format(d);
-    } catch {
-      return d.toISOString();
-    }
-  };
+  /**
+   * A receipt's "Date paid" (and a refund's "Date refunded"): Gregorian and Hijri together, on the
+   * masjid's clock — its time zone and its 12/24-hour choice (dates.ts formatDateTime).
+   *
+   * THIS USED TO THROW ON EVERY CALL. It combined `dateStyle`/`timeStyle` with `timeZoneName`, which
+   * ECMA-402 forbids, and its catch printed `toISOString()` — so every receipt, refund note and
+   * monthly email ever sent said "2026-09-30T18:03:11.123Z". And had it worked, it would have used
+   * the container's clock, which is UTC. An unreadable input now gives '' rather than a timestamp.
+   */
+  const fmtReceiptDate = (iso: string): string => formatDateTime(iso, store.getClock());
   /** "Visa •••• 4242" (or "Card") from the captured card brand + last 4. */
   const paymentMethodLabel = (brand: string, last4: string): string => {
     const b = brand ? brand.charAt(0).toUpperCase() + brand.slice(1) : '';
@@ -2425,13 +2679,16 @@ ${body}
    * to be able to send mail at all — with no provider there is simply no way to reach them, and the
    * admin alert already covers the masjid's side.
    */
-  const sendMonthlyStartedEmail = async (paymentIntentId: string, token: string): Promise<void> => {
+  const sendMonthlyStartedEmail = async (paymentIntentId: string, token: string, anchorSec?: number): Promise<void> => {
     const don = store.getDonationByPaymentIntent(paymentIntentId);
     if (!don) return;
     const addr = (don.donorEmail || '').trim();
     if (!looksLikeEmail(addr) || !emailCanSend()) return;
-    // The first repeat charge is a month after the tap, matching what the subscription was given.
-    const next = new Date(don.createdAt);
+    // The first repeat charge is a month after the tap, computed EXACTLY as createMonthlySubscription
+    // computed the anchor it gave Stripe — from the same instant (the PaymentIntent's creation, when
+    // the caller has it) with the same arithmetic — so the email names the very charge Stripe will
+    // make rather than a near-miss that can land a day out for a gift made near midnight.
+    const next = new Date(anchorSec ? anchorSec * 1000 : Date.parse(don.createdAt));
     const days = new Date(next.getFullYear(), next.getMonth() + 2, 0).getDate();
     const day = next.getDate();
     next.setDate(1);
@@ -2439,7 +2696,9 @@ ${body}
     next.setDate(Math.min(day, days));
     const rendered = renderMonthlyStarted(store.getEmailReceipt(), {
       ...receiptContext(don),
-      nextChargeDate: fmtReceiptDate(next.toISOString()),
+      // DATE ONLY, Gregorian · Hijri, on the masjid's clock: that instant's own day where the masjid
+      // is. A time of day on a future charge would promise a precision Stripe does not.
+      nextChargeDate: formatDate(next, store.getClock()),
       cancelUrl: donorCancelUrl(token),
     });
     await fabricEmail({ to: addr, subject: rendered.subject, text: rendered.text, html: rendered.html });
@@ -2553,7 +2812,7 @@ ${body}
     // offers it AND the donor opted in. The masjid nets ≈ the base; the donor pays the grossed-up
     // total. Computed server-side (the tablet only displays it).
     const coverFees = campaign.forceCoverFees || (parsed.data.coverFees === true && campaign.coverFees);
-    const chargeMinor = coverFees ? grossUpForFees(amountMinor) : amountMinor;
+    const chargeMinor = coverFees ? grossUpForFees(amountMinor, currency) : amountMinor;
     const preset = campaign.presetsMinor.includes(amountMinor) ? 'preset' : 'custom';
     // Receipt strategy — DECIDED ONCE here and carried in PI metadata (`brandedReceipt`), so the
     // /complete recording + retry outbox stay consistent with whether we suppressed Stripe's receipt:
@@ -2645,11 +2904,15 @@ ${body}
         store.addLogs(d.id, [
           { level: 'warn', event: 'monthly_intent_rejected', detail: `Stripe refused the card-saving payment; taking it as a one-off instead · ${why}` },
         ]);
+        // No Stripe text in the alert itself. It reaches the admin's email and WhatsApp, and a
+        // WhatsApp thread is kept for ever on several phones — Stripe's code and developer message
+        // help nobody reading it there. The reason is in the kiosk's Logs (Devices), one line up.
         alert(
           'monthly-failed',
           'Monthly donations are not being set up',
           `Stripe refused to set up a repeat payment at ${d.name || 'the kiosk'} · ${campaign.title}, so this gift was taken as a ONE-OFF instead. ` +
-            `Donors choosing "Monthly" are being charged once and no standing order is created. Reason: ${why}`,
+            `Donors choosing "Monthly" are being charged once and no monthly plan is set up. ` +
+            `The technical reason is saved in Devices → ${d.name || 'this kiosk'} → Logs.`,
           'warning',
         );
         // A DIFFERENT idempotency key: same key + different body is itself a Stripe error, and this
@@ -2719,6 +2982,11 @@ ${body}
       // branch reached only the container log — so an admin saw a donation badged "Monthly", no plan
       // on the Recurring screen, and nothing anywhere saying why.
       let monthlyProblem = '';
+      // Stripe's own words for the same failure, when there are any. Kept apart from monthlyProblem
+      // because the two have different readers: this goes to the kiosk's Logs (Devices), where someone
+      // diagnosing needs it verbatim; monthlyProblem also goes into the admin's alert (email and
+      // WhatsApp), where it must be plain words.
+      let monthlyDetail = '';
       /** The donor's one-time cancel token — only set when a plan was created AND recorded. */
       let monthlyCancelToken = '';
       // The reusable card, whichever way it was taken: `generated_card` for a reader tap, or the
@@ -2733,8 +3001,8 @@ ${body}
         // are excluded from generated_card by design). The gift stands; the standing order cannot be
         // created from it. Say which half is missing — this line is the whole diagnosis in the log.
         monthlyProblem = monthlyCustomer
-          ? 'Stripe saved no reusable card for this charge, so no standing order could be created. Some cards, networks and digital wallets cannot be reused.'
-          : 'This donation was taken before the card could be set up for reuse, so no standing order could be created. If the tablet was mid-donation during an update, the next monthly gift will work.';
+          ? 'Stripe saved no reusable card for this charge, so no monthly plan could be set up. Some cards, networks and digital wallets cannot be reused.'
+          : 'This donation was taken before the card could be set up for reuse, so no monthly plan could be set up. If the tablet was mid-donation during an update, the next monthly gift will work.';
       }
       if (result.succeeded && wantsMonthly && reusableCard) {
         // Two failure domains, deliberately not sharing a try. Stripe creating the plan and us writing
@@ -2761,7 +3029,8 @@ ${body}
         } catch (e) {
           const why = e instanceof Error ? e.message : String(e);
           log.warn('monthly subscription failed: ' + why);
-          monthlyProblem = `Stripe refused to create the standing order: ${why.slice(0, 200)}`;
+          monthlyProblem = 'Stripe refused to create the monthly plan.';
+          monthlyDetail = why.slice(0, 200);
         }
         if (sub?.created) {
           monthly = { requested: true, created: true };
@@ -2811,13 +3080,15 @@ ${body}
       // and the admin has nothing to cancel because nothing exists. Put it where both can see it —
       // this kiosk's log, and an alert to the admin.
       if (result.succeeded && wantsMonthly && !monthly.created) {
-        store.addLogs(d.id, [{ level: 'warn', event: 'monthly_setup_failed', detail: monthlyProblem || 'No standing order was created.' }]);
+        store.addLogs(d.id, [{ level: 'warn', event: 'monthly_setup_failed', detail: `${monthlyProblem || 'No monthly plan was created.'}${monthlyDetail ? ` · ${monthlyDetail}` : ''}` }]);
         alert(
           'monthly-failed',
           'A monthly donation could not be set up',
           `${formatMoney(result.amountMinor, result.currency)} was taken once at ${d.name || 'the kiosk'}` +
             `${(meta.campaign || '').trim() ? ` · ${(meta.campaign || '').trim()}` : ''}, but the donor's monthly plan could NOT be created, ` +
-            `so nothing will be collected again and there is nothing to cancel. ${monthlyProblem} If the donor expected a standing order, please contact them.`,
+            `so nothing will be collected again and there is nothing to cancel. ${monthlyProblem}` +
+            `${monthlyDetail ? ` The technical reason is saved in Devices → ${d.name || 'this kiosk'} → Logs.` : ''}` +
+            ` If the donor expected a monthly plan, please contact them.`,
           'warning',
         );
       }
@@ -2867,7 +3138,7 @@ ${body}
         // and the one message the donor needs to keep. Fire-and-forget — a mail failure must never
         // disturb a donation and a plan that both already exist.
         if (rec.firstRecord && monthly.created && monthlyCancelToken) {
-          void sendMonthlyStartedEmail(id, monthlyCancelToken).catch(() => {});
+          void sendMonthlyStartedEmail(id, monthlyCancelToken, result.createdSec).catch(() => {});
         }
         // Send our branded receipt, but ONLY on the first recording of a 'pending' row (never a
         // double on a retried /complete). Non-blocking; a transient failure stays 'pending' for the
@@ -3076,10 +3347,15 @@ ${body}
     });
     // The tablet renders the account CHILD BY CHILD (each with their own balance, credit and bills), so
     // group the invoices here rather than shipping one flat list for the device to untangle.
+    const clock = store.getClock();
     const wireInvoice = (i: (typeof r.family.openInvoices)[number]) => ({
       id: i.id,
       label: i.label,
+      // The raw "YYYY-MM-DD" stays for any tablet that reads it; `dueLabel` is the same day as a
+      // parent reads it — Gregorian · Hijri in the masjid's conventions, formatted once here so the
+      // tablet never shows "Due 2026-07-01". A calendar date, so it is never shifted by a zone.
       dueDate: i.dueDate,
+      dueLabel: i.dueDate ? formatCalendarDate(i.dueDate, clock) : '',
       balanceCents: i.balanceCents,
       studentName: i.studentName,
       // 0.43.0 (§11.0b): what this bill is MADE OF, so a parent can pay the book fee without the
@@ -3376,7 +3652,25 @@ ${body}
   const indexPath = path.join(config.publicDir, 'index.html');
   const havePublic = fs.existsSync(indexPath);
   if (havePublic) {
-    await app.register(fastifyStatic, { root: config.publicDir, index: false });
+    // PRE-COMPRESSED, AND CACHED FOR GOOD. A Raspberry Pi is a target (app spec §8), and nothing
+    // between the tablet or browser and us compresses: the platform's TLS edge pipes our bytes
+    // straight through. The Dockerfile's web stage writes a .br and a .gz beside every text asset at
+    // BUILD time (Node's own zlib — no dependency, and no CPU spent per request), and `preCompressed`
+    // serves whichever the browser accepts, falling back to the plain file. Measured: the JS goes
+    // from 337 KB to 82 KB with brotli, the CSS from 57 KB to 10 KB.
+    //
+    // /assets/* is content-hashed by Vite — a changed file is a new name — so it can be cached for
+    // a year and marked immutable. Everything else keeps the default revalidation. index.html is not
+    // served from here at all (sendIndexHtml, below), so it keeps its own no-store and a release is
+    // picked up on the next load.
+    await app.register(fastifyStatic, {
+      root: config.publicDir,
+      index: false,
+      preCompressed: true,
+      setHeaders: (res, filePath) => {
+        if (/[\\/]assets[\\/]/.test(filePath)) res.header('cache-control', 'public, max-age=31536000, immutable');
+      },
+    });
   } else {
     log.warn(`no built web app at ${config.publicDir} — run "cd web && npm run build" (dev uses the Vite server on :5173)`);
   }
@@ -3395,7 +3689,12 @@ ${body}
   // When injected: a `<base href>` (relative-built Vite assets resolve under the prefix) plus
   // `window.__OMOS_BASE__` (web/src/base.ts prefixes API/nav/asset URLs). basePath is already a
   // safe URL-path charset (normBasePath), re-sanitized here defensively.
+  //
+  // NEVER CACHED. The assets it names are cached for a year (see the static registration above), so
+  // a remembered copy of this page after an update would ask for hashed files the new image no
+  // longer has. Fetching it fresh each load is what makes the long asset cache safe.
   const sendIndexHtml = (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
+    reply.header('cache-control', 'no-store');
     const base = (tunnelMark(req).omosBase ?? '').replace(/[^\w/-]/g, '');
     if (!base) return reply.type('text/html').send(rawIndex);
     const head = `<base href="${base}/">\n    <script>window.__OMOS_BASE__=${JSON.stringify(base)}</script>`;
@@ -3430,15 +3729,7 @@ ${body}
     return reply.code(404).send({ error: 'Not found.' });
   });
 
-  // Consistent JSON error envelope; never leak a stack trace or framework-internal text.
-  app.setErrorHandler((err, _req, reply) => {
-    const e = err as { message?: string; statusCode?: number; expose?: boolean };
-    log.error('request error', e.message ?? 'unknown');
-    const status = typeof e.statusCode === 'number' && e.statusCode >= 400 && e.statusCode < 600 ? e.statusCode : 500;
-    const friendly =
-      status === 413 ? 'That request was too large.' : status < 500 ? 'We couldn’t process that request.' : 'Something went wrong. Please try again.';
-    reply.code(status).send({ error: e.expose && e.message ? e.message : friendly });
-  });
+  // (The JSON error envelope is registered at the top of main(), before any route — see there.)
 
   // Keep our public base path warm (manifest `domain: true`) so the base-path rewrite + the
   // remote-adoption page are accurate without a per-request network call. Best-effort; when the

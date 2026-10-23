@@ -230,7 +230,7 @@ I first rated KIOSK-002 **High**, on the reasoning that an overflowing shift wou
 |---|---|
 | **KIOSK-011** · redirect port from an untrusted header | Every candidate fix needs knowledge of how the platform's TLS proxy sets `Host` versus `X-Forwarded-Host`, which cannot be observed without a live OpenMasjidOS. Shipping an unverified change to the redirect that serves the admin panel is the worse trade; exploiting it already requires binding a port on the masjid server. |
 | **KIOSK-012** · container runs as root | `USER node` would break **every existing install** — `/data` is a named volume with a root-owned `kiosk.db` at mode 0600 — and `cap_drop: ALL` rules out the entrypoint-chown pattern too. Needs a coordinated image + compose + volume-chown migration. Already mitigated by no capabilities + `no-new-privileges`. |
-| **KIOSK-013** · totals use the container's timezone | Needs a masjid timezone setting and UI. Guessing a timezone produces quietly wrong numbers on the figure a treasurer reads out. |
+| **KIOSK-013** · totals use the container's timezone | Needs a masjid timezone setting and UI. Guessing a timezone produces quietly wrong numbers on the figure a treasurer reads out. *(Since resolved in 0.14.0 — see `ACTION_REQUIRED.md` §6.)* |
 | **KIOSK-014** · dead `consumeTuitionSession` | Deleting versus wiring it up is a product decision ("should a declined tuition card force a fresh balance lookup?"). Not a vulnerability either way. |
 | **KIOSK-016** · no Android unit tests | Adding test infrastructure is beyond an audit's remit, and with no Android SDK here I could not run what I added to prove it worked. |
 

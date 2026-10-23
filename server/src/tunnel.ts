@@ -4,8 +4,8 @@
 /** Which paths may be reached over the OpenMasjidOS Cloudflare tunnel (manifest `domain: true`).
  *
  *  Over the tunnel: the public KIOSK surface (the device API, the public bootstrap, the appearance
- *  relay, and everything that isn't `/api` — the SPA + its assets, `/new`, the APK, uploaded images),
- *  plus what a REMOTE ADMIN needs: `/api/session`, `/api/logout` and `/api/admin/*`. Those answer
+ *  and logo relays, and everything that isn't `/api` — the SPA + its assets, `/new`, the APK, uploaded
+ *  images), plus what a REMOTE ADMIN needs: `/api/session`, `/api/logout` and `/api/admin/*`. Those answer
  *  only to a request OpenMasjidOS vouches for, asked afresh on each one (index.ts `requireAdmin`):
  *  the platform hands us an access token only while the admin is signed in to its remote dashboard
  *  with two-step sign-in. Everything that turns a PASSWORD into a session — `/api/login`,

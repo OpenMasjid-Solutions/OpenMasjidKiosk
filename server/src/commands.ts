@@ -31,6 +31,7 @@
  * in a comment.
  */
 import crypto from 'node:crypto';
+import { DEFAULT_CLOCK, formatTime, isValidTimeZone, sameDay, startOfDay, ymdIn, type ClockSettings } from './dates';
 
 /** Reply promptly — the platform gives up at 10s and a volunteer is watching a chat window. */
 export const COMMAND_TIMEOUT_MS = 10_000;
@@ -187,6 +188,9 @@ export interface KioskCommand {
  *  quietly grow into something that writes. Every command here is READ-ONLY. */
 export interface CommandStore {
   getCurrency(): string;
+  /** The masjid's clock (Settings → Masjid details). Optional so a stand-in store in a test need not
+   *  have one; without it times are written as [DEFAULT_CLOCK] would. */
+  getClock?(): ClockSettings;
   donationTotals(): {
     today: number;
     thisWeek: number;
@@ -218,6 +222,10 @@ export interface CommandDeps {
   money: (minorUnits: number, currency: string) => string;
   /** A kiosk with no check-in inside this window is reported offline. Matches the Devices page. */
   onlineWithinMs: number;
+  /** How `recent` says when a gift was made. Optional: by default it is [whenShort] in the masjid's
+   *  own clock, read from the store on every call, so a zone the admin changes takes effect on the
+   *  next message rather than the next restart. A test passes a fixed one. */
+  when?: (iso: string) => string;
 }
 
 /** How many recent donations `recent` lists. Small on purpose: this is a phone, and the question
@@ -229,17 +237,46 @@ const RECENT_LIMIT = 5;
 const TAKINGS_PICK = 'takings:pick';
 const TAKINGS_RETRY = 'takings:pick2';
 
-/** A short, human "when" for a chat message: today's times as times, then days, then dates. */
-function whenShort(iso: string, now = new Date()): string {
+/**
+ * A short, human "when" for a chat message: today's times as times, then yesterday, then the date —
+ * all on the MASJID'S clock (app UI spec §10: its time zone and 12/24-hour choice, and the Hijri date
+ * beside the Gregorian one).
+ *
+ * This used the server's own clock for everything, and a Docker container runs in UTC: a gift made at
+ * 8 pm on a Friday in Chicago was read out as "01:00 today" on Saturday. "Today" and "yesterday" are
+ * now decided by the calendar day in the masjid's zone — the same boundary `takings` uses — and an
+ * older gift reads "28 Sept · 16 Rabiʻ II": day and month in both calendars, no year, because this
+ * lists the last five gifts and a year would only make a phone line wrap.
+ */
+export function whenShort(iso: string, clock: ClockSettings = DEFAULT_CLOCK, now = new Date()): string {
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return '';
-  const d = new Date(t);
-  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  const midnight = new Date(now);
-  midnight.setHours(0, 0, 0, 0);
-  if (t >= midnight.getTime()) return `${hhmm} today`;
-  if (t >= midnight.getTime() - 86_400_000) return `${hhmm} yesterday`;
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  const time = formatTime(t, clock);
+  if (sameDay(t, now, clock)) return `${time} today`;
+  // One millisecond before the masjid's midnight is the last moment of its yesterday — a DST change
+  // makes "24 hours ago" the wrong day twice a year, and this cannot be.
+  if (sameDay(t, startOfDay(now, clock).getTime() - 1, clock)) return `${time} yesterday`;
+  return dayMonth(t, clock);
+}
+
+/** "28 Sept · 16 Rabiʻ II" — the day and month in both calendars, on the masjid's day. The Hijri half
+ *  is worked out exactly as dates.ts does it (Umm al-Qura, of the masjid's CIVIL day, nudged by its own
+ *  adjustment), so a gift reads the same date here as on its receipt; and a runtime without that
+ *  calendar says nothing rather than printing the Gregorian date twice. */
+function dayMonth(t: number, clock: ClockSettings): string {
+  const tz = clock.timeZone && isValidTimeZone(clock.timeZone) ? clock.timeZone : undefined;
+  const gregorian = new Intl.DateTimeFormat(clock.locale, { day: 'numeric', month: 'short', timeZone: tz }).format(t);
+  let hijri = '';
+  try {
+    const f = new Intl.DateTimeFormat(`${clock.locale}-u-ca-islamic-umalqura`, { day: 'numeric', month: 'long', timeZone: 'UTC' });
+    if (/islamic/.test(f.resolvedOptions().calendar)) {
+      const { y, m, d } = ymdIn(new Date(t), tz);
+      hijri = f.format(new Date(Date.UTC(y, m - 1, d + (clock.hijriOffset || 0), 12)));
+    }
+  } catch {
+    hijri = '';
+  }
+  return hijri ? `${gregorian} · ${hijri}` : gregorian;
 }
 
 /** "3 minutes ago" / "2 days ago" — how long since a kiosk was last heard from. */
@@ -255,24 +292,39 @@ function agoShort(iso: string, now = Date.now()): string {
   return `${Math.round(hours / 24)} days ago`;
 }
 
-/** The reader status in plain words — the same wording the Devices page uses, so the two never
- *  describe the same reader differently. Anything unrecognized is passed through rather than
- *  flattened to "unknown", which would hide a status worth seeing. */
+/**
+ * The reader status in plain words — the SAME STATUSES the Devices page knows (web/src/devices.tsx
+ * `readerLabel`), meaning the same thing, in a shorter form for one line of a phone message. A status
+ * added to one belongs in the other, and the two must never describe one reader differently.
+ *
+ * (This comment used to claim "the same wording the Devices page uses" while the page knew none of
+ * `not_connected`, `discovering`, `updating` or `error` — the four the tablet actually sends — so the
+ * page showed "Reader: not_connected" and this said "NO READER" about the same reader. The page learnt
+ * them; this now says what the page says: "not connected", not "no reader" — the reader is usually
+ * sitting right there, just not talking to the tablet.)
+ *
+ * Faults are in capitals because they are what the admin is scanning for. Anything unrecognized is
+ * passed through with its underscores taken out, as the page does, rather than flattened to
+ * "unknown", which would hide a status worth seeing.
+ */
 function readerWords(s: string): string {
   const map: Record<string, string> = {
     connected: 'reader connected',
     ready: 'reader ready',
-    updating: 'reader updating',
     connecting: 'reader connecting',
-    discovering: 'reader connecting',
-    disconnected: 'NO READER',
-    offline: 'NO READER',
-    error: 'READER ERROR',
-    not_connected: 'NO READER',
+    discovering: 'looking for its reader',
+    updating: 'reader updating — keep it charged',
+    error: 'READER PROBLEM — check it at the tablet',
+    not_connected: 'reader NOT CONNECTED',
+    disconnected: 'reader NOT CONNECTED',
+    offline: 'reader NOT CONNECTED',
     none: 'no reader set up',
     '': 'no reader set up',
   };
-  return map[(s || '').toLowerCase()] ?? `reader ${s}`;
+  const key = (s || '').toLowerCase();
+  // Own keys only: the status comes from the tablet, and a plain `map[key]` would hand back
+  // Object.prototype for "__proto__" and write "[object Object]" into someone's chat.
+  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : `reader ${(s || '').replace(/_/g, ' ')}`;
 }
 
 /** Match what the admin typed against a kiosk name: exact first, then a unique prefix/substring,
@@ -304,6 +356,8 @@ export function matchKiosk<T extends { deviceName?: string; name?: string }>(typ
 export function buildCommands(deps: CommandDeps): KioskCommand[] {
   const { store, money, onlineWithinMs } = deps;
   const cur = () => store.getCurrency();
+  // Read per message, not once here: the masjid's clock loads from settings the admin can change.
+  const when = deps.when ?? ((iso: string) => whenShort(iso, store.getClock?.() ?? DEFAULT_CLOCK));
 
   /** The per-kiosk lines shared by the takings drill-down. */
   const kioskTakingsLine = (row: { deviceName: string; amountMinor: number; count: number }): string =>
@@ -395,7 +449,7 @@ export function buildCommands(deps: CommandDeps): KioskCommand[] {
           .slice(0, RECENT_LIMIT);
         if (!rows.length) return { ok: true, text: 'No donations have been taken yet.' };
         const lines = rows.map((d) => {
-          const bits = [money(d.amountMinor, d.currency), whenShort(d.createdAt)];
+          const bits = [money(d.amountMinor, d.currency), when(d.createdAt)];
           if (d.deviceName) bits.push(d.deviceName);
           if (d.campaignTitle) bits.push(d.campaignTitle);
           if (d.kind === 'monthly') bits.push('monthly');

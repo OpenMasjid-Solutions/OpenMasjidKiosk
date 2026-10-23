@@ -2,9 +2,20 @@
 /* Copyright (C) 2026 OpenMasjid-Solutions */
 
 /*
- * Design tokens — mirrors the OpenMasjidOS palette so the control panel feels
- * like part of the platform. Switching theme = data-theme="dark|light" on <html>.
- * Fonts use the system stack (no external/CDN dependency).
+ * Design tokens — mirrors the OpenMasjidOS palette (packages/ui/src/styles/tokens.css) so the panel
+ * feels like part of the platform. Switching theme = data-theme="dark|light" on <html>. Never write a
+ * raw hex in a component: add a token here and reference it.
+ *
+ * WHERE THIS FILE DELIBERATELY DIFFERS FROM THE PLATFORM, all for WCAG AA (app UI spec §7, which
+ * outranks a transcribed value): --color-ink-muted/--color-ink-faint in both themes (the platform's
+ * faint ink measures 2.2–3.6:1 on its own surfaces), the light theme's --color-primary (#0284C7 is
+ * 3.2:1 on the light hover surface; #0369A1, the platform's own button blue, is 4.6:1), and the
+ * `-ink` text variants of the status colours below, which exist because the status colours are fills
+ * first and text second. server/src/theme-contrast.test.ts measures all of them — "tidy" one back to
+ * the platform's value and that test says which one failed.
+ *
+ * Fonts are self-hosted (index.css pulls them in from @fontsource) — no CDN, ever: a masjid may have
+ * no internet at all.
  */
 :root,
 [data-theme="dark"] {
@@ -34,14 +45,29 @@
   --color-success: #34D399;
   --color-warning: #FBBF24;
   --color-danger: #F87171;
+  /* Ink for a FILLED danger button. White on this theme's light red is 2.77:1 — and that is the
+     delete button. Dark ink reaches 6.84:1 (platform tokens.css, the same fix). */
+  --color-on-danger: #00131c;
+  --color-danger-hover: #FCA5A5;
+  --color-danger-subtle: rgba(248, 113, 113, 0.12);
+  /* The status colours as TEXT. In dark theme the fills already read as text; the light theme is
+     where these differ, and where they have to. */
+  --color-danger-ink: #F87171;
+  --color-success-ink: #34D399;
+  --color-warning-ink: #FBBF24;
+  --color-gold-ink: #F59E0B;
 
   --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.5);
+  --shadow-modal: 0 8px 40px rgba(0, 0, 0, 0.7);
+  /* The dim behind an open dialog. */
+  --scrim-modal: rgba(2, 8, 18, 0.62);
   --radius-card: 1rem;
   --radius-button: 0.625rem;
 
-  --glass-blur: 16px;
-  --glass-blur-inset: 9px;
-  --glass-blur-strong: 28px;
+  /* Trimmed to the platform's values for the Raspberry Pi GPU (OpenMasjidOS b04cc75). */
+  --glass-blur: 12px;
+  --glass-blur-inset: 7px;
+  --glass-blur-strong: 18px;
   --glass-saturate: 165%;
   --glass-saturate-strong: 200%;
   --glass-bg: rgba(10, 24, 40, 0.55);
@@ -95,8 +121,12 @@
   --color-surface-hover: rgba(2, 132, 199, 0.06);
   --color-surface-shimmer: #BAE6FD;
 
-  --color-primary: #0284C7;
-  --color-primary-hover: #0369A1;
+  /* The platform's #0284C7 is 3.2:1 on this theme's hover surface — too faint for the links, the
+     focus ring and the active dock icon it colours. The platform's own button blue clears 4.6:1 on
+     every light surface. (The accent overrides these in light theme with its own darker shade:
+     accents.ts `text`.) */
+  --color-primary: #0369A1;
+  --color-primary-hover: #075985;
   --color-primary-muted: #BAE6FD;
   --color-primary-subtle: rgba(2, 132, 199, 0.1);
 
@@ -106,15 +136,31 @@
 
   --color-ink: #0C4A6E;
   --color-ink-muted: #44515F;
-  --color-ink-faint: #647281;
+  /* #647281 was 4.29:1 on the hover surface (#E0F2FE) that list rows take; this clears 4.9:1. */
+  --color-ink-faint: #5B6978;
 
   --color-border: rgba(2, 132, 199, 0.12);
 
   --color-success: #16A34A;
   --color-warning: #D97706;
   --color-danger: #DC2626;
+  /* White already passes here (4.83:1) — this theme's danger is dark enough. */
+  --color-on-danger: #FFFFFF;
+  --color-danger-hover: #B91C1C;
+  --color-danger-subtle: rgba(220, 38, 38, 0.09);
+  /* As TEXT the light status colours measure 3.0–3.3:1. These are the lightest shades of the same
+     hues that clear 4.6:1 on every light surface and on their own tinted washes (worked out in
+     OKLCH so each keeps its hue). Danger is the platform's own --color-danger-ink. */
+  --color-danger-ink: #B91C1C;
+  --color-success-ink: #017330;
+  --color-warning-ink: #985101;
+  --color-gold-ink: #985101;
 
   --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.08);
+  --shadow-modal: 0 8px 40px rgba(0, 0, 0, 0.15);
+  --scrim-modal: rgba(13, 38, 76, 0.38);
+  --glass-saturate: 140%;
+  --glass-saturate-strong: 175%;
   --glass-bg: rgba(255, 255, 255, 0.55);
   --glass-bg-raised: rgba(255, 255, 255, 0.72);
   --glass-bg-inset: rgba(240, 249, 255, 0.60);
@@ -172,8 +218,35 @@
   --dur-micro: 140ms;
   --dur-settle: 420ms;
   --lift-y: -6px;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-display: "Segoe UI", system-ui, ui-sans-serif, var(--font-sans);
+  /* The platform's two families, self-hosted. Noto Naskh Arabic sits right after Inter so Arabic —
+     which Inter has no glyphs for — is drawn in a proper Naskh rather than whatever serif the
+     operating system falls back to (spec §11). It is only downloaded when Arabic is on screen. */
+  --font-sans: "Inter Variable", Inter, "Noto Naskh Arabic Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Space Grotesk Variable", "Space Grotesk", var(--font-sans);
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
+
+  /* Window chrome and the switch thumb — the same literals the platform draws, as tokens. */
+  --color-knob: #FFFFFF;
+  --shadow-knob: 0 1px 2px rgba(0, 0, 0, 0.25);
+  /* The hairline round a colour swatch, so a white or black swatch still shows its edge. */
+  --ring-swatch: rgba(0, 0, 0, 0.15);
+  /* The campaign preview's device frame. */
+  --shadow-device: 0 10px 28px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --glass-inset-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+  --tl-red: #FF5F57;
+  --tl-amber: #FEBC2E;
+  --tl-green: #28C840;
+  --tl-glyph: rgba(60, 0, 0, 0.7);
+
+  /* The emailed receipt's preview is a light card in both themes, because email clients are light.
+     These mirror the inline colours server/src/email.ts writes (and were raised with them for AA). */
+  --er-card: #FFFFFF;
+  --er-ink: #16242B;
+  --er-body: #42535C;
+  --er-label: #44515F;
+  --er-faint: #5B6978;
+  --er-rule: #E6EAED;
+  --er-rule-soft: #EEF1F3;
 }
 
 /* ── On-scene ("on the wallpaper") text ───────────────────────────────────────
@@ -332,11 +405,11 @@
 [data-theme="light"][data-wallpaper="night"] {
   --scene-base: #EBF0FC;
   --scene-gradient: linear-gradient(150deg, #cdd9f7 0%, #e0e8fb 50%, #f2f6ff 100%);
-  --aurora-cyan: rgba(96, 165, 250, 0.20); --aurora-navy: rgba(30, 58, 138, 0.14); --aurora-gold: rgba(99, 102, 241, 0.10);
+  --aurora-cyan: rgba(59, 130, 246, 0.18); --aurora-navy: rgba(30, 58, 138, 0.14); --aurora-gold: rgba(99, 102, 241, 0.10);
 }
 [data-theme="light"][data-wallpaper="graphite"] {
-  --scene-base: #EFF2F6;
-  --scene-gradient: linear-gradient(150deg, #d6dce5 0%, #e6eaf0 50%, #f5f7fa 100%);
+  --scene-base: #F1F3F6;
+  --scene-gradient: linear-gradient(150deg, #d8dee7 0%, #e6eaf0 50%, #f5f7fa 100%);
   --aurora-cyan: rgba(100, 116, 139, 0.14); --aurora-navy: rgba(51, 65, 85, 0.12); --aurora-gold: rgba(148, 163, 184, 0.10);
 }
 

@@ -105,6 +105,11 @@ data class KioskConfig(
     val celebrateThresholdMinor: Long = 0,
     val mainCampaignId: String = "",
     val campaigns: List<Campaign> = emptyList(),
+    /** The BCP-47 tag every amount is written in — English in the masjid's own region ("en-GB",
+     *  "en-IN"), the same tag the admin panel formats with, worked out by the server from the
+     *  masjid's address. Applied to [org.openmasjidos.kiosk.ui.MoneyFormat] wherever a config is
+     *  parsed or loaded. "en-US" is what an older server that sends none has always rendered. */
+    val locale: String = "en-US",
 ) {
     /** The main campaign (first tab) — or the first campaign, or null if none synced yet. */
     val mainCampaign: Campaign? get() = campaigns.firstOrNull { it.isMain } ?: campaigns.firstOrNull()

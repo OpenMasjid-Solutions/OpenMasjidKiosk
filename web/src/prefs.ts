@@ -2,62 +2,46 @@
 // Copyright (C) 2026 OpenMasjid-Solutions
 
 /**
- * Per-browser presentation preferences (theme + wallpaper + accent), persisted in
- * localStorage and applied live. This is NOT masjid config — it mirrors how OpenMasjidOS
- * treats appearance, so the panel follows the viewer's OS light/dark setting and, when
- * opened from OpenMasjidOS, inherits the dashboard's look via the `#omos=` hand-off.
+ * Per-browser presentation preferences (theme, wallpaper, accent, writing direction), persisted in
+ * localStorage and applied live. This is NOT masjid config — it mirrors how OpenMasjidOS treats
+ * appearance, so the panel looks like the dashboard it was opened from.
  *
- * The `#omos=…` fragment is attacker-craftable presentation input — we only ever read
- * theme/wallpaper/accent from it, never anything security-relevant. Live appearance sync
- * (polling /api/public/appearance) is added with the Fabric in a later slice.
+ * Two ways in, both from the platform (app UI spec §1):
+ *   · the `#omos=…` launch fragment the dashboard appends when it opens us — read on first paint by
+ *     the inline script in index.html, then here, then removed from the address bar;
+ *   · our own same-origin relay of `GET /api/public/appearance`, polled every 45 s and on focus so a
+ *     theme change in the dashboard follows us while we are open. (Same-origin because our page is
+ *     HTTPS and the platform's endpoint is plain HTTP — a direct call would be mixed content.)
+ *
+ * The fragment is attacker-craftable presentation input: anyone can put `#omos=` in a link. So only
+ * presentation is ever read from it, every value is checked against a fixed list, and nothing
+ * security-relevant can be steered by it.
  */
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { withBase } from './base';
+import { ACCENT_PROPS, accentVars, DEFAULT_ACCENT, isAccentId } from './accents';
+import { isRtlLang, isWallpaperId, WALLPAPER_IDS } from './appearance';
 
 export interface Prefs {
   theme: 'system' | 'dark' | 'light';
   wallpaper: string;
   /** Optional custom wallpaper image URL — overrides the preset when set. */
   wallpaperImage: string;
-  /** Accent color id — matches the dashboard's accent when embedded. */
+  /** Accent id, one of the platform's five (accents.ts). */
   accent: string;
-  /** Mirror OpenMasjidOS's theme + wallpaper (on by default under the platform). */
+  /** The dashboard's language. Only its DIRECTION is used — see applyDir. */
+  lang: string;
+  /** Mirror OpenMasjidOS's theme (on by default under the platform). */
   followOmos: boolean;
 }
 
 const KEY = 'omkiosk-prefs';
-const DEFAULTS: Prefs = { theme: 'system', wallpaper: 'aurora', wallpaperImage: '', accent: 'cyan', followOmos: true };
+const DEFAULTS: Prefs = { theme: 'system', wallpaper: 'aurora', wallpaperImage: '', accent: DEFAULT_ACCENT, lang: 'en', followOmos: true };
 
-/** Accent palette — mirrors OpenMasjidOS so the app matches the dashboard's accent.
- *  cyan is the tokens' built-in primary, so selecting it just clears the overrides. */
-export const ACCENTS: Record<string, { primary: string; hover: string; subtle: string }> = {
-  cyan: { primary: '#22D3EE', hover: '#67E8F9', subtle: 'rgba(34,211,238,0.12)' },
-  teal: { primary: '#2DD4BF', hover: '#5EEAD4', subtle: 'rgba(45,212,191,0.12)' },
-  emerald: { primary: '#34D399', hover: '#6EE7B7', subtle: 'rgba(52,211,153,0.14)' },
-  sky: { primary: '#38BDF8', hover: '#7DD3FC', subtle: 'rgba(56,189,248,0.12)' },
-  violet: { primary: '#A78BFA', hover: '#C4B5FD', subtle: 'rgba(167,139,250,0.14)' },
-  gold: { primary: '#FBBF24', hover: '#FCD34D', subtle: 'rgba(251,191,36,0.14)' },
-};
+export { ACCENTS } from './accents';
 
-/** Apply the accent by overriding the primary CSS variables (or clearing them for the
- *  default cyan). Mirrors the platform's applyAccent. */
-export function applyAccent(id: string): void {
-  const el = document.documentElement;
-  const a = ACCENTS[id];
-  if (!a || id === 'cyan') {
-    for (const p of ['--color-primary', '--color-primary-hover', '--color-primary-subtle', '--color-btn', '--color-btn-hover']) {
-      el.style.removeProperty(p);
-    }
-    return;
-  }
-  el.style.setProperty('--color-primary', a.primary);
-  el.style.setProperty('--color-primary-hover', a.hover);
-  el.style.setProperty('--color-primary-subtle', a.subtle);
-  el.style.setProperty('--color-btn', a.primary);
-  el.style.setProperty('--color-btn-hover', a.hover);
-}
-
-export const WALLPAPERS: Record<string, { label: string }> = {
+/** The nine wallpapers by id — labels are the platform's; the ids live in appearance.ts. */
+export const WALLPAPERS: Record<(typeof WALLPAPER_IDS)[number], { label: string }> = {
   aurora: { label: 'Aurora' },
   ocean: { label: 'Ocean' },
   twilight: { label: 'Twilight' },
@@ -69,6 +53,8 @@ export const WALLPAPERS: Record<string, { label: string }> = {
   graphite: { label: 'Graphite' },
 };
 
+export { isRtlLang };
+
 export function resolveTheme(theme: Prefs['theme']): 'dark' | 'light' {
   if (theme === 'system') {
     return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
@@ -76,12 +62,47 @@ export function resolveTheme(theme: Prefs['theme']): 'dark' | 'light' {
   return theme;
 }
 
+/** The accent's custom properties for the RESOLVED theme. Re-run whenever either changes: in light
+ *  theme the accent's foreground is a darker shade than its fill (accents.ts explains why), so a
+ *  theme flip alone changes what the accent writes. */
+export function applyAccent(id: string, theme: 'dark' | 'light' = currentTheme()): void {
+  const el = document.documentElement;
+  const vars = accentVars(id, theme);
+  for (const p of ACCENT_PROPS) el.style.removeProperty(p);
+  if (vars) for (const [k, v] of Object.entries(vars)) el.style.setProperty(k, v);
+}
+
+function currentTheme(): 'dark' | 'light' {
+  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
 export function applyTheme(theme: Prefs['theme']): void {
-  document.documentElement.setAttribute('data-theme', resolveTheme(theme));
+  const resolved = resolveTheme(theme);
+  document.documentElement.setAttribute('data-theme', resolved);
+  // The browser's own chrome (a phone's address bar) takes the page colour too.
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolved === 'light' ? '#F0F9FF' : '#030D1A');
 }
 
 export function applyWallpaper(id: string): void {
-  document.documentElement.setAttribute('data-wallpaper', WALLPAPERS[id] ? id : 'aurora');
+  document.documentElement.setAttribute('data-wallpaper', isWallpaperId(id) ? id : 'aurora');
+}
+
+/**
+ * Mirror the dashboard's writing direction.
+ *
+ * `dir` only — `lang` deliberately stays "en". Every string in this panel is English, and a page
+ * that told a screen reader it was Arabic would have English read out with Arabic pronunciation
+ * rules. The layout mirrors so the panel sits beside a mirrored dashboard; the text stays what it is,
+ * and app.css isolates each run of it (`unicode-bidi: plaintext`) so an English sentence keeps its
+ * full stop at the end in an RTL page.
+ *
+ * `?dir=rtl` / `?dir=ltr` in the address overrides it for this page load only — the spec's "test by
+ * forcing dir=rtl and looking", without changing the dashboard's language to do it.
+ */
+export function applyDir(lang: string): void {
+  const forced = new URLSearchParams(location.search).get('dir');
+  const dir = forced === 'rtl' || forced === 'ltr' ? forced : isRtlLang(lang) ? 'rtl' : 'ltr';
+  document.documentElement.setAttribute('dir', dir);
 }
 
 const THEME_VALUES = ['system', 'dark', 'light'] as const;
@@ -89,52 +110,70 @@ function normTheme(v: unknown): Prefs['theme'] {
   return (THEME_VALUES as readonly string[]).includes(String(v)) ? (v as Prefs['theme']) : 'system';
 }
 
-/** Appearance handed over by OpenMasjidOS — we use theme + wallpaper + accent only. */
+/** Appearance handed over by OpenMasjidOS. `logo` is read by App.tsx from the relay directly. */
 interface OmosAppearance {
-  theme?: string;
-  wallpaper?: string;
-  wallpaperImage?: string;
-  accent?: string;
+  theme?: unknown;
+  wallpaper?: unknown;
+  wallpaperImage?: unknown;
+  accent?: unknown;
+  lang?: unknown;
 }
 
 function appearancePatch(p: OmosAppearance): Partial<Prefs> {
   const out: Partial<Prefs> = {};
   if (p.theme != null) out.theme = normTheme(p.theme);
-  if (typeof p.wallpaper === 'string') out.wallpaper = p.wallpaper;
-  if (typeof p.accent === 'string') out.accent = p.accent;
-  // wallpaperImage comes from the attacker-craftable #omos fragment (and the public
-  // appearance endpoint). Stored AS-IS — the OpenMasjidOS admin types a full image URL (the
-  // platform's placeholder is `https://…/wallpaper.jpg`), so it renders directly, exactly like
-  // the other apps (Donations/Display); no proxy. The Scene sanitizes it before use (accept
-  // only http(s)/data:image, reject characters that could break out of url("…")).
+  if (isWallpaperId(p.wallpaper)) out.wallpaper = p.wallpaper;
+  // An unknown accent is the DEFAULT accent, not "leave whatever we had" — the dashboard is saying
+  // what it looks like now, and it never sends one we would have to guess about.
+  if (p.accent != null) out.accent = isAccentId(p.accent) ? p.accent : DEFAULT_ACCENT;
+  if (typeof p.lang === 'string' && /^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})*$/.test(p.lang)) out.lang = p.lang;
+  // wallpaperImage is stored AS-IS — the OpenMasjidOS admin types a full image URL, exactly as in the
+  // other apps; no proxy. The Scene sanitizes it before use (safeImageUrl: http(s)/data:image only,
+  // nothing that could break out of url("…")).
   if (typeof p.wallpaperImage === 'string') out.wallpaperImage = p.wallpaperImage;
   return out;
 }
 
-/** Read the `#omos=…` appearance fragment OpenMasjidOS adds when it opens us (base64url
- *  JSON). Applied once, then the hash is cleared. */
+/** Read the `#omos=…` fragment (base64url JSON of UTF-8), then take it — and only it — out of the
+ *  address bar. The rest of the hash is this panel's router (#settings, #campaign/<id>), so it
+ *  stays: a dashboard deep link like `#settings&omos=…` must still land on Settings. */
 function readOmosFragment(): OmosAppearance | null {
-  const m = location.hash.match(/omos=([^&]+)/);
+  const m = /[#&]omos=([A-Za-z0-9_-]+)/.exec(location.hash);
   if (!m) return null;
+  let parsed: OmosAppearance | null = null;
   try {
     let b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
     b64 += '='.repeat((4 - (b64.length % 4)) % 4);
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-    const p = JSON.parse(new TextDecoder().decode(bytes)) as OmosAppearance;
-    history.replaceState(null, '', location.pathname + location.search);
-    return p;
+    const v = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    parsed = v && typeof v === 'object' ? (v as OmosAppearance) : null;
   } catch {
-    return null;
+    parsed = null;
   }
+  const rest = location.hash
+    .replace(/^#/, '')
+    .split('&')
+    .filter((part) => part && !part.startsWith('omos='))
+    .join('&');
+  history.replaceState(history.state, '', location.pathname + location.search + (rest ? `#${rest}` : ''));
+  return parsed;
 }
 
 function load(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
+    const saved = raw ? (JSON.parse(raw) as Partial<Prefs>) : {};
     // followOmos is a SESSION flag, never persisted: every load starts by following the OS, so the
-    // dashboard's theme/wallpaper/accent always pass through on open + refresh. A manual light/dark
-    // toggle sets it false for this session only; a refresh returns to following the OS.
-    return { ...DEFAULTS, ...(raw ? (JSON.parse(raw) as Partial<Prefs>) : {}), followOmos: true };
+    // dashboard's theme passes through on open + refresh. A manual light/dark toggle sets it false for
+    // this session only; a refresh returns to following the OS.
+    return {
+      ...DEFAULTS,
+      ...saved,
+      theme: normTheme(saved.theme ?? DEFAULTS.theme),
+      accent: isAccentId(saved.accent) ? saved.accent : DEFAULT_ACCENT,
+      lang: typeof saved.lang === 'string' ? saved.lang : DEFAULTS.lang,
+      followOmos: true,
+    };
   } catch {
     return { ...DEFAULTS };
   }
@@ -145,7 +184,8 @@ const listeners = new Set<() => void>();
 
 function persist() {
   try {
-    localStorage.setItem(KEY, JSON.stringify(state));
+    const { followOmos: _session, ...keep } = state;
+    localStorage.setItem(KEY, JSON.stringify(keep));
   } catch {
     /* private mode — just won't persist */
   }
@@ -158,15 +198,28 @@ export const prefsStore = {
     return () => listeners.delete(listener);
   },
   patch(part: Partial<Prefs>) {
+    const before = state;
     state = { ...state, ...part };
+    if (
+      before.theme === state.theme &&
+      before.wallpaper === state.wallpaper &&
+      before.wallpaperImage === state.wallpaperImage &&
+      before.accent === state.accent &&
+      before.lang === state.lang &&
+      before.followOmos === state.followOmos
+    ) {
+      return; // the 45 s poll usually changes nothing; don't re-render the whole panel for it
+    }
     persist();
     if (part.theme !== undefined) applyTheme(state.theme);
     if (part.wallpaper !== undefined) applyWallpaper(state.wallpaper);
-    if (part.accent !== undefined) applyAccent(state.accent);
+    if (part.theme !== undefined || part.accent !== undefined) applyAccent(state.accent);
+    if (part.lang !== undefined) applyDir(state.lang);
     for (const l of listeners) l();
   },
-  /** Apply persisted prefs on first load, inherit any OpenMasjidOS hand-off, and follow
-   *  OS theme changes live. */
+  /** Apply persisted prefs on first load, inherit any OpenMasjidOS hand-off, and follow OS theme
+   *  changes live. The inline script in index.html has already done the same before first paint;
+   *  this repeats it from the full module so both agree, then takes over. */
   hydrate() {
     const omos = readOmosFragment();
     if (omos) {
@@ -176,8 +229,12 @@ export const prefsStore = {
     applyTheme(state.theme);
     applyWallpaper(state.wallpaper);
     applyAccent(state.accent);
+    applyDir(state.lang);
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
-      if (state.theme === 'system') applyTheme('system');
+      if (state.theme === 'system') {
+        applyTheme('system');
+        applyAccent(state.accent);
+      }
     });
   },
 };
@@ -186,22 +243,39 @@ export function usePrefs(): Prefs {
   return useSyncExternalStore(prefsStore.subscribe, prefsStore.get, prefsStore.get);
 }
 
-/** One-shot pull of OpenMasjidOS's current appearance via our OWN same-origin relay
- *  (GET /api/public/appearance) — our page is HTTPS but the platform's appearance endpoint
- *  is HTTP, so a direct cross-origin fetch would be mixed-content blocked; the server
- *  fetches the platform side. Only theme + wallpaper + accent are applied. */
+/** The masjid's logo, as the platform reported it through our relay: a same-origin path, or '' when
+ *  none is set. Held outside Prefs because it is not a preference and must never be persisted. */
+let omosLogo = '';
+const logoListeners = new Set<() => void>();
+export function useOmosLogo(): string {
+  return useSyncExternalStore(
+    (l) => {
+      logoListeners.add(l);
+      return () => logoListeners.delete(l);
+    },
+    () => omosLogo,
+    () => omosLogo,
+  );
+}
+
+/** One pull of OpenMasjidOS's current appearance via our OWN same-origin relay. */
 export async function fetchOmosAppearance(): Promise<void> {
   try {
     const res = await fetch(withBase('/api/public/appearance'), { credentials: 'omit' });
     if (!res.ok) return;
-    const patch = appearancePatch((await res.json()) as OmosAppearance);
-    // The kiosk admin only lets you override light/dark (there's no wallpaper/accent picker —
-    // those belong to OpenMasjidOS). So wallpaper, the custom wallpaper image and accent ALWAYS
-    // follow the dashboard while embedded; only the THEME is held back once you've picked one
-    // manually (followOmos=false). This is why a light/dark toggle must NOT stop the wallpaper
-    // from inheriting — the previous "bail if !followOmos" did exactly that.
+    const body = (await res.json()) as OmosAppearance & { logo?: unknown };
+    const patch = appearancePatch(body);
+    // The panel only lets you override light/dark (there's no wallpaper/accent picker — those belong
+    // to OpenMasjidOS). So wallpaper, image, accent and direction ALWAYS follow the dashboard; only
+    // the THEME is held back once you've picked one by hand this session (followOmos = false).
     if (!prefsStore.get().followOmos) delete patch.theme;
     prefsStore.patch(patch);
+    // The relay rewrites the platform's logo to our own same-origin path; anything else is refused.
+    const logo = typeof body.logo === 'string' && body.logo === '/api/public/logo' ? body.logo : '';
+    if (logo !== omosLogo) {
+      omosLogo = logo;
+      for (const l of logoListeners) l();
+    }
   } catch {
     /* platform offline — keep the current look (the #omos fragment already themed us) */
   }
@@ -269,20 +343,25 @@ export function useReadableTheme(imageUrl: string | undefined, fallback: 'light'
   return theme;
 }
 
-/** Keep wallpaper + accent (and theme, unless manually overridden this session) in sync with the
- *  dashboard — poll on load, every 45s, and whenever the page regains focus. Deliberately does NOT
- *  gate on `embedded`: we always poll our OWN same-origin relay, which returns {} when standalone
- *  (so it's a harmless no-op) and the OS appearance when embedded. Gating on a possibly-miscomputed
- *  `embedded` flag was a way for inheritance to silently never start. */
-export function useOmosAppearanceSync(_embedded?: boolean | undefined): void {
+/** Keep wallpaper, accent and direction (and theme, unless overridden this session) in sync with
+ *  the dashboard — on load, every 45 s, and whenever the page regains focus or becomes visible.
+ *  Deliberately does NOT gate on being embedded: our own relay returns {} when standalone, which is a
+ *  harmless no-op, and gating on a possibly-miscomputed flag was a way for inheritance to silently
+ *  never start. */
+export function useOmosAppearanceSync(): void {
   useEffect(() => {
     void fetchOmosAppearance();
     const iv = window.setInterval(() => void fetchOmosAppearance(), 45_000);
     const onFocus = () => void fetchOmosAppearance();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void fetchOmosAppearance();
+    };
     window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       window.clearInterval(iv);
       window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
 }

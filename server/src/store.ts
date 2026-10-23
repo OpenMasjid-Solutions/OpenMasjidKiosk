@@ -39,6 +39,8 @@ import {
   type WhatsAppPacing,
 } from './alerts';
 import type { Cred } from './auth';
+import { isValidTimeZone, localeForCountry, startOfDay, startOfMonth, type ClockSettings } from './dates';
+import { currencyDecimals } from './stripe';
 
 const log = makeLog('store');
 
@@ -97,6 +99,25 @@ export interface MasjidInfo {
   email: string;
   phone: string;
   website: string;
+  /**
+   * The masjid's clock — what every date a person reads is formatted in: the panel, receipts, the CSV,
+   * WhatsApp replies, and "today's takings" (app UI spec §10: the masjid's time zone and 12/24-hour
+   * choice, never the device's, and never the container's, which is UTC). The platform holds no
+   * masjid profile, so the admin sets these here (Settings → Masjid details). An IANA zone, or ''
+   * until it is first set — the panel fills it from the admin's own computer on first sign-in, where
+   * it stays visible and changeable.
+   */
+  timeZone: string;
+  clock24h: boolean;
+  /** Days to nudge the Hijri date by (−3..3), for a masjid that follows a local moon sighting.
+   *  The same setting, and range, as OpenMasjidDisplay's. */
+  hijriOffset: number;
+}
+
+/** A Hijri adjustment kept to the range a sighting can actually differ by. */
+export function clampHijriOffset(v: unknown): number {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.max(-3, Math.min(3, n)) : 0;
 }
 
 /** The giving screen the kiosk shows (designed in the admin panel; the designer UI is a later
@@ -132,8 +153,18 @@ export interface GivingConfig {
   celebrateThresholdMinor: number;
 }
 
+/**
+ * The starting giving settings. The amounts are WRITTEN IN A 2-DECIMAL CURRENCY'S MINOR UNITS and are
+ * never read raw.
+ *
+ * Every amount here is scaled to the masjid's own currency before anything sees it (see
+ * [Store.givingDefaults] and [rescaleMinor]). Read as-is they only mean what they say for dollars,
+ * pounds or euros: in yen `500` is ¥500 rather than ¥5, and in Kuwaiti dinar it is 0.500 KWD rather
+ * than 5 — so a masjid in Tokyo or Kuwait City used to start with tiles a hundredth or a tenth of
+ * what anyone intended, and nothing on screen said the numbers had been chosen for somebody else.
+ */
 const GIVING_DEFAULTS: GivingConfig = {
-  // 5 / 10 / 20 / 50 / 100 / 250 for a 2-decimal currency (sensible starting points; editable).
+  // 5 / 10 / 20 / 50 / 100 / 250 in major units (sensible starting points; editable).
   presetsMinor: [500, 1000, 2000, 5000, 10000, 25000],
   allowCustom: true,
   customMinMinor: 100,
@@ -153,11 +184,30 @@ const GIVING_DEFAULTS: GivingConfig = {
   celebrateThresholdMinor: 0,
 };
 
+/** How many decimals GIVING_DEFAULTS (and FEE_FIXED_MINOR) are written in. */
+const DEFAULTS_DECIMALS = 2;
+
+/**
+ * Move an amount in minor units by `delta` decimal places (new currency's decimals − old's).
+ *
+ * Rounds when scaling down, and never lets a nonzero amount become 0: a preset of 0.500 KWD moved to
+ * yen is ¥1, not a free tile, and a threshold that was ON must not quietly switch itself OFF (0 means
+ * "off" for both thresholds). 0 stays 0 for the same reason.
+ */
+export function rescaleMinor(minor: number, delta: number): number {
+  const n = Math.round(Number(minor) || 0);
+  if (n === 0 || delta === 0) return n;
+  // Divide rather than multiply by a fraction: 10 ** -2 is 0.01, which is not exactly representable,
+  // and "1234 × 0.001" is a worse place to start rounding from than "1234 ÷ 1000".
+  const out = delta > 0 ? n * 10 ** delta : Math.round(n / 10 ** -delta);
+  return n > 0 ? Math.max(1, out) : out;
+}
+
 /** A giving campaign (an "appeal") the kiosk shows as a tab — its own amounts, color,
  *  background, thank-you, monthly/cover-fees options and (optionally) its own Stripe account.
  *  Exactly one campaign is the **main** one (the always-present first tab). Amounts are integer
  *  MINOR units. Colors are '#rrggbb' or '' (inherit the default). Images are URLs (an uploaded
- *  '/uploads/…' path, or an external https URL) or '' (use the default look / masjid logo). */
+ *  '/uploads/…' path, or an external https URL) or '' (the default look; a blank logo shows none). */
 /** Every campaign has a type, which drives the card-fee rule (see deriveFees): a **Donation** lets the
  *  admin offer fee-covering; **Zakat** always enforces it (so the full Zakat reaches the masjid);
  *  **Tuition** lets the admin choose whether to require it. (Mirrors OpenMasjidDonations.) */
@@ -179,7 +229,9 @@ export interface Campaign {
   backgroundImage: string;
   /** Optional banner image shown on the giving card, or ''. */
   coverImage: string;
-  /** Per-campaign logo URL shown at the top, or '' to use the masjid logo/emblem. */
+  /** Per-campaign logo URL shown at the top, or '' to show no logo — the campaign title leads.
+   *  (This used to promise a fallback to the masjid's logo. Nothing ever implemented one: the tablet
+   *  draws a logo only when this is set, and the kiosk config carries no masjid logo to fall back to.) */
   logo: string;
   presetsMinor: number[];
   allowCustom: boolean;
@@ -211,7 +263,9 @@ export interface Campaign {
   createdAt: string;
 }
 
-/** Defaults for a freshly-created campaign (seeded from the global giving defaults). */
+/** Defaults for a freshly-created campaign (seeded from the global giving defaults). Its amounts are
+ *  in the same 2-decimal scale as GIVING_DEFAULTS and are scaled the same way before use
+ *  ([Store.campaignDefaults]). */
 const CAMPAIGN_DEFAULTS: Omit<Campaign, 'id' | 'title' | 'sortOrder' | 'createdAt' | 'isMain'> = {
   type: 'donation',
   description: '',
@@ -238,12 +292,35 @@ const CAMPAIGN_DEFAULTS: Omit<Campaign, 'id' | 'title' | 'sortOrder' | 'createdA
 // online-card estimate: 2.9% + a small fixed fee, grossed up so the masjid nets roughly the base
 // amount. The donor sees the computed total before paying; the server re-computes it authoritatively.
 export const FEE_BPS = 290; // 2.9%
-export const FEE_FIXED_MINOR = 30; // 30 minor units (≈ 30¢ / 30p)
+/**
+ * The fixed part of the estimate — 30¢ / 30p — written in a 2-DECIMAL currency's minor units.
+ *
+ * Only correct as-is for such a currency: the old comment said "≈ 30¢ / 30p" for every currency, but
+ * 30 minor units is ¥30 and 0.030 KWD. [feeFixedMinorFor] scales it to the currency actually being
+ * charged, which is what the tablet is told (getKioskConfig) and what the server must charge with.
+ */
+export const FEE_FIXED_MINOR = 30;
 
-/** Gross up a base amount so that, after the estimated card fee, the masjid nets ≈ the base. */
-export function grossUpForFees(baseMinor: number): number {
+/** The fixed fee in `currency`'s own minor units: 30 for USD/GBP/EUR (unchanged, to the byte), 0 for
+ *  yen (30 × 10⁻² rounds to nothing), 300 — 0.300 — for a three-decimal dinar. */
+export function feeFixedMinorFor(currency: string): number {
+  const d = currencyDecimals(currency || 'USD');
+  return d === DEFAULTS_DECIMALS ? FEE_FIXED_MINOR : Math.round(FEE_FIXED_MINOR * 10 ** (d - DEFAULTS_DECIMALS));
+}
+
+/**
+ * Gross up a base amount so that, after the estimated card fee, the masjid nets ≈ the base.
+ *
+ * `currency` is REQUIRED, not optional: the fixed part of the fee is scaled to it, and it is what makes
+ * the server charge the same total the tablet displayed (the tablet computes it from getKioskConfig's
+ * `feeFixedMinor`, which is scaled the same way). It was briefly optional, and the one call site that
+ * charges a donor left it off — a yen or dinar masjid's donor would have been charged a different total
+ * from the one on the screen. Required, the compiler refuses that.
+ */
+export function grossUpForFees(baseMinor: number, currency: string): number {
   if (!Number.isInteger(baseMinor) || baseMinor <= 0) return baseMinor;
-  const total = Math.ceil((baseMinor + FEE_FIXED_MINOR) / (1 - FEE_BPS / 10000));
+  const fixed = feeFixedMinorFor(currency);
+  const total = Math.ceil((baseMinor + fixed) / (1 - FEE_BPS / 10000));
   return Math.max(baseMinor, total);
 }
 
@@ -812,6 +889,80 @@ export class Store {
   }
 
   /**
+   * Keep every saved amount meaning the same thing when the currency's SCALE changes.
+   *
+   * Amounts are stored in minor units, and a minor unit is a different size in different currencies:
+   * 500 is $5.00, but it is ¥500 and 0.500 KWD. So switching a masjid from USD to KWD used to turn its
+   * $5…$250 tiles into 0.5…25 KWD without a word, and to JPY into ¥5…¥250 — a donor-facing change
+   * of 10× or 100× that nobody asked for and nothing announced. Rescaling by 10^(new − old) keeps
+   * "5" meaning five of whatever the masjid now takes; it deliberately does NOT convert the VALUE
+   * (5 dollars is not 5 dinar), which is the admin's call — so the caller reports that a rescale
+   * happened, and the panel can ask them to look the amounts over.
+   *
+   * Every campaign's presets and custom bounds, and the global giving settings' presets, bounds and
+   * two thresholds. Only fields actually SAVED in the giving settings are touched: an unsaved field
+   * is derived from the defaults in the current currency's scale on every read, so rescaling it too
+   * would scale it twice.
+   *
+   * Independent of the order it is called in relative to setCurrency: it works only from the two codes
+   * it is given and the amounts already saved, never from the stored currency. Returns true if
+   * anything changed (and bumps the config version so the tablets refetch); false when the two
+   * currencies share a scale, e.g. USD → GBP.
+   */
+  rescaleAmountsForCurrency(oldCurrency: string, newCurrency: string): boolean {
+    const delta = currencyDecimals(newCurrency || 'USD') - currencyDecimals(oldCurrency || 'USD');
+    if (delta === 0) return false;
+    const scale = (n: number) => rescaleMinor(n, delta);
+    // Scaling down can merge two tiles (0.500 and 1.000 KWD both become ¥1) — keep one of each.
+    const scaleList = (list: unknown): number[] =>
+      Array.from(new Set((Array.isArray(list) ? list : []).map((n) => scale(Number(n))).filter((n) => Number.isFinite(n) && n > 0)));
+    let changed = false;
+    const tx = this.db.transaction(() => {
+      for (const c of this.listCampaigns()) {
+        const next: Campaign = {
+          ...c,
+          presetsMinor: scaleList(c.presetsMinor),
+          customMinMinor: scale(c.customMinMinor),
+          customMaxMinor: scale(c.customMaxMinor),
+        };
+        if (
+          next.customMinMinor !== c.customMinMinor ||
+          next.customMaxMinor !== c.customMaxMinor ||
+          next.presetsMinor.join(',') !== c.presetsMinor.join(',')
+        ) {
+          this.writeCampaign(this.sanitizeCampaign(next));
+          changed = true;
+        }
+      }
+      const raw = this.getRaw('giving');
+      if (raw) {
+        let saved: Record<string, unknown> | null = null;
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) saved = parsed as Record<string, unknown>;
+        } catch {
+          saved = null; // unreadable → getGiving already reads it as the defaults, which follow the currency
+        }
+        if (saved) {
+          const before = JSON.stringify(saved);
+          if (Array.isArray(saved.presetsMinor)) saved.presetsMinor = scaleList(saved.presetsMinor);
+          for (const k of ['customMinMinor', 'customMaxMinor', 'largeAmountThresholdMinor', 'celebrateThresholdMinor'] as const) {
+            if (typeof saved[k] === 'number') saved[k] = scale(saved[k] as number);
+          }
+          const after = JSON.stringify(saved);
+          if (after !== before) {
+            this.setRaw('giving', after);
+            changed = true;
+          }
+        }
+      }
+    });
+    tx();
+    if (changed) this.bumpConfigVersion();
+    return changed;
+  }
+
+  /**
    * The chosen Terminal Location, PER STRIPE ACCOUNT.
    *
    * A Location belongs to one Stripe account, and a reader is registered to a Location — which is why
@@ -873,10 +1024,25 @@ export class Store {
       email: s.email ?? '',
       phone: s.phone ?? '',
       website: s.website ?? '',
+      // A stored zone this runtime no longer knows reads as unset rather than throwing at every format.
+      timeZone: typeof s.timeZone === 'string' && isValidTimeZone(s.timeZone) ? s.timeZone : '',
+      clock24h: s.clock24h === true,
+      hijriOffset: clampHijriOffset(s.hijriOffset ?? 0),
     };
   }
-  setMasjid(patch: { name?: string; address?: Partial<MasjidAddress>; logo?: string; email?: string; phone?: string; website?: string }): MasjidInfo {
+  setMasjid(patch: {
+    name?: string;
+    address?: Partial<MasjidAddress>;
+    logo?: string;
+    email?: string;
+    phone?: string;
+    website?: string;
+    timeZone?: string;
+    clock24h?: boolean;
+    hijriOffset?: number;
+  }): MasjidInfo {
     const cur = this.getMasjid();
+    const nextZone = patch.timeZone === undefined ? cur.timeZone : patch.timeZone === '' || isValidTimeZone(patch.timeZone) ? patch.timeZone : cur.timeZone;
     const merged: MasjidInfo = {
       name: patch.name ?? cur.name,
       address: { ...cur.address, ...clean(patch.address ?? {}) },
@@ -884,9 +1050,28 @@ export class Store {
       email: (patch.email ?? cur.email).slice(0, 200),
       phone: (patch.phone ?? cur.phone).slice(0, 60),
       website: (patch.website ?? cur.website).slice(0, 200),
+      timeZone: nextZone,
+      clock24h: patch.clock24h ?? cur.clock24h,
+      hijriOffset: patch.hijriOffset === undefined ? cur.hijriOffset : clampHijriOffset(patch.hijriOffset),
     };
     this.setRaw('masjid', JSON.stringify(merged));
+    // Tablets refetch their config only when its version moves, and two of these fields are in it: the
+    // NAME (the keyed-entry page's "<masjid> · Secured by Stripe", the fallback campaign title) and the
+    // COUNTRY, which picks the locale amounts are written in. The clock settings are not — a tablet
+    // shows no dates of its own (a Students due date arrives already formatted, from these settings) —
+    // so changing them has nothing to push.
+    if (merged.name !== cur.name || merged.address.country !== cur.address.country) {
+      this.bumpConfigVersion();
+    }
     return merged;
+  }
+
+  /** The masjid's clock as the date formatters want it (dates.ts). The locale is English in the
+   *  masjid's own region — "30 Sept 2026" for a UK masjid, "Sep 30, 2026" for a US one — because the
+   *  copy is English and only the conventions should follow the country. */
+  getClock(): ClockSettings {
+    const m = this.getMasjid();
+    return { timeZone: m.timeZone, clock24h: m.clock24h, hijriOffset: m.hijriOffset, locale: localeForCountry(m.address.country) };
   }
 
   // ── Where each admin alert goes (see alerts.ts) ─────────────────────────────
@@ -1256,8 +1441,29 @@ export class Store {
   }
 
   // ── Giving config (the amounts/messages the kiosk shows; designer UI is a later slice) ──
+  /** GIVING_DEFAULTS in the CURRENT currency's scale — the only form in which anything reads them. For
+   *  a 2-decimal currency this is GIVING_DEFAULTS exactly. */
+  private givingDefaults(): GivingConfig {
+    const delta = currencyDecimals(this.getCurrency()) - DEFAULTS_DECIMALS;
+    if (delta === 0) return GIVING_DEFAULTS;
+    return {
+      ...GIVING_DEFAULTS,
+      presetsMinor: GIVING_DEFAULTS.presetsMinor.map((n) => rescaleMinor(n, delta)),
+      customMinMinor: rescaleMinor(GIVING_DEFAULTS.customMinMinor, delta),
+      customMaxMinor: rescaleMinor(GIVING_DEFAULTS.customMaxMinor, delta),
+      largeAmountThresholdMinor: rescaleMinor(GIVING_DEFAULTS.largeAmountThresholdMinor, delta),
+      celebrateThresholdMinor: rescaleMinor(GIVING_DEFAULTS.celebrateThresholdMinor, delta),
+    };
+  }
+
+  /** CAMPAIGN_DEFAULTS in the current currency's scale, for the same reason. */
+  private campaignDefaults(): typeof CAMPAIGN_DEFAULTS {
+    const g = this.givingDefaults();
+    return { ...CAMPAIGN_DEFAULTS, presetsMinor: [...g.presetsMinor], customMinMinor: g.customMinMinor, customMaxMinor: g.customMaxMinor };
+  }
+
   getGiving(): GivingConfig {
-    return this.getJson<GivingConfig>('giving', GIVING_DEFAULTS);
+    return this.getJson<GivingConfig>('giving', this.givingDefaults());
   }
   setGiving(patch: Partial<GivingConfig>): GivingConfig {
     const cur = this.getGiving();
@@ -1267,8 +1473,8 @@ export class Store {
       .map((n) => Math.round(Number(n)))
       .filter((n) => Number.isFinite(n) && n > 0)
       .slice(0, 6);
-    merged.customMinMinor = Math.max(1, Math.round(Number(merged.customMinMinor) || GIVING_DEFAULTS.customMinMinor));
-    merged.customMaxMinor = Math.max(merged.customMinMinor, Math.round(Number(merged.customMaxMinor) || GIVING_DEFAULTS.customMaxMinor));
+    merged.customMinMinor = Math.max(1, Math.round(Number(merged.customMinMinor) || this.givingDefaults().customMinMinor));
+    merged.customMaxMinor = Math.max(merged.customMinMinor, Math.round(Number(merged.customMaxMinor) || this.givingDefaults().customMaxMinor));
     const pol = (v: unknown): 'off' | 'optional' | 'required' => (v === 'off' || v === 'required' ? v : 'optional');
     merged.namePolicy = pol(merged.namePolicy);
     merged.emailPolicy = pol(merged.emailPolicy);
@@ -1356,8 +1562,8 @@ export class Store {
       .map((n) => Math.round(Number(n)))
       .filter((n) => Number.isFinite(n) && n > 0)
       .slice(0, 6);
-    const min = Math.max(1, Math.round(Number(c.customMinMinor) || GIVING_DEFAULTS.customMinMinor));
-    const max = Math.max(min, Math.round(Number(c.customMaxMinor) || GIVING_DEFAULTS.customMaxMinor));
+    const min = Math.max(1, Math.round(Number(c.customMinMinor) || this.givingDefaults().customMinMinor));
+    const max = Math.max(min, Math.round(Number(c.customMaxMinor) || this.givingDefaults().customMaxMinor));
     // Device targeting: unique non-empty strings (which kiosks show this campaign; [] = all). Capped.
     const deviceIds = Array.from(new Set((Array.isArray(c.deviceIds) ? c.deviceIds : []).map((s) => String(s).trim()).filter((s) => s.length > 0 && s.length <= 60))).slice(0, 200);
     // The campaign TYPE is the single source of truth for the fee rule (so a hand-crafted API body
@@ -1481,7 +1687,7 @@ export class Store {
     }
     const g = this.getGiving();
     const seeded: Campaign = this.sanitizeCampaign({
-      ...CAMPAIGN_DEFAULTS,
+      ...this.campaignDefaults(),
       id: rid('cmp'),
       title: this.getMasjid().name || 'General Fund',
       presetsMinor: g.presetsMinor,
@@ -1502,7 +1708,7 @@ export class Store {
   createCampaign(input: Partial<Campaign>): Campaign {
     const maxSort = (this.db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM campaigns').get() as { m: number }).m;
     const c = this.sanitizeCampaign({
-      ...CAMPAIGN_DEFAULTS,
+      ...this.campaignDefaults(),
       ...clean(input as Record<string, unknown>),
       id: rid('cmp'),
       isMain: false, // only the seed/main-switch sets this
@@ -2013,8 +2219,16 @@ export class Store {
   /** Succeeded-donation totals over the WHOLE table (SQL aggregates — NOT the capped log, so they
    *  never undercount). Restricted to the CURRENT currency, because summing amounts across different
    *  currencies would be meaningless; donations in other currencies stay in the log/CSV with their
-   *  own currency but are excluded from these headline figures. All amounts are integer minor units. */
-  donationTotals(): {
+   *  own currency but are excluded from these headline figures. All amounts are integer minor units.
+   *
+   *  "Today" and "this month" are the MASJID'S today and month (its time zone, Settings → Masjid
+   *  details), not the container's. This used `setHours(0,0,0,0)` on the server clock, and a Docker
+   *  container runs in UTC — so for a masjid in Chicago "today's takings" rolled over at 7 pm, and a
+   *  Friday-evening fundraiser was reported on Saturday, in the panel and over WhatsApp alike. Until a
+   *  zone is chosen the runtime's own zone is used, which is exactly what this did before.
+   *
+   *  `now` exists for the tests; every caller passes nothing. */
+  donationTotals(now: Date = new Date()): {
     today: number;
     thisWeek: number;
     thisMonth: number;
@@ -2024,14 +2238,15 @@ export class Store {
     byDevice: { deviceId: string; deviceName: string; amountMinor: number; count: number }[];
   } {
     const currency = this.getCurrency();
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-    const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+    const clock = this.getClock();
+    const startOfToday = startOfDay(now, clock);
+    const monthStart = startOfMonth(now, clock);
+    // "This week" is the last seven days, rolling — a length of time, not a calendar boundary, so it
+    // needs no time zone.
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
     // created_at is a UTC ISO string; ISO sorts lexicographically = chronologically, so a `>=` string
-    // compare against a UTC-ISO cutoff gives correct local-day/week/month windows.
+    // compare against a UTC-ISO cutoff (an instant, already worked out in the masjid's zone) gives the
+    // right day/week/month windows.
     // NET OF REFUNDS. Every sum is `amount_minor - refunded_minor`, so a refunded gift stops counting
     // the moment it is given back. Showing gross here would have the Donations screen state a figure
     // the bank account cannot back — the number an admin repeats to a committee. The COUNT is left
@@ -2063,7 +2278,7 @@ export class Store {
     return {
       today: sumSince(startOfToday.toISOString()),
       thisWeek: sumSince(weekAgo.toISOString()),
-      thisMonth: sumSince(startOfMonth.toISOString()),
+      thisMonth: sumSince(monthStart.toISOString()),
       allTime: Number(all.s),
       count,
       average: count ? Math.round(Number(all.s) / count) : 0,
@@ -2072,7 +2287,7 @@ export class Store {
   }
 
   /** The versioned config a paired kiosk pulls: the PIN, currency, location, masjid name, the
-   *  global giving settings (manual-entry policy, name/email prompts, default thank-you, cover-fee
+   *  masjid's clock (zone, 12/24-hour, Hijri adjustment, locale), the global giving settings (manual-entry policy, name/email prompts, default thank-you, cover-fee
    *  estimate), and the ordered list of live CAMPAIGNS (main first) it shows as tabs. Each campaign
    *  carries `readerCapable` — whether the physical reader (locked to the primary account) can take
    *  it, or it must use keyed entry (a cross-account campaign). Pass the primary account id so this
@@ -2111,13 +2326,20 @@ export class Store {
         // ignore this and re-register instead (ReaderManager.registerFor).
         readerCapable: !c.stripeAccountId || c.stripeAccountId === primaryAccountId,
       }));
+    const currency = this.getCurrency();
+    const clock = this.getClock();
     return {
       version: this.getConfigVersion(),
       config: {
         pinHash: this.getPinHash(),
-        currency: this.getCurrency(),
+        currency,
         locationId: this.getLocation()?.id ?? '',
         masjidName: this.getMasjid().name,
+        // So the tablet writes an amount the way the panel and the receipts do (app UI spec §10):
+        // English in the masjid's own region ("en-GB"), never the tablet's system locale. The rest of
+        // the masjid's clock (zone, 12/24-hour, Hijri adjustment) is deliberately NOT sent: the tablet
+        // formats no dates itself, and a field nothing reads is a promise nobody keeps.
+        locale: clock.locale,
         // The UI rotation in degrees for THIS device (from the web UI); '0' = as mounted.
         orientation: (deviceId !== '' ? this.getDevice(deviceId)?.orientation : '') || '0',
         // Which side the reader sits on for THIS device, so the card step can point donors to it.
@@ -2134,9 +2356,11 @@ export class Store {
         largeAmountImage: g.largeAmountImage,
         celebrateEnabled: g.celebrateEnabled === true,
         celebrateThresholdMinor: g.celebrateThresholdMinor,
-        // Cover-fee estimate so the tablet can display the same total the server will charge.
+        // Cover-fee estimate so the tablet can display the same total the server will charge. The fixed
+        // part is in THIS currency's minor units (30 for USD, unchanged; 300 for KWD; 0 for JPY) —
+        // the tablet adds it to minor units as-is, so a 2-decimal figure here was ¥30 and 0.030 KWD.
         feeBps: FEE_BPS,
-        feeFixedMinor: FEE_FIXED_MINOR,
+        feeFixedMinor: feeFixedMinorFor(currency),
         mainCampaignId: main?.id ?? '',
         campaigns,
       },

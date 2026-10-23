@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -28,8 +29,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
 import org.openmasjidos.mobile.PairUi
 
@@ -56,6 +59,10 @@ fun PairScreen(
     var url by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
+
+    // An address and a pairing code read left to right in every language, so they stay that way on
+    // an Arabic or Urdu phone rather than taking the page's right-to-left direction.
+    val ltr = LocalTextStyle.current.merge(TextStyle(textDirection = TextDirection.Ltr))
 
     val codeOk = code.length == 6
     val urlOk = url.isNotBlank()
@@ -93,6 +100,7 @@ fun PairScreen(
             // Uri, not Text: gives the keyboard a "/" and ".com" without the app having to
             // sanitise autocapitalised input afterwards.
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+            textStyle = ltr,
             enabled = !ui.busy,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -100,12 +108,17 @@ fun PairScreen(
         OutlinedTextField(
             value = code,
             // Filtered to digits and capped at 6 as it is typed, so the field cannot hold something
-            // the server would only reject after a round trip.
-            onValueChange = { code = it.filter(Char::isDigit).take(6) },
+            // the server would only reject after a round trip. Digits from any script count and are
+            // written as 0–9: an Arabic keyboard's "١٢٣٤٥٦" is the same code, and the server only
+            // understands the ASCII form.
+            onValueChange = { raw ->
+                code = raw.filter(Char::isDigit).map { '0' + Character.digit(it, 10) }.joinToString("").take(6)
+            },
             label = { Text("6-digit code") },
             placeholder = { Text("000000") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Next),
+            textStyle = ltr,
             enabled = !ui.busy,
             modifier = Modifier.fillMaxWidth(),
         )

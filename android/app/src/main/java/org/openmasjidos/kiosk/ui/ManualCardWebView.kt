@@ -13,11 +13,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import org.openmasjidos.kiosk.ManualResult
+import org.openmasjidos.kiosk.ui.theme.CardEntryBackdrop
 
 /** The only hosts the card form's MAIN frame may sit on: our own locally-served page, and Stripe.
  *  Everything else — a link, a redirect, anything at all — is refused rather than followed. */
@@ -39,6 +41,10 @@ private fun isAllowedMainFrame(url: Uri): Boolean {
  * this works on a device-owner kiosk where Stripe's PaymentSheet (which opens a Chrome Custom Tab for
  * 3DS/Link) silently could not. The PAN is entered into Stripe's iframe + tokenised on-device; our
  * code never sees it, and the VM still verifies the PaymentIntent server-side before recording.
+ *
+ * [accentHex] and [onAccentHex] travel TOGETHER: the fill of the page's Pay button and the ink that
+ * reads on it, both "#rrggbb", both worked out by the caller with the giving screen's own rules. The
+ * page applies neither unless it gets both (spec §3: set the ink in the same breath as the fill).
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -46,6 +52,7 @@ fun ManualCardWebView(
     clientSecret: String,
     publishableKey: String,
     accentHex: String,
+    onAccentHex: String,
     payLabel: String,
     amountLabel: String,
     onResult: (ManualResult, String?) -> Unit,
@@ -61,9 +68,10 @@ fun ManualCardWebView(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
             WebView(ctx).apply {
-                // Opaque dark backdrop (matches kioskpay.html) so the giving screen never shows
-                // through and there's no white flash before the page paints.
-                setBackgroundColor(0xFF071726.toInt())
+                // Opaque dark backdrop (matches kioskpay.html's --color-backdrop; change the two
+                // together) so the giving screen never shows through and there's no white flash
+                // before the page paints.
+                setBackgroundColor(CardEntryBackdrop.toArgb())
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 webViewClient = object : WebViewClientCompat() {
@@ -107,6 +115,7 @@ fun ManualCardWebView(
                 val frag = "#cs=" + Uri.encode(clientSecret) +
                     "&pk=" + Uri.encode(publishableKey) +
                     "&ac=" + Uri.encode(accentHex) +
+                    "&on=" + Uri.encode(onAccentHex) +
                     "&pay=" + Uri.encode(payLabel) +
                     "&amt=" + Uri.encode(amountLabel)
                 loadUrl("https://appassets.androidplatform.net/assets/kioskpay.html$frag")

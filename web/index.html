@@ -1,30 +1,73 @@
 <!doctype html>
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!-- Copyright (C) 2026 OpenMasjid-Solutions -->
-<html lang="en" data-theme="dark" data-wallpaper="aurora">
+<html lang="en" dir="ltr" data-theme="dark" data-wallpaper="aurora">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#030D1A" />
     <title>OpenMasjid Kiosk</title>
-    <!-- The app's own logo — the same mark the App Store shows for this app (a copy of the
-         repo-root icon.svg, kept in web/public so the build serves it). Relative href on
-         purpose: the built page uses a relative asset base, so this resolves correctly
-         whether the panel is reached at the root or under a /<basePath> prefix. -->
-    <link rel="icon" type="image/svg+xml" href="./logo.svg" />
-    <link rel="apple-touch-icon" href="./logo.svg" />
+    <!-- The app's own mark (the same art the App Store shows), as small PNGs rather than the 140 KB
+         PNG-in-SVG it used to be — that one file outweighed the whole compressed script bundle. Relative
+         hrefs on purpose: the built page uses a relative asset base, so these resolve whether the panel
+         is reached at the root or under a /<basePath> prefix. -->
+    <link rel="icon" type="image/png" href="./logo-96.png" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <script>
-      // Apply the persisted theme + wallpaper before first paint to avoid a flash of the
-      // wrong look. The full prefs module (with OpenMasjidOS appearance inheritance)
-      // hydrates immediately after.
-      try {
-        var p = JSON.parse(localStorage.getItem('omkiosk-prefs') || '{}');
-        var t = p.theme === 'light' || p.theme === 'dark'
-          ? p.theme
+      // BEFORE FIRST PAINT: the masjid's theme, wallpaper, accent and writing direction.
+      //
+      // The dashboard hands its look over in the `#omos=` fragment when it opens us (app UI spec §1a),
+      // and the full prefs module only runs once the deferred bundle has downloaded — by which time the
+      // page has already painted from whatever this browser saw last. So the fragment is read here
+      // first, falling back to what was saved, and applied to <html> before anything is drawn. The
+      // fragment is only READ here: prefs.ts reads it again, saves it and takes it out of the address.
+      //
+      // Everything is checked against a fixed list — the fragment is a link anyone can craft. The three
+      // tables are written in at build time from the same modules the app uses (vite.config.ts).
+      (function () {
+        var d = document.documentElement;
+        var saved = {};
+        try { saved = JSON.parse(localStorage.getItem('omkiosk-prefs') || '{}') || {}; } catch (e) {}
+        var o = null;
+        try {
+          var m = /[#&]omos=([A-Za-z0-9_-]+)/.exec(location.hash);
+          if (m) {
+            var b = m[1].replace(/-/g, '+').replace(/_/g, '/');
+            while (b.length % 4) b += '=';
+            var bin = atob(b), bytes = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            o = JSON.parse(new TextDecoder().decode(bytes));
+            if (!o || typeof o !== 'object') o = null;
+          }
+        } catch (e) { o = null; }
+        var pick = function (k) { return o && o[k] != null ? o[k] : saved[k]; };
+        var own = function (obj, k) { return typeof k === 'string' && Object.prototype.hasOwnProperty.call(obj, k); };
+
+        var theme = pick('theme');
+        var t = theme === 'light' || theme === 'dark'
+          ? theme
           : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-        document.documentElement.setAttribute('data-theme', t);
-        if (p.wallpaper) document.documentElement.setAttribute('data-wallpaper', p.wallpaper);
-      } catch (e) {}
+        d.setAttribute('data-theme', t);
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', t === 'light' ? '#F0F9FF' : '#030D1A');
+
+        var WALLPAPERS = /*__WALLPAPER_IDS__*/[];
+        var w = pick('wallpaper');
+        if (WALLPAPERS.indexOf(w) >= 0) d.setAttribute('data-wallpaper', w);
+
+        // The accent's fill AND its ink, together — never one without the other (accents.ts).
+        var ACCENTS = /*__ACCENT_VARS__*/{};
+        var a = pick('accent');
+        if (own(ACCENTS, a)) {
+          var vars = ACCENTS[a][t];
+          for (var k in vars) if (own(vars, k)) d.style.setProperty(k, vars[k]);
+        }
+
+        var RTL = /*__RTL_LANGS__*/[];
+        var forced = new URLSearchParams(location.search).get('dir');
+        var base = String(pick('lang') || '').toLowerCase().split(/[-_]/)[0];
+        d.setAttribute('dir', forced === 'rtl' || forced === 'ltr' ? forced : (RTL.indexOf(base) >= 0 ? 'rtl' : 'ltr'));
+      })();
     </script>
   </head>
   <body>
