@@ -4,121 +4,56 @@
 # Changelog
 
 ## Unreleased
-_Development builds after 0.13.0. This section is on the `dev` branch only and carries the full
-detail of every change — it is distilled into a major-changes-only entry when 0.14.0 is released._
+_Development builds after 0.14.0. This section is on the `dev` branch only and carries the full
+detail of every change — it is distilled into a major-changes-only entry when 0.15.0 is released._
 
-- **The admin panel now looks and behaves like part of your OpenMasjidOS dashboard** — built to the
-  platform's app UI spec. Opened from the dashboard it takes the masjid's theme, wallpaper, color
-  and writing direction *before the first frame*, so there is no flash of the wrong look.
-  - **Every one of the five dashboard colors now reads properly, in light and dark.** Buttons in
-    teal, sky, violet and gold used to have white writing on a bright fill — gold measured 1.7:1 —
-    and in light mode the links, focus ring and highlighted tab were the same bright color on a pale
-    page. Each color now carries its own ink, and light mode uses a deeper shade of it for text.
-  - **Delete, Remove, Refund and End-plan buttons** get ink chosen for red, rather than borrowing the
-    ordinary button's.
-  - **Status words in light mode** ("Saved", "Live", "Test mode", warnings, errors) were about 3:1 on
-    white; they are now a deeper shade of the same color that clears the accessibility bar
-    everywhere they appear. Every color pair is measured by the test suite.
-  - **The dashboard's typefaces**, Inter and Space Grotesk, are bundled with the app (no internet
-    needed), plus a proper Naskh face for any Arabic you type — a campaign name, a thank-you, a
-    donor's name — instead of whatever the computer falls back to.
-- **Every date now shows the Hijri date beside the Gregorian, in your masjid's time zone.** New
-  under Settings → Payments → Masjid details: the masjid's **time zone** (taken from your computer
-  the first time you sign in — change it if your masjid is elsewhere), a **12- or 24-hour clock**, and
-  a **Hijri adjustment** of up to three days either way for a masjid that follows a local sighting.
-  - **Fixed: every emailed receipt showed its date as a raw timestamp** —
-    `2026-09-30T18:03:11.123Z` — because the formatter could never have worked. Receipts, refund and
-    monthly emails now read "Sep 30, 2026, 1:03 PM · Rabiʻ II 19, 1448 AH".
-  - **Fixed: dates were in the server's time zone**, which in a container is UTC — so an evening gift
-    in America was dated the next day, and "Today" on the Donations screen ended at the wrong hour.
-  - The top-bar clock, the donations log, recurring plans, the WhatsApp `recent` reply, the donor's
-    cancel page and the Students due date on the tablet all follow the same settings.
-  - The donations CSV keeps its UTC timestamp for spreadsheets and adds **Date (masjid time)** and
-    **Hijri date** columns; it now opens correctly in Excel with Arabic or accented names, and its
-    Status column is in plain words.
-- **Money is written the way your currency writes it** — "$1,234,500", "₹1,00,000", "KWD 2.500" —
-  on the panel, in emails and on the tablets. Fixed: a Rs 25.50 gift appeared as "PKR 26" in emails,
-  and a donation in an old currency was shown in the current one.
-  - Changing to a currency with a different number of decimals (dollars to dinars or yen) now
-    converts your suggested amounts so they still mean the same, and says so.
-  - Fixed, before it could ship: the cover-the-fee total for a yen or dinar masjid would have
-    differed between what the tablet showed and what was charged.
-- **Right-to-left.** When your dashboard is in Arabic or Urdu, the panel mirrors with it. The words
-  are still English for now, and each sentence keeps its full stop in the right place; phone numbers,
-  codes and addresses always read left to right. On the tablets, the keyboard, number pads and the
-  "hold your card here" hint stay the right way round on an Arabic- or Urdu-language tablet.
-- **Keyboard and screen readers.** Every window now keeps focus inside it, closes on Escape and hands
-  focus back to what opened it. Tabs, toggles and menus announce their state; a kiosk going offline
-  or a new donation is announced; buttons stay focused while they work.
-- **Plainer words everywhere.** No more "Failed to fetch", Stripe codes like
-  `requires_payment_method`, or "embedded / standalone"; a WhatsApp message that was only queued is no
-  longer called "sent"; a failed refund says clearly that no money moved, with Stripe's own message
-  under *Technical details*. **Settings → Email receipts** can now email you a sample of the real
-  branded receipt.
-- **Lighter and faster, especially on a Raspberry Pi.** Cards are solid rather than frosted, with the
-  glass kept to the dock and menus; the background no longer animates forever; the public setup page
-  and the sign-in screen no longer download the whole panel; and the app's files are sent compressed
-  and cached.
-- **The app icon no longer shows a hand** (the spec keeps default artwork to geometric and
-  architectural shapes). On the tablets, a failed card-reader connection now says what to do rather
-  than showing the reader's own error text, and the "hold your card here" hint is visible on the
-  default colors.
-- **Fixed: renaming the masjid in Settings → Masjid details didn't reach the tablets** until some
-  other setting changed — the card-entry page kept the old name. It now updates on the next check-in.
-- **Security fixes from a full repository audit.**
-  - **A typed card is now only authorised on the tablet and captured by the server**, as a reader
-    payment always was. Before, a dropped connection at the wrong second could leave Stripe holding
-    a typed donation this app had no record of. Now nothing is taken until the server has checked it.
-  - **Another page on the same server can no longer act as you in the admin panel.** A site served
-    from another port of the masjid's server could send changes with your session, including
-    pressing Send test over and over. Changes must now come from the panel itself, and Send test
-    has a limit of its own.
-  - **A kiosk can only finish payments it started itself.** Before, any paired device could finish
-    another payment by its id.
-  - **Turning a tablet off and on no longer resets the exit-PIN lockout.**
-  - **The donations CSV is safe to open in Excel in every region.** Where Excel separates columns
-    with `;`, a donor's name containing `;=` could become a formula.
-  - **The tablet app's build tool is now checked against its published checksum** before it runs.
-- **Fixes from the same audit — money first.**
-  - **Ugandan shillings were charged at a hundredth.** Stripe takes UGX with two decimal places that
-    are always zero; this app sent it without them, so a USh 10,000 gift charged USh 100 while the
-    receipt and totals said 10,000. An existing Ugandan install's suggested amounts are converted
-    once, so each still means what it did.
+## 0.14.0
+**The admin panel now looks and works like part of your OpenMasjidOS dashboard, every date shows the
+Hijri date in your masjid's own time zone, and this release carries a long list of security and money
+fixes. Update your tablets after installing.**
+
+- **The admin panel matches your OpenMasjidOS dashboard.** Opened from the dashboard it takes your
+  theme, wallpaper, colour and writing direction from the first moment it appears. All five dashboard
+  colours now read clearly in light and dark mode, the dashboard's typefaces are built in — with a
+  proper Naskh face for Arabic — and when your dashboard is in Arabic or Urdu, the panel mirrors with
+  it. Every window works with a keyboard and a screen reader, and errors are plain sentences.
+  **Settings → Email receipts can now email you a sample** of the real branded receipt.
+
+- **Hijri and Gregorian dates, in your masjid's time zone.** New under Settings → Payments → Masjid
+  details: the masjid's time zone, a 12- or 24-hour clock, and a Hijri adjustment of up to three days
+  for a masjid that follows a local sighting.
+  - Fixed: every emailed receipt showed its date as a raw timestamp.
+  - Fixed: dates, and "Today" on the Donations screen, followed the server's UTC clock, so an evening
+    gift in America was dated the next day.
+
+- **Money is written the way your currency writes it** — on the panel, in emails and on the tablets —
+  and changing to a currency with a different number of decimals converts your suggested amounts.
+  - **Fixed: Ugandan shillings were charged at a hundredth** of the amount shown. Your suggested
+    amounts are converted once, so each still means what it did.
   - **Kuwaiti, Bahraini, Omani and Jordanian dinar amounts now end in 0**, which is all a card can be
-    charged in. Covering the card fee in those currencies — always on for Zakat — produced amounts
-    like 5.459 KWD that could be refused at the card; the total now rounds up to the next 0.010.
-  - **A refund typed as "12,50" refunded 1250.** Amount boxes now read a decimal comma as one, the way
-    most of the world writes money; "1,000" is still a thousand.
-  - **A tablet that loses its connection right after the card is read now keeps trying to finish the
-    payment** for a few seconds, instead of giving up and telling the donor they might be refunded. A
-    donor who presses Cancel while a typed card is processing no longer leaves a charge unfinished,
-    and the masjid hears about each donation once, however many tries it took.
-  - **A campaign on a second Stripe account switches the card reader over properly**, and a tuition
-    payment after one switches it back. When it can't, the donor types the card instead — never a
-    payment on the wrong account.
-  - **Fixed: a monthly plan whose details were edited in the Stripe dashboard couldn't be stopped** —
-    not from Recurring, and not from the donor's own cancel link, so the donor kept being charged.
-  - **The phone app no longer offers campaigns it can't take money for** (tuition, or an appeal on
-    another Stripe account).
-  - **The card reader's Location is the one you chose in Settings → Payments.** The first connection
-    used to quietly create a second Location in Stripe.
-- **Fixed for admins.**
-  - **A WhatsApp number typed the usual way — 07700 900123 with UK picked — was saved with its 0 kept**,
-    as a number that does not exist, so it never received anything. It is saved correctly now, and
-    numbers already saved that way are repaired on their own.
-  - **The "Send branded receipts" switch now saves when you flip it.** It only saved with the Save
-    receipt button further down, while the line under it already said receipts would be sent.
-  - **Unticking the last kiosk on a campaign no longer puts it on every kiosk.**
-  - **The WhatsApp limit boxes show what was actually saved** when the server adjusts a number.
-  - **The receipt preview no longer flips its amounts to the left** on an Arabic or Urdu dashboard.
-  - **Identify now always flashes the kiosk** — a background check-in could use it up first.
-  - **The "new" dot on What's new appears when a development build moves to its release.**
-  - **A server restored from a backup reaches its tablets again** — including a new exit PIN.
-  - **"Today" starts at the right time on the day the clocks go forward at midnight** (Chile, Cuba).
-  - **A donor's receipt can no longer be sent twice** after an email outage.
-- **Internal.** Removed code nothing used: a diagnostics route the panel stopped calling, the
-  never-shown attract-screen title, unused exports, styles and colours, and comments that described
-  the app as unfinished.
+    charged in. Covering the card fee in those currencies — always on for Zakat — could produce an
+    amount the card refused.
+  - **Fixed: a refund typed as "12,50" refunded 1250.** Amount boxes now read a decimal comma.
+
+- **Security fixes.** A typed card donation is now captured by the server only after it checks it, as
+  a reader payment always was, so a dropped connection can no longer leave a typed donation taken but
+  unrecorded. Another site on the same server can no longer make changes in the admin panel with your
+  session. A kiosk can only finish payments it started itself, turning a tablet off and on no longer
+  resets the exit-PIN lockout, and the donations CSV is safe to open in Excel in every region.
+
+- **Fixed: a WhatsApp number typed the usual way — 07700 900123 with UK picked — was saved with its 0
+  kept**, as a number that does not exist, so it never received anything. It is saved correctly now,
+  and numbers already saved that way are repaired on their own.
+
+- **Also fixed:** the "Send branded receipts" switch now saves when you flip it; unticking the last
+  kiosk on a campaign no longer shows it on every kiosk; a monthly plan edited in the Stripe dashboard
+  can be stopped again, including from the donor's own cancel link; renaming the masjid reaches the
+  tablets straight away; a tablet keeps trying to finish a payment for a few seconds after a dropped
+  connection instead of giving up; and a campaign on a second Stripe account switches the card reader
+  over properly.
+
+- **Update your tablets.** Their maintenance screen will offer the new version. Unlike 0.13.0, this
+  one changes the tablet app — payments, the card reader and the giving screen's colours.
 
 ## 0.13.0
 **A security update — please install it. Kiosk now runs on the patched Node.js that Stripe has been
