@@ -20,15 +20,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 
@@ -86,49 +89,55 @@ fun KioskKeyboard(
     val upper = capsLocked || shift || caps
     val consumeShift: () -> Unit = { if (shift) shift = false } // caps-lock stays on across letters
 
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (!symbols) {
-            // A persistent number row — COMPACT (about two-thirds height) so it reads as a number strip,
-            // not another row of letter keys. Digits are always one tap away (no layer switch).
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                "1234567890".forEach { c -> PlainKey(c.toString(), style, onKey, compact = true) }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                "qwertyuiop".forEach { c -> LetterKey(c, upper, style, onKey, consumeShift) }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Spacer(0.5f)
-                "asdfghjkl".forEach { c -> LetterKey(c, upper, style, onKey, consumeShift) }
-                Spacer(0.5f)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Key(if (capsLocked || caps) "⇪" else "⇧", style, weight = 1.5f, active = upper, onClick = onShift)
-                "zxcvbnm".forEach { c -> LetterKey(c, upper, style, onKey, consumeShift) }
-                Key("⌫", style, weight = 1.5f, onClick = onBackspace)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Key("123", style, weight = 1.5f, onClick = { symbols = true })
-                Key("@", style, preview = "@", onClick = { onKey("@") })
-                Key("space", style, weight = 4f, onClick = { onKey(" ") })
-                Key(".", style, preview = ".", onClick = { onKey(".") })
-                Key("Done", style, weight = 2f, accent = true, onClick = onDone)
-            }
-        } else {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                "1234567890".forEach { c -> PlainKey(c.toString(), style, onKey, compact = true) }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                "@.-_+/#%&".forEach { c -> PlainKey(c.toString(), style, onKey) }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Key("ABC", style, weight = 1.5f, onClick = { symbols = false })
-                ",?!':;".forEach { c -> PlainKey(c.toString(), style, onKey) }
-                Key("⌫", style, weight = 1.5f, onClick = onBackspace)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Key("ABC", style, weight = 1.5f, onClick = { symbols = false })
-                Key("space", style, weight = 5f, onClick = { onKey(" ") })
-                Key("Done", style, weight = 2f, accent = true, onClick = onDone)
+    // A Latin key layout is PHYSICAL, so it is laid out left to right whatever the tablet's language.
+    // The app declares supportsRtl, and on an Arabic- or Urdu-locale tablet every Row below mirrored:
+    // "p o i u y t r e w q", the number strip 0…1, shift and ⌫ swapped — on the keyboard donors type
+    // their name, email and Student ID on (spec §6). Scoped to the keyboard only, never the screen.
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!symbols) {
+                // A persistent number row — COMPACT (about two-thirds height) so it reads as a number strip,
+                // not another row of letter keys. Digits are always one tap away (no layer switch).
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    "1234567890".forEach { c -> PlainKey(c.toString(), style, onKey, compact = true) }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    "qwertyuiop".forEach { c -> LetterKey(c, upper, style, onKey, consumeShift) }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Spacer(0.5f)
+                    "asdfghjkl".forEach { c -> LetterKey(c, upper, style, onKey, consumeShift) }
+                    Spacer(0.5f)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Key(if (capsLocked || caps) "⇪" else "⇧", style, weight = 1.5f, active = upper, onClick = onShift)
+                    "zxcvbnm".forEach { c -> LetterKey(c, upper, style, onKey, consumeShift) }
+                    Key("⌫", style, weight = 1.5f, onClick = onBackspace)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Key("123", style, weight = 1.5f, onClick = { symbols = true })
+                    Key("@", style, preview = "@", onClick = { onKey("@") })
+                    Key("space", style, weight = 4f, onClick = { onKey(" ") })
+                    Key(".", style, preview = ".", onClick = { onKey(".") })
+                    Key("Done", style, weight = 2f, accent = true, onClick = onDone)
+                }
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    "1234567890".forEach { c -> PlainKey(c.toString(), style, onKey, compact = true) }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    "@.-_+/#%&".forEach { c -> PlainKey(c.toString(), style, onKey) }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Key("ABC", style, weight = 1.5f, onClick = { symbols = false })
+                    ",?!':;".forEach { c -> PlainKey(c.toString(), style, onKey) }
+                    Key("⌫", style, weight = 1.5f, onClick = onBackspace)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Key("ABC", style, weight = 1.5f, onClick = { symbols = false })
+                    Key("space", style, weight = 5f, onClick = { onKey(" ") })
+                    Key("Done", style, weight = 2f, accent = true, onClick = onDone)
+                }
             }
         }
     }

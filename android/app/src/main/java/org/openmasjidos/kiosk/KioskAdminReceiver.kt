@@ -7,11 +7,12 @@ import android.app.admin.DeviceAdminReceiver
 
 /**
  * Device admin receiver required for true kiosk (Lock Task Mode) once the tablet is
- * provisioned as device owner via a one-time ADB step (docs/TABLET_SETUP.md, later slice):
+ * provisioned as device owner via a one-time ADB step (docs/TABLET_SETUP.md):
  *
  *   adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver
  *
- * No admin policies are enforced yet — its presence (plus the res/xml/device_admin metadata)
- * is what device-owner provisioning needs.
+ * Deliberately empty — its presence (plus the res/xml/device_admin metadata) is what device-owner
+ * provisioning needs. The lockdown itself is applied by KioskController, through DevicePolicyManager
+ * with this receiver as the admin component.
  */
 class KioskAdminReceiver : DeviceAdminReceiver()

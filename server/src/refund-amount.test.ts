@@ -23,7 +23,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { decimals, factor, formatMoney, toMinor } from '../../web/src/money';
+import { decimals, factor, formatMoney, plainAmount, toMinor } from '../../web/src/money';
 
 const donationsTsx = readFileSync(new URL('../../web/src/donations.tsx', import.meta.url), 'utf8');
 
@@ -92,4 +92,24 @@ test('the refund box does not infer the currency scale from formatted text', () 
     /currency: string/,
     'the modal needs the ISO code, not only a formatter — that is the whole fix',
   );
+});
+
+test('a decimal comma is read as one — the way most of the world writes money', () => {
+  // Every comma used to be dropped, so "12,50" refunded 1250: a hundred times what was typed.
+  for (const [typed, plain] of [
+    ['12,50', '12.50'],
+    ['12,5', '12.5'],
+    ['1.234,50', '1234.50'],
+    ['1,234.50', '1234.50'],
+    ['1,000', '1000'], // a thousands comma, as English writes it
+    ['1,234,567', '1234567'],
+    ['1 234,50', '1234.50'],
+    ['12.5', '12.5'], // what toMajorStr writes into the boxes reads back unchanged
+  ] as const) {
+    assert.equal(plainAmount(typed), plain, typed);
+  }
+  assert.equal(toMinor('12,50', 'USD'), 1250);
+  assert.equal(toMinor('12,50', 'ZAR'), 1250);
+  assert.equal(toMinor('1.234,50', 'EUR'), 123450);
+  assert.equal(toMinor('2,500', 'KWD'), 2_500_000, 'three digits after a lone comma is a thousands comma');
 });

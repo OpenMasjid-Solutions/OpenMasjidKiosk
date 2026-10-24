@@ -87,7 +87,7 @@ If it prints anything else, `git checkout dev` first. If you are on `main`, you 
 
     **The dev channel needs none of this.** `dev_ref: dev` tracks our `dev` branch automatically and rebuilds hourly. Just keep the prerelease version and its version-tagged image current — and **publish the image before pushing the version bump**, because the dev tag is exact and an entry that lands first is a pull failure on someone's box.
 
-    **The trap that makes `ref:` and `commit:` drift apart here.** `build-image.yml` triggers on `v*` tags, so pushing the tag **rebuilds and republishes** `:X.Y.Z` — moving it off the digest the tagged commit pins. The image is not bit-reproducible, so the new digest genuinely differs. Re-pinning afterwards creates a commit *after* the tag, and that is the commit whose digest matches what `:X.Y.Z` now serves. At v0.10.2 and v0.11.0 both, the release therefore ended with `ref:` and `commit:` pointing at different commits. That is survivable — every digest published stays immutable and pullable, and the source trees are identical because `docker-compose.yml` is in the workflow's `paths-ignore` — but it is exactly the ambiguity step 1 exists to prevent, so **pin the commit whose digest `:X.Y.Z` actually resolves to**, and say plainly in the PR which commit that is and why it is not the tag.
+    **The trap that makes `ref:` and `commit:` drift apart here.** `build-image.yml` used to build on `v*` tags, so pushing the tag **rebuilt and republished** `:X.Y.Z` — moving it off the digest the tagged commit pins. (A tag push now verifies instead of building — rule 7d.) The image is not bit-reproducible, so the new digest genuinely differed. Re-pinning afterwards created a commit *after* the tag, and that was the commit whose digest matched what `:X.Y.Z` then served. At v0.10.2 and v0.11.0 both, the release therefore ended with `ref:` and `commit:` pointing at different commits. That is survivable — every digest published stays immutable and pullable, and the source trees are identical because `docker-compose.yml` is in the workflow's `paths-ignore` — but it is exactly the ambiguity step 1 exists to prevent, so **pin the commit whose digest `:X.Y.Z` actually resolves to**, and say plainly in the PR which commit that is and why it is not the tag.
 7d. **Verify the tag and the digest pin name the SAME build — before anything else.** A tag is a
     claim about which build a release is. Prove it:
 
@@ -229,7 +229,7 @@ This is an OpenMasjidOS app. The ecosystem lives in the **`OpenMasjid-Solutions`
   │                            #   STUDENTS_INTEGRATION, FABRIC_BILLING_CONTRACT, audit/
   ├── assets/                  # README artwork (not shipped in the image)
   ├── apk/                     # CI drops BOTH built APKs here for the Dockerfile to bundle
-  └── .github/workflows/       # build-image.yml (GHCR multi-arch) + build-apk.yml + cla.yml
+  └── .github/workflows/       # build-image.yml (GHCR multi-arch) + build-apk.yml + test.yml + cla.yml
   ```
   *(The building guide suggests repos named `openmasjid-<id>`; the shipped apps use the `OpenMasjidX` style. Keep `OpenMasjidKiosk` for consistency with Display/Donations — what must match is the **image name**: the compose references the lowercased repo, `ghcr.io/openmasjid-solutions/openmasjidkiosk`.)*
 - **App `id`: `kiosk`** — same everywhere (manifest + registry entry). Category: `donations`.
@@ -354,7 +354,7 @@ Follow BUILDING_AN_APP.md §7 exactly; Donations is the working example.
 - **Manifest flags:** `sso: true`, `stripe: true`, `https: true`, `notifications: true`.
 - **Compose must reference** `${OPENMASJID_BASE_URL:-}`, `${OPENMASJID_APP_ID:-}`, `${OPENMASJID_APP_SECRET:-}` in `environment:` — without these lines the injected values never reach the container and the Fabric silently no-ops (the documented Display trap).
 - **SSO:** on the request that loads the admin panel, forward the `omos_session` cookie (from the request only) server→server to `GET ${OPENMASJID_BASE_URL}/api/auth/session` with `X-OpenMasjid-App-Secret`. Identity assertion only; fail closed; cache ~45 s; mint our own session ≤ 1 h; **always** keep the local admin-password fallback so the panel works standalone and never bricks when the platform is unreachable (distinguish *SSO not configured* from *platform unreachable*).
-- **Stripe account (this is "the Fabric gets the Stripe acc from the OS"):** the admin adds named Stripe accounts once in **OS Settings → Payments**. Our Payments screen lists them via `GET /api/fabric/stripe/accounts` (no keys) and stores only the chosen **account id**. On process start (and on account change) fetch keys via `GET /api/fabric/stripe?account=<id>` with the app secret; hold `publishableKey`/`secretKey` **in memory only**. Show a **TEST MODE** badge for `sk_test_`/`pk_test_`. Keep manual key entry as the **standalone fallback** only (platform absent), clearly labeled.
+- **Stripe account (this is "the Fabric gets the Stripe acc from the OS"):** the admin adds named Stripe accounts once in **OS Settings → Payments**. Our Payments screen lists them via `GET /api/fabric/stripe/accounts` (no keys) and stores only the chosen **account id**. On process start (and on account change) fetch keys via `GET /api/fabric/stripe?account=<id>` with the app secret; hold `publishableKey`/`secretKey` **in memory only**. Show a **TEST MODE** badge for `sk_test_`/`pk_test_`. Keep manual key entry as the **standalone fallback** only (platform absent), clearly labeled. **That fallback key IS written to the data volume** (`store.setLocalStripe`) — the one exception to "never persisted", and it predates the Fabric rule. The panel says so plainly ("Saved on this server only") rather than claiming memory-only; whether the fallback should become memory-only (re-entered after every restart) is the maintainer's call, not a silent code change.
 - **Restore resilience (required):** read `OPENMASJID_*` from env on every start; never persist them or fetched keys or a "linked" flag; all Fabric calls time out (~4 s) and fail soft to standalone.
 - **Notifications:** after a successful donation, `POST /api/fabric/notify` (`"$20 donation received at the foyer kiosk"`, level `success`). Best-effort; never block or depend on it.
 
@@ -365,7 +365,7 @@ Follow BUILDING_AN_APP.md §7 exactly; Donations is the working example.
 - **`/new`** (public route on the app's port): a friendly one-page setup guide — big "Download the kiosk app" button serving the **APK bundled into the server image at build time** (so the app version always matches the server), sideload instructions ("allow installs from your browser"), and "then enter the **6-digit pairing code** from **Admin → Devices**."
 - **Pairing (6-digit code, no camera):** Admin → Devices → **Add kiosk** generates a **single-use 6-digit pairing code (TTL 10 min)** and shows it next to the server's **HTTPS address** (with a Copy button, and a warning if you are viewing the panel on localhost, which a tablet cannot reach). **No certificate fingerprint is shown** — this line used to promise one "for optional out-of-band verification", and nothing renders it because nothing *can*: `https: true` means the **platform** terminates TLS with its own certificate, so this container never sees the cert a tablet will be offered. Trust-on-first-use is therefore the whole of the pinning story, not a fallback beside a manual check, and §14 should be read that way. On the tablet the volunteer **types the server address and the 6-digit code**; the app calls `POST /api/kiosk/pair` over HTTPS and receives a long-lived **device token** (random 256-bit, hashed at rest server-side, shown never again). Because the fingerprint can't ride in a QR, the app **pins the certificate it sees on that first successful pair (trust-on-first-use)**. The code is single-use, short-lived and attempt-limited so a 6-digit space can't be brute-forced.
 - **Transport:** the tablet **only ever talks HTTPS** to the server, with the certificate **pinned on the first successful pair (trust-on-first-use)** (custom trust evaluation thereafter accepting exactly that cert/public key — correct for the platform's self-signed LAN certificate; never fall back to plain HTTP; re-pair if the fingerprint changes, with a clear admin-facing explanation). All kiosk API calls carry the device token; the server scopes every route to that device and rate-limits.
-- **Fleet management:** heartbeat every **10 s** (`KioskViewModel.HEARTBEAT_INTERVAL_MS`), with the server treating a kiosk as offline after **35 s** (`ONLINE_MS` in `index.ts`, which the WhatsApp `kiosks` command deliberately shares so the two never disagree). Carries `battery`, `charging`, `readerStatus`, `readerSerial`, `readerBattery`, `appVersion`, `configVersion` → Devices page shows live status, flags "not charging" (a wall kiosk should always be on power) and "offline". Actions: rename, **revoke** (kills the token; kiosk returns to pairing), show a fresh pairing code, *identify* (kiosk flashes), push config now. Structured device **logs** (payments, reader events, errors) viewable per device.
+- **Fleet management:** heartbeat every **10 s** (`KioskViewModel.HEARTBEAT_INTERVAL_MS`), with the server treating a kiosk as offline after **35 s** (`ONLINE_MS` in `index.ts`, which the WhatsApp `kiosks` command deliberately shares so the two never disagree). Carries `battery`, `charging`, `readerStatus`, `readerSerial`, `readerBattery`, `appVersion`, `configVersion` → Devices page shows live status — online/offline, the reader, the app version. (Battery and charging are still sent, but the page stopped showing them in v0.4.4: many tablets report "not charging" at 100% on power, so it was noise.) Actions: rename, **revoke** (kills the token; kiosk returns to pairing), show a fresh pairing code, *identify* (kiosk flashes), push config now. Structured device **logs** (payments, reader events, errors) viewable per device.
 - **Config:** one versioned JSON (amounts, currency symbol, monthly on/off, name/email prompt policy, thank-you message, wallpaper, accent, theme, **kiosk-PIN hash**). Kiosks fetch on heartbeat when the version bumps; applied live with a gentle transition.
 
 ---
@@ -378,7 +378,7 @@ Use the official **Stripe Terminal Android SDK** on the tablet and the **`stripe
 - **Location:** Terminal readers must connect with a `locationId`. On first Payments setup the server ensures a Terminal **Location** exists (named after the masjid, address entered by the admin — remember: the platform injects no profile) and hands its id to kiosks. Admin can pick an existing Location instead.
 - **One-time donation flow:**
   1. Kiosk → `POST /api/kiosk/payment-intents` `{amountMinor, campaignId?, monthly?, manual?, coverFees?, donorName?, donorEmail?, idempotencyKey?}` — the real `PaymentIntentBody` schema in `index.ts`. **There is no `oneTime` field** (this line used to claim one): one-time is simply `monthly` absent, and because zod strips unknown keys, a client written from the old sketch that sent `{oneTime: false}` got a one-time donation *silently* — the donor charged once, no Subscription, and no error to notice. The server validates the amount against **that campaign's** presets/custom bounds (`isAllowedAmountForCampaign` — never trust client amounts, integer minor units only), computes cover-fees itself, and refuses a `tuition` campaign outright so a crafted tablet can't mint a tuition charge as a plain donation.
-  2. Server creates the PaymentIntent on the **campaign's** Stripe account (its own, or the primary) with `payment_method_types: ['card_present']` and `capture_method: 'manual'`, and returns the client secret. **Keyed entry is a second path** — `manual: true` → `createCardPaymentIntent`, `payment_method_types: ['card']`, the card typed into Stripe.js inside `ManualCardWebView` (`assets/kioskpay.html`), never a browser, because a device-owner Lock Task kiosk allow-lists only our package. The tablet falls back to it automatically when no reader is connected.
+  2. Server creates the PaymentIntent on the **campaign's** Stripe account (its own, or the primary) with `payment_method_types: ['card_present']` and `capture_method: 'manual'`, and returns the client secret. **Keyed entry is a second path** — `manual: true` → `createCardPaymentIntent`, `payment_method_types: ['card']`, also `capture_method: 'manual'` (so the server captures it in `/complete` exactly as it does a reader payment, and a lost `/complete` leaves only an authorisation Stripe releases), the card typed into Stripe.js inside `ManualCardWebView` (`assets/kioskpay.html`), never a browser, because a device-owner Lock Task kiosk allow-lists only our package. The tablet falls back to it automatically when no reader is connected.
   3. App: `retrievePaymentIntent` → `collectPaymentMethod` (reader prompts tap/insert/swipe) → `confirmPaymentIntent`.
   4. App → `POST /api/kiosk/payment-intents/:id/complete`; **server retrieves the PI from Stripe**, captures it if `requires_capture`, verifies `succeeded`, records the donation, fires the notification, and returns the outcome the kiosk displays. Failures/cancellations are recorded as such and shown kindly ("Card didn't read — let's try again").
 - **Monthly donations:** require **name + email** (enforced app **and** server). Flow: take the first payment on the reader as above; from the succeeded charge read `payment_method_details.card_present.generated_card` (the reusable card PaymentMethod Stripe derives from a card-present payment); create a **Customer** (name/email), attach it, and create a **Subscription** (monthly `price_data` for the chosen amount, e.g. product "Monthly donation — <Masjid>"). If `generated_card` is absent (some cards/networks can't be reused), the first donation still stands — tell the donor warmly that monthly couldn't be set up with this card and record the attempt. Ongoing renewals are charged by Stripe automatically; we do **not** track renewal events in v1 (no webhooks, LAN-only) — the admin sees subscriptions in Stripe.
@@ -407,7 +407,7 @@ GiveALittle-grade simplicity — a passer-by donates in under 10 seconds without
 - **Launcher:** the app declares `CATEGORY_HOME` + `CATEGORY_DEFAULT`, so the tablet boots straight into it and Home goes nowhere else.
 - **Lock Task Mode:** when the app is **device owner**, use `startLockTask()` for true kiosk (no status bar pulldown, no recents/home escape). Document the one-time provisioning in `docs/TABLET_SETUP.md`: factory-reset tablet, skip accounts, `adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver`. **Fallback** without device owner: **not** screen pinning — that was tried and removed in 0.11.0, because Android forbids a pinned app from launching any other app and says nothing when it refuses, which silently broke Android Settings, the permission prompts and the self-updater. The soft kiosk is: being the HOME launcher, immersive-sticky bars, a bounce-back watchdog, a dead Back button, and an optional accessibility helper that closes the notification shade. Be honest in docs about its limits.
 - **Stay awake:** keep-screen-on flag while in kiosk; recommend "always plugged in" mounts; report charging state so the admin sees a fallen cable.
-- **Unlock:** hidden gesture — **10 taps on the screen background** (`SECRET_TAPS`; unconsumed taps anywhere, *not* a corner: on a multi-appeal kiosk the corner is a campaign tab) → PIN pad → verifies against the **PIN set in Admin → Devices** (synced as a **scrypt** hash in config so unlock works offline; rate-limited with backoff; server-side verify when online). Unlock opens the maintenance screen: reader setup (BT/USB discovery, connect, update, battery), server address/re-pair, diagnostics, app version, **Exit kiosk** and **Return to kiosk**.
+- **Unlock:** hidden gesture — **10 taps on the screen background** (`SECRET_TAPS`; unconsumed taps anywhere, *not* a corner: on a multi-appeal kiosk the corner is a campaign tab) → PIN pad → verifies against the **PIN set in Admin → Devices** (synced as a **scrypt** hash in config so unlock works offline; rate-limited with a backoff that is persisted, so a forced reboot does not hand out fresh tries; verified on the tablet only — there is no server-side PIN check). Unlock opens the maintenance screen: reader setup (BT/USB discovery, connect, update, battery), server address/re-pair, diagnostics, app version, **Exit kiosk** and **Return to kiosk**.
 - **Boot & recovery:** BOOT_COMPLETED brings the app up even if not device owner; the app self-heals into the attract screen after crashes (foreground watchdog) and reconnects the reader automatically.
 - **Permissions:** request-and-explain only what Terminal needs — Bluetooth scan/connect (API 31+) or location (older), USB host access — from the PIN-protected maintenance screen, which walks a volunteer through them with a reason for each.
 
@@ -434,11 +434,13 @@ Note the two `id`s that do not match their labels — `giving` for Campaigns and
 Donations. They are the original slice names and are load-bearing: the tab is reflected in the URL
 hash, so renaming one breaks every bookmark and the profile menu's deep links.
 
-Panels inside **Settings**: Payments (Fabric Stripe account picker §6, Terminal Location, currency,
-test-mode badge, standalone key-entry fallback) · Notifications (per-alert routing, §18) · Email
-receipts (the branded receipt designer) · the masjid address · the kiosk **exit PIN** · remote
-adoption · About (version, docs links, the AGPL **Source code** link) · **What's new**, read from the
-`CHANGELOG.md` shipped inside the image.
+Panels inside **Settings**: Payments (Fabric Stripe account picker §6, currency, **Masjid details** —
+name, address, time zone, 12/24-hour clock, Hijri adjustment — Terminal Location, test connection,
+test-mode badge, standalone key-entry fallback) · Account & platform (version, OpenMasjidOS status,
+who is signed in) · Notifications (recipients × alerts, §18) · Email receipts (the branded receipt
+designer) · Appearance · and a footer with the AGPL **Source code** link. The kiosk **exit PIN** and
+**remote adoption** are on **Devices**, and **What's new** — read from the `CHANGELOG.md` shipped
+inside the image — opens from the account menu.
 
 ---
 
@@ -449,7 +451,7 @@ adoption · About (version, docs links, the AGPL **Source code** link) · **What
 **`manifest.yaml`**
 - `id: kiosk` · `category: donations` · `license: AGPL-3.0-only` · one port (`container: 8080`).
 - **No `settings:` block, ever.** Install stays one-click; the Stripe account is picked in-app.
-- Fabric flags currently declared: `sso`, `https` (mandatory — we take card payments), `stripe`, `notifications`, `email`, `domain`, `tunnel`, plus an `alerts:` list and `fabric.consumes: [students/billing]`. Adding a flag is opting into a platform capability and must be matched by real handling in `server/src/fabric.ts`.
+- Fabric flags currently declared: `sso`, `https` (mandatory — we take card payments), `stripe`, `notifications`, `email`, `whatsapp`, `domain`, `tunnel`, plus an `alerts:` list, a `commands:` list (§18) and `fabric.consumes: [students/billing]`. Adding a flag is opting into a platform capability and must be matched by real handling in `server/src/fabric.ts`.
 - `version:` is the release being worked toward, in the shape rule 6b requires, and must equal the compose image tag exactly.
 
 **`docker-compose.yml`**
@@ -466,7 +468,7 @@ adoption · About (version, docs links, the AGPL **Source code** link) · **What
 ## 13. Tech stack
 
 - **server/** — Node 22 (`node:22-slim` in the image), TypeScript strict, **Fastify**, **better-sqlite3**, **stripe** SDK, **scrypt** via `node:crypto` for the fallback admin password + PIN hashes (chosen over argon2 by the maintainer, 2026-07-02: zero extra native deps and Pi-friendly — see `docs/ARCHITECTURE.md`), **zod** at every boundary. No WebSocket (heartbeat polling is enough); add SSE for the Devices page if live feel demands it.
-- **web/** — React + Vite + TypeScript + Tailwind (preflight off) + **lucide-react**, and that is the whole runtime dependency list. Tokens and recipes come from **DESIGN.md** (Sakīna Glass) as hand-written CSS in `src/styles/`; animation is CSS transitions and keyframes. (This bullet used to name **shadcn/ui** and **Motion** as well — neither was ever imported by a single file, and `motion` sat in `package.json` as an unused runtime dependency until it was removed on 2026-08-17. Prefer plain CSS here: the panel is a handful of screens and the design language is already expressed as tokens.) Inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
+- **web/** — React + Vite + TypeScript + Tailwind (preflight off) + **lucide-react** + the three self-hosted font packages (`@fontsource-variable/inter`, `space-grotesk`, `noto-naskh-arabic` — CSS and woff2 only, OFL-1.1, added for the app UI spec's §4/§11), and that is the whole runtime dependency list. Tokens and recipes come from **DESIGN.md** (Sakīna Glass) as hand-written CSS in `src/styles/`; animation is CSS transitions and keyframes. (This bullet used to name **shadcn/ui** and **Motion** as well — neither was ever imported by a single file, and `motion` sat in `package.json` as an unused runtime dependency until it was removed on 2026-08-17. Prefer plain CSS here: the panel is a handful of screens and the design language is already expressed as tokens.) Inherits live appearance via the Fabric `#omos=` fragment + `/api/public/appearance` (treat the fragment as untrusted presentation input).
   ├── android/                 # Kotlin + Jetpack Compose, THREE Gradle modules:
   │     ├── core/              #   shared: server client, pairing, device store, Terminal, theme
   │     ├── app/               #   the locked-down wall KIOSK (HOME launcher, Lock Task, exit PIN)
@@ -506,11 +508,12 @@ the tree the ordinary build never sees. `tsconfig.test.json` + `npm run typechec
 four real errors were sitting in the tests, green, when that was added.
 
 **CI runs both, plus the web build, on every push to `dev`/`main` and every pull request**
-(`.github/workflows/test.yml`), and `build-image.yml` publishes nothing unless they pass. Before
+(`.github/workflows/test.yml`; on a push it runs from `build-image.yml`, so a push that only touches
+`paths-ignore` files — docs, `LICENSE`, `screenshots/`, the compose — runs neither), and `build-image.yml` publishes nothing unless they pass. Before
 0.12.0 it ran neither: the Dockerfile type-checked the shipping code and that was all, so a red
 suite could not stop a release and a contributor's PR got no CI beyond the CLA bot.
 
-Local dev: Vite proxies `/api` to the server; use Stripe **test keys** + the Terminal **simulated reader** (`isSimulated`) so the whole flow runs without hardware; test on a real M2 before release. `docs/TABLET_SETUP.md` covers tablet provisioning; `docs/READER_SETUP.md` covers M2 pairing/USB cabling.
+Local dev: Vite proxies `/api` to the server; use Stripe **test keys** + typed card entry with Stripe's test cards so the whole flow runs without a reader; test on a real M2 before release. (The Terminal **simulated reader** — `ReaderTransport.Simulated`, `isSimulated` — survives in `ReaderManager`, but nothing in the app selects it: the Test reader was taken out of the reader picker, see `docs/READER_SETUP.md`.) `docs/TABLET_SETUP.md` covers tablet provisioning; `docs/READER_SETUP.md` covers M2 pairing/USB cabling.
 
 **Boot it and press the thing.** `tsc` and the suite do not prove a route works: a `415` reached a
 donor's cancel button because it was only reasoned about. `node dist/index.js` with `DATA_DIR` and
@@ -695,6 +698,14 @@ supplies the country code **structurally**, from a dropdown (`web/src/phone.ts`,
 mask is ported from Students), so the strict rule never fires in ordinary use — and its rules did
 not soften to achieve that.
 
+**A trunk 0 after a known country code is DROPPED, which is not the same thing.** `07700 900123` typed
+with UK selected, or `+44 (0)7700 900123`, has its country — the 0 is only the national habit, and
+keeping it stored `4407700900123`, a number that does not exist. Every non-NANP country the picker
+offers writes a trunk 0 that no subscriber number begins with (`TRUNK_ZERO_DIALS` in `alerts.ts`,
+kept equal to the picker by `phone-entry.test.ts`). Because every stored recipient is read back
+through `normalisePhone`, this also repaired the numbers the picker stored wrongly in 0.12.0–0.13.0.
+**Never add a country that keeps its 0 internationally (Italy) without changing both.**
+
 `alertDelivery()` reports what an alert will *actually* do, so an alert with the relay off and nobody
 subscribed reads as **"nowhere"** rather than looking covered.
 
@@ -762,7 +773,11 @@ that an app is the wrong place for a hard ceiling: *"an app-level limiter cannot
 total traffic, which is the only number WhatsApp cares about."* So this is a backstop with generous
 defaults, and the numbers are the admin's (maintainer, 2026-08-21). Anything held back is counted and
 carried on the next message that gets through, so suppression is never silent. `test` is exempt from
-all three — an admin pressed a button and is watching the screen.
+all three — an admin pressed a button and is watching the screen — and has a budget of its own
+instead (`testAlertBudget`, 10 per 10 minutes on the route), so a stuck key or a looping script
+cannot message every recipient without limit. One WhatsApp send per alert kind is in flight at a
+time (`waInFlight`): the ledger is charged only once sends come back, so two of a kind arriving
+together would otherwise both pass the burst gap.
 
 **The ledger is PERSISTED** (`store.getWhatsAppLedger`), unlike the first version. In-memory was
 defensible for a 30-minute gap — a restart lets one extra through, which is the safe direction to
@@ -789,12 +804,12 @@ plain sentence — an unapproved group, a number with no country code, an empty 
 images queued, or (new in 0.51.1) *the masjid's own gateway number*, which used to be accepted and
 go nowhere. Those used to reach a `log.debug` and nothing else, which is most of why this felt
 mysterious: a refused message and a lost one were indistinguishable. They are now logged at **warn**,
-stored per alert, and shown on the Notifications screen beside the switch that caused them.
+stored per recipient, and shown on the Notifications screen on the row that caused them.
 
 **We store the message id and resolve it.** The `202` carries an `id`; `GET /api/fabric/whatsapp/status/<id>`
 says `queued | sent | failed | expired`. `scheduleWhatsAppFollowUp` asks after a minute and again
 after ten for responsiveness; `reconcileWhatsApp` then re-asks every 15 minutes about anything still
-`queued`, until the platform's 24-hour window closes. The record holds no message text and no
+`queued`, for up to seven days (see below). The record holds no message text and no
 recipient. A 404 means "not ours, or aged out", **never failure** — it also covers a platform too
 old to have the endpoint.
 
@@ -805,8 +820,8 @@ worth the traffic. Both premises died in 0.51.1-dev.8: the history is **500 per 
 record and every poll came back 404), and **status reads have their own 600/min budget**, separate
 from sending, so a poll can no longer refuse a masjid's alert. Giving up at ten minutes meant a
 message that failed at twenty read as `queued` in the panel for ever, which is the exact
-"accepted and silently lost" state this feature exists to end. At most one read per alert id per
-sweep — six, against six hundred.
+"accepted and silently lost" state this feature exists to end. At most one read per recipient per
+sweep — `MAX_ALERT_RECIPIENTS`, 24, against six hundred.
 
 **Do not add an `immediate` flag.** It was considered and dropped platform-side, correctly: it could
 only skip the typing indicator (the last thing making the traffic look human) or jump a queue every
@@ -887,3 +902,90 @@ resolve. A `404` past that is still `unknown`, never failure.
   auth-critical may ride on it.
 
 Full contract: OpenMasjidOS `docs/WHATSAPP.md` and `docs/APP_MANIFEST_SPEC.md`, **dev** branch.
+
+---
+
+## 19. The OpenMasjid app UI/UX spec — how this panel meets it
+
+OpenMasjidOS `docs/APP_UI_DESIGN_SPEC.md` is the look-and-feel contract for every app a masjid opens
+from the dashboard ("nothing about the transition should feel like leaving"). The panel was brought
+to it in 0.14.0. What follows is WHERE each rule lives and the decisions that are easy to undo by
+accident — most have a test that fails if you do.
+
+**Appearance at runtime (§1).** `web/index.html`'s inline pre-paint script reads the `#omos=`
+fragment, falls back to saved prefs, and writes theme, wallpaper, the accent (fill AND ink) and `dir`
+before the first frame. Its three tables are generated at build time from `web/src/accents.ts` and
+`web/src/appearance.ts` by `vite.config.ts` — never hand-copy them (`prepaint.test.ts` runs the real
+script). `web/src/prefs.ts` then owns the live look and polls our same-origin relay of
+`/api/public/appearance`; the relay rewrites the platform's `logo` to our own `GET /api/public/logo`
+(a fixed-URL, size-capped, raster-only proxy). The fragment is attacker-craftable: every value is
+checked against a fixed list (`isAccentId` is an own-property check — `ACCENTS['toString']` exists).
+
+**The five accents carry their ink (§3), and light theme needs one more step.** `accents.ts` holds
+the platform's `primary/hover/subtle/onPrimary` byte-for-byte, plus our own `text/textHover`: in LIGHT
+theme `--color-primary` is a foreground (links, focus ring, active dock item) and a bright accent on a
+pale surface is 1.7–2.7:1, so light theme writes the darker shade there and keeps the bright accent
+for `--color-btn` fills. **Filled controls use `--color-btn`, never `--color-primary`** — that is what
+their `--color-on-primary` ink was chosen for (`theme-contrast.test.ts` checks the selectors).
+
+**Tokens deliberately differ from the platform where its value fails AA** (§7 outranks a
+transcription): ink-muted/faint in both themes, light `--color-primary` (#0369A1), and the status
+colours' `-ink` text variants (`--color-success-ink` etc. — the fills stay the platform's). Status
+colours are never used as TEXT directly; a test enforces it. `--color-on-danger` is the ink on every
+destructive button.
+
+**Surfaces (§5, §8).** `.glass` panels are SOLID raised surfaces; the frosted material is only on
+things that float alone (`.glass-raised`: dock, account menu, sign-in cards). No nested blur, no
+continuous animation (the aurora is still; the status pulse runs three times), skeletons not spinners
+(`<Skeleton>` in `primitives.tsx`), a grid staggers once on mount (`.stagger` + `--i`).
+
+**Type (§4, §11).** Inter + Space Grotesk self-hosted, and Noto Naskh Arabic's arabic subset only
+(declared by hand in `index.css` — the package's own CSS would take over arrows and ✓). **Tabular
+digits are on numeric classes, NOT on `body`**: Inter's `tnum` also widens the hyphen and parentheses,
+and globally it put "thank - you" into every sentence. Add a class to the list in `app.css`, or use
+`.num`.
+
+**Right to left (§6).** `dir` follows the dashboard's language; `lang` stays `"en"` because the copy
+is English (a screen reader would otherwise read English with Arabic rules). In `[dir=rtl]` every text
+element is `unicode-bidi: plaintext`, so an English sentence keeps its punctuation. Things with no
+letters (phone numbers, codes, URLs, amount inputs) carry `dir="ltr"`; icons that point along the line
+carry `.rtl-flip`. **Never put loose text beside a `<b>`/`<a>` directly in a flex container** — they
+become separate flex items and swap round in RTL; wrap the sentence in one `<span>`. `?dir=rtl` in the
+address forces it for one load, to look. On Android the keyboard, number pads and the reader-side hint
+are forced LTR/absolute on purpose (physical things).
+
+**Dialogs (§7).** `web/src/modal.tsx` — a native `<dialog>` with `showModal()`: focus trap, Escape,
+backdrop click and focus return. Never hand-roll one again. Busy controls use `aria-disabled` + an
+early return, not `disabled`, so focus is not dropped (styled at the end of `app.css`).
+
+**Dates (§10).** `web/src/dates.ts` and `server/src/dates.ts` (kept identical — `dates-parity.test.ts`)
+format every date as Gregorian · Hijri in the MASJID'S time zone and 12/24-hour choice, from the
+masjid details (`timeZone`, `clock24h`, `hijriOffset`; locale `en-<country>`). Never
+`toLocaleString()` with the browser's locale, never `dateStyle` + `timeZoneName` (that combination
+throws — it is why every receipt used to print a raw ISO string). A zone-less `YYYY-MM-DD` goes
+through `formatCalendarDate`, never `new Date()`.
+
+**Money (§10).** `formatMoney` on all three surfaces uses `Intl.NumberFormat` (`java.text.NumberFormat`
+on Android) in the masjid locale with STRIPE'S decimals, never ICU's (ICU gives PKR 0 decimals). A row is formatted in its own currency.
+`grossUpForFees(base, currency)` takes the currency on purpose: the tablet and the server must compute
+the same cover-the-fee total.
+
+**Stripe's units are not ICU's, in two more ways** (`stripe.ts`; the web table is checked against it by
+`money-tables.test.ts`, the tablet's is changed by hand). **UGX and ISK are two-decimal values that
+always end in 00** — UGX sat in the zero-decimal list until 0.14.0, so every Ugandan charge went to
+Stripe at a hundredth; `migrateUgxScale` scaled an existing install's amounts once. **The three-decimal
+dinars must end in 0.** `minorStep` encodes both: presets are rounded onto it when saved, the
+cover-the-fee total rounds UP to it (never down — the fee stays covered), and a custom amount off it
+is refused. A typed amount goes through `plainAmount` (web `money.ts`): `.` is always the decimal
+point, a lone comma is one unless exactly three digits follow it — so "12,50" is twelve and a half,
+not the 1250 it used to be.
+
+**Voice (§9).** `api.ts` turns network errors, 5xx and 401s into plain sentences; technical text goes
+in `<details className="tech-details">`; an outcome is a `<ResultLine>` (icon, colour and live role
+together); a queued WhatsApp is never "sent".
+
+**Not covered by the shared design system, by decision:** the donor giving screen is Compose, and its
+colours are the campaign's own design — the OS accent is NOT forwarded to tablets. Android does not
+bundle Inter/Space Grotesk (Roboto's digits are already tabular, and a font change on a screen we
+cannot run here is a risk the spec does not require); `tnum` is set on every style. Stripe.js in
+`kioskpay.html` is the one external script, and PCI requires it.

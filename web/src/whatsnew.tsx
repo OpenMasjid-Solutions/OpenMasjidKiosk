@@ -6,10 +6,12 @@
  *  OpenMasjidOS has no other way to find out what changed without leaving for GitHub, and
  *  several recent releases need a tablet-app update to take effect — which is exactly the
  *  kind of thing that has to be said in the panel, not in a repo. */
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { X } from 'lucide-react';
-import { getChangelog } from './api';
+import { errorText, getChangelog } from './api';
+import { inlineSpans, parseChangelog, versionNewer, type InlineSpan } from './changelog';
+import { Modal } from './modal';
+import { ResultLine, Skeleton } from './primitives';
 
 /** The newest version an admin has actually read, per browser. Used only to show the dot on
  *  the account button — never to gate anything. */
@@ -30,17 +32,6 @@ function writeSeen(v: string): void {
   }
 }
 
-/** Compare two dotted versions numerically ("0.9.9" < "0.9.34" — a string compare gets this
- *  exactly backwards, which is how a "new!" dot ends up lying). */
-export function versionNewer(a: string, b: string): boolean {
-  const parts = (v: string) => v.split('.').map((n) => Number.parseInt(n, 10) || 0);
-  const [x, y] = [parts(a), parts(b)];
-  for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    const d = (x[i] ?? 0) - (y[i] ?? 0);
-    if (d !== 0) return d > 0;
-  }
-  return false;
-}
 
 /** True when this build is newer than the notes the admin last opened. */
 export function useUnreadRelease(version: string | undefined): boolean {
@@ -71,68 +62,49 @@ export function markReleaseSeen(version: string): void {
   window.dispatchEvent(new Event('omk:whatsnew-seen'));
 }
 
-// ── The tiny slice of Markdown our CHANGELOG actually uses ───────────────────────
-// Deliberately NOT a Markdown library: this renders one file we write ourselves, in a
-// format of five constructs. Everything becomes React nodes — there is no
-// dangerouslySetInnerHTML anywhere, so no amount of odd text in a release note can inject
-// markup.
+// ── Rendering ────────────────────────────────────────────────────────────────────
+// Reading the Markdown is changelog.ts's job (React-free, so the server's test run can hold it
+// to the real file). Everything here becomes React nodes — there is no dangerouslySetInnerHTML
+// anywhere, so no amount of odd text in a release note can inject markup.
 
-interface Release {
-  version: string;
-  items: string[];
-}
-
-/** Split "## 0.9.34" sections and their "- " bullets out of the changelog. Prose lines that
- *  aren't bullets are kept as their own entry, so nothing in the file is silently dropped. */
-export function parseChangelog(md: string): Release[] {
-  const releases: Release[] = [];
-  let current: Release | null = null;
-  for (const raw of md.split(/\r?\n/)) {
-    const line = raw.trimEnd();
-    const head = /^##\s+(.+)$/.exec(line);
-    if (head) {
-      current = { version: head[1].trim(), items: [] };
-      releases.push(current);
-      continue;
+/** Inline `**bold**`, `*italic*` / `_italic_` and `` `code` `` as React nodes, nested as written. */
+function renderSpans(spans: InlineSpan[]): ReactNode[] {
+  return spans.map((s, i) => {
+    switch (s.kind) {
+      case 'text':
+        return s.text;
+      case 'code':
+        return <code key={i}>{s.text}</code>;
+      case 'strong':
+        return <strong key={i}>{renderSpans(s.children)}</strong>;
+      case 'em':
+        return <em key={i}>{renderSpans(s.children)}</em>;
     }
-    if (!current) continue; // the file's title / license header, above the first release
-    const bullet = /^[-*]\s+(.*)$/.exec(line);
-    if (bullet) {
-      current.items.push(bullet[1]);
-    } else if (line.trim()) {
-      // A continuation of the bullet above (our notes wrap), or standalone prose.
-      if (current.items.length) current.items[current.items.length - 1] += ` ${line.trim()}`;
-      else current.items.push(line.trim());
-    }
-  }
-  return releases;
+  });
 }
 
-/** Inline `**bold**` and `` `code` `` as React nodes. Anything else is plain text. */
-function inline(text: string): React.ReactNode[] {
-  const out: React.ReactNode[] = [];
-  const re = /\*\*(.+?)\*\*|`(.+?)`/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let k = 0;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    if (m[1] !== undefined) out.push(<strong key={k++}>{m[1]}</strong>);
-    else out.push(<code key={k++}>{m[2]}</code>);
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
+const inline = (text: string): ReactNode[] => renderSpans(inlineSpans(text));
 
 /** Strip a leading "v" so "## 0.9.34" and a version of "0.9.34" compare equal. */
 const normalize = (v: string) => v.trim().replace(/^v/i, '').split(/\s+/)[0];
 
-export function WhatsNewModal({ onClose }: { onClose: () => void }) {
+export function WhatsNewModal({
+  onClose,
+  returnFocus,
+}: {
+  onClose: () => void;
+  /** Where focus goes on close. The account-menu item that opened this has unmounted by then, so
+   *  without it a keyboard user is dropped at the top of the page. */
+  returnFocus?: RefObject<HTMLElement | null>;
+}) {
   const [md, setMd] = useState<string | null>(null);
   const [version, setVersion] = useState('');
   const [err, setErr] = useState('');
-  const closeRef = useRef<HTMLButtonElement>(null);
+  // Bumped by Try again, which is what re-runs the load. The error and its button stay up while a
+  // retry runs — the button has focus, and taking it away mid-press would drop that.
+  const [attempt, setAttempt] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -141,66 +113,104 @@ export function WhatsNewModal({ onClose }: { onClose: () => void }) {
         if (!alive) return;
         setMd(r.markdown);
         setVersion(r.version);
+        setErr('');
+        setRetrying(false);
         markReleaseSeen(r.version);
+        // After a retry the Try again button that had focus is about to go, and focus must not fall
+        // to <body>: it goes to the heading the notes appear under. Not on the first load — the
+        // dialog has already put focus on its close button, and moving it would be a surprise.
+        if (attempt > 0) headingRef.current?.focus();
       })
-      .catch((e) => alive && setErr(e instanceof Error ? e.message : 'Couldn’t load the release notes.'));
+      .catch((e) => {
+        if (!alive) return;
+        setErr(errorText(e, 'Couldn’t load the release notes. Please try again.'));
+        setRetrying(false);
+      });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [attempt]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    closeRef.current?.focus();
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const retry = () => {
+    // aria-disabled rather than disabled while it runs, for the same reason: a disabled button
+    // loses focus.
+    if (retrying) return;
+    setRetrying(true);
+    setAttempt((a) => a + 1);
+  };
+  const loading = md === null && (!err || retrying);
 
   const releases = useMemo(() => (md ? parseChangelog(md) : []), [md]);
 
-  // Portal for the same reason the activity log uses one: an ancestor panel has a
-  // backdrop-filter, which would make `position: fixed` resolve against it instead of the
-  // viewport and leave the scrim covering only part of the page.
-  return createPortal(
-    <div className="modal-scrim" role="dialog" aria-modal="true" aria-label="What’s new" onClick={onClose}>
-      <div className="modal modal--window glass-raised" onClick={(e) => e.stopPropagation()}>
-        <div className="tl-bar">
-          <button ref={closeRef} className="tl tl--red" onClick={onClose} aria-label="Close">
-            <X size={9} strokeWidth={3} />
-          </button>
-          <span className="tl tl--amber" aria-hidden="true" />
-        </div>
-        <div className="modal-head">
-          <div className="card-head__main">
-            <h3 className="section-title-inline">What’s new</h3>
-            <p className="muted">
-              Release notes for OpenMasjid Kiosk{version ? `, up to the v${version} you’re running` : ''}.
-            </p>
-          </div>
-        </div>
-        <div className="modal-body">
-          {err && <p className="form-error">{err}</p>}
-          {!md && !err && <p className="muted">Loading…</p>}
-          {md && releases.length === 0 && <p className="muted">No release notes shipped with this build.</p>}
-          {releases.map((r) => {
-            const current = !!version && normalize(r.version) === normalize(version);
-            return (
-              <section className="wn-release" key={r.version}>
-                <h4 className="wn-version">
-                  {r.version}
-                  {current && <span className="pill pill--ok">You’re on this</span>}
-                </h4>
-                <ul className="wn-list">
-                  {r.items.map((it, i) => (
-                    <li key={i}>{inline(it)}</li>
-                  ))}
-                </ul>
-              </section>
-            );
-          })}
+  return (
+    <Modal titleId="wn-title" className="modal--window" returnFocus={returnFocus} onClose={onClose}>
+      {/* This window doesn't drag, so its bar mustn't promise it can. */}
+      <div className="tl-bar tl-bar--static">
+        <button type="button" className="tl tl--red" onClick={onClose} aria-label="Close">
+          <X size={9} strokeWidth={3} aria-hidden="true" />
+        </button>
+        <span className="tl tl--amber" aria-hidden="true" />
+      </div>
+      <div className="modal-head">
+        <div className="card-head__main">
+          <h3 id="wn-title" ref={headingRef} tabIndex={-1} className="section-title-inline">
+            What’s new
+          </h3>
+          <p className="muted">
+            Release notes for OpenMasjid Kiosk{version ? `, up to the v${version} you’re running` : ''}.
+          </p>
         </div>
       </div>
-    </div>,
-    document.body,
+      <div className="modal-body" aria-busy={loading || undefined}>
+        {err && (
+          <>
+            <ResultLine ok={false}>{err}</ResultLine>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              style={{ marginBlockStart: '0.6rem' }}
+              aria-disabled={retrying || undefined}
+              onClick={retry}
+            >
+              {retrying ? 'Trying again…' : 'Try again'}
+            </button>
+          </>
+        )}
+        {/* Shaped like what it stands in for: a version heading, then a few notes. */}
+        {md === null && !err && (
+          <Skeleton rows={5} height="0.95rem" widths={['30%', '100%', '94%', '100%', '72%']} label="Loading the release notes…" />
+        )}
+        {md !== null && releases.length === 0 && <p className="muted">No release notes shipped with this build.</p>}
+        {releases.map((r) => {
+          const current = !!version && normalize(r.version) === normalize(version);
+          return (
+            <section className="wn-release" key={r.version}>
+              <h4 className="wn-version">
+                {/* A version number has no letters to set its direction; under dir=rtl it must still
+                    read 0.12.0, not have its parts reordered around the pill. */}
+                <span dir="ltr">{r.version}</span>
+                {current && <span className="pill pill--ok">You’re on this</span>}
+              </h4>
+              <ul className="wn-list">
+                {r.items.map((it, i) => (
+                  <li key={i}>
+                    {inline(it.text)}
+                    {/* The "also fixed" points, under the note they belong to — flattening them into
+                        notes of their own would lose which headline they are detail for. */}
+                    {it.children.length > 0 && (
+                      <ul className="wn-list">
+                        {it.children.map((c, j) => (
+                          <li key={j}>{inline(c)}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          );
+        })}
+      </div>
+    </Modal>
   );
 }

@@ -12,7 +12,7 @@
 > allocation, the recording. The kiosk only renders the shell and drives the reader.
 
 The contract is **`students/billing` v2**, defined verbatim in the Students repo:
-`OpenMasjidStudentManager/docs/FABRIC_BILLING_CONTRACT.md` (§11) — the source of truth for every
+`OpenMasjidStudents/docs/FABRIC_BILLING_CONTRACT.md` (§11) — the source of truth for every
 request/response shape below, and copied into this repo as
 [`docs/FABRIC_BILLING_CONTRACT.md`](FABRIC_BILLING_CONTRACT.md). If it and this brief disagree, the
 contract wins. Responses carry `"v": 2`.
@@ -99,13 +99,13 @@ No account, no login — the same anonymous, walk-up model as every other kiosk 
 
 ## 1. Manifest — declare that we consume the capability
 
-Add to `manifest.yaml` (without it every broker call is `403 not_granted`):
+Add to `manifest.yaml` (without it every broker call is `403 not_granted`) — this is what ours
+declares:
 
 ```yaml
 fabric:
   consumes:
-    - capability: billing
-      provider: students     # the provider app id the OS broker routes us to
+    - students/billing       # <provider app id>/<capability>
 ```
 
 (Exact key spelling follows `OpenMasjidAPPS/docs/BUILDING_AN_APP.md` + the OS work order
@@ -201,7 +201,7 @@ positional `key` per child, `s0`/`s1`/…) — never a school id.
 ### The charge (our job — Stripe Terminal / Reader M2, card-present)
 On the Stripe account the reader is registered to (see §4), create a **card-present** PaymentIntent for
 the full `balanceCents` or the sum of the ticked invoices, then collect + process on the reader with
-the existing kiosk Terminal flow (connection token → `collectPaymentMethod` → `processPayment`). Put
+the existing kiosk Terminal flow (connection token → `collectPaymentMethod` → `confirmPaymentIntent`). Put
 the **§11.3 metadata on the PaymentIntent**:
 ```
 purpose             = students-billing        (REQUIRED — the reconciliation discriminator)

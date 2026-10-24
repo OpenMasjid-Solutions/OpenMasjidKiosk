@@ -30,8 +30,10 @@ import com.stripe.stripeterminal.external.models.Reader
 import com.stripe.stripeterminal.external.models.ReaderDisplayMessage
 import com.stripe.stripeterminal.external.models.ReaderInputOptions
 import com.stripe.stripeterminal.external.models.ReaderSoftwareUpdate
+import com.stripe.stripeterminal.external.models.TerminalErrorCode
 import com.stripe.stripeterminal.external.models.TerminalException
 import com.stripe.stripeterminal.log.LogLevel
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -45,7 +47,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.openmasjidos.kiosk.net.KioskRepository
 
-/** How the tablet talks to the reader. Simulated uses Stripe's built-in mock reader (no hardware). */
+/** How the tablet talks to the reader. Simulated (Stripe's built-in mock reader, no hardware) is
+ *  unreachable today: nothing selects it, and the Test reader was removed from the maintenance
+ *  picker. Its branches are kept until the maintainer decides whether to remove it. */
 enum class ReaderTransport { Bluetooth, Usb, Simulated }
 
 /** Coarse connection state for the maintenance UI + heartbeat. */
@@ -56,7 +60,6 @@ data class DiscoveredReader(val serial: String, val label: String)
 
 /** Immutable snapshot the maintenance screen renders. */
 data class ReaderUiState(
-    val initialized: Boolean = false,
     val transport: ReaderTransport = ReaderTransport.Bluetooth,
     val conn: ReaderConn = ReaderConn.NotConnected,
     val discovered: List<DiscoveredReader> = emptyList(),
@@ -66,7 +69,8 @@ data class ReaderUiState(
     val updateProgress: Int? = null,   // 0..100 while an update installs
     val updateAvailable: Boolean = false,
     val error: String? = null,
-    // Reader prompt text ("Insert or tap card", …). Populated during the slice-6 collect flow.
+    // Reader prompt text ("Tap or insert your card", …). Set by the reader listener during a
+    // collect; cleared by [ReaderManager.clearPrompt] when the donation flow ends.
     val prompt: String? = null,
 )
 
@@ -74,9 +78,9 @@ data class ReaderUiState(
 data class ReaderStatusSnapshot(val status: String, val serial: String?, val battery: Int?)
 
 /**
- * The single owner of all Stripe Terminal SDK interaction (M2 reader over Bluetooth AND USB, plus
- * Stripe's simulated reader for testing without hardware). Isolating every Terminal call here keeps
- * the SDK's surface in one place and off the rest of the app.
+ * The single owner of all Stripe Terminal SDK interaction (M2 reader over Bluetooth AND USB; the
+ * simulated-reader branches remain but nothing selects them — see [ReaderTransport]). Isolating every
+ * Terminal call here keeps the SDK's surface in one place and off the rest of the app.
  *
  * A process singleton because [Terminal] itself is a singleton: the maintenance UI and the
  * background heartbeat both read the current reader status from here.
@@ -149,10 +153,7 @@ object ReaderManager {
     fun ensureInitialized(context: Context, repository: KioskRepository) {
         repo = repository
         appContext = context.applicationContext
-        if (Terminal.isInitialized()) {
-            _state.update { it.copy(initialized = true) }
-            return
-        }
+        if (Terminal.isInitialized()) return
         Terminal.init(
             context.applicationContext,
             LogLevel.ERROR,
@@ -160,7 +161,6 @@ object ReaderManager {
             terminalListener,
             null,
         )
-        _state.update { it.copy(initialized = true) }
     }
 
     /**
@@ -194,7 +194,10 @@ object ReaderManager {
                 // which is the usual cause of "the reader won't connect".
                 val why = e.message ?: "server unreachable"
                 r.log("error", "reader_token_failed", why)
-                callback.onFailure(ConnectionTokenException("Couldn’t get a reader token: $why", e))
+                // No `why` in the exception itself: the SDK hands this text back inside the
+                // TerminalException it raises, and the reason is already logged one line up. What a
+                // volunteer reads is chosen by friendly() from the error CODE, never from this text.
+                callback.onFailure(ConnectionTokenException("Couldn’t reach your masjid’s server to set up the reader.", e))
             }
         }
     }
@@ -207,7 +210,8 @@ object ReaderManager {
             }
         }
 
-        override fun onPaymentStatusChange(status: PaymentStatus) { /* used by the slice-6 flow */ }
+        // Not needed: PaymentController follows each payment through its own collect/confirm callbacks.
+        override fun onPaymentStatusChange(status: PaymentStatus) { }
     }
 
     // ---- Discovery ---------------------------------------------------------------------
@@ -217,7 +221,7 @@ object ReaderManager {
      *  true (USB startup path), the first reader found is connected automatically with no UI. */
     fun startDiscovery(transport: ReaderTransport, auto: Boolean = false) {
         if (!Terminal.isInitialized()) {
-            _state.update { it.copy(error = "Reader isn’t ready yet.") }
+            _state.update { it.copy(error = "The card reader is still starting up. Wait a moment, then try again.") }
             return
         }
         // Don't disturb an in-flight connect/update — the admin would see a confusing bounce.
@@ -537,26 +541,29 @@ object ReaderManager {
         // Scope every token from here on to this campaign, THEN drop the old registration.
         tokenCampaignId = campaignId
         registeredAccountId = null
-        _state.update { it.copy(conn = ReaderConn.Connecting, error = null) }
+        // Wait for the SDK to actually let go — on ITS callback — before clearing credentials: they
+        // belong to the old account, and clearing them while still connected is not honoured. This
+        // used to set `Connecting` first and then wait for "not Connected", which was already true,
+        // so it never waited — and that same `Connecting` made tryAutoConnect below bail out.
+        val released = CompletableDeferred<Unit>()
         runCatching {
             Terminal.getInstance().disconnectReader(object : Callback {
-                override fun onSuccess() {}
-                override fun onFailure(e: TerminalException) {}
+                override fun onSuccess() { released.complete(Unit) }
+                override fun onFailure(e: TerminalException) { released.complete(Unit) }
             })
-        }
-        // Wait for the SDK to actually let go before clearing credentials — they belong to the old
-        // account, and clearing them while still connected is not honored.
-        withTimeoutOrNull(10_000) { _state.first { it.conn != ReaderConn.Connected } }
+        }.onFailure { released.complete(Unit) }
+        withTimeoutOrNull(10_000) { released.await() }
+        withTimeoutOrNull(3_000) { _state.first { it.conn != ReaderConn.Connected } }
         runCatching { Terminal.getInstance().clearCachedCredentials() }
 
         autoLocationId = locationId
         enableAutoConnect(transport, serial, locationId)
-        val ok = withTimeoutOrNull(45_000) { _state.first { it.conn == ReaderConn.Connected } } != null
-        if (ok) {
-            registeredAccountId = accountId
-        } else {
-            repo?.log("warn", "reader_reregister_failed", "account=" + accountId.ifBlank { "primary" })
-        }
+        val reconnected = withTimeoutOrNull(45_000) { _state.first { it.conn == ReaderConn.Connected } } != null
+        // Ready only if it came back on a token minted for THIS account. The token provider records
+        // the account of every token it fetches; a reconnect on cached credentials fetches none and
+        // would still be the old account, so the donation must go to typed entry instead.
+        val ok = reconnected && registeredAccountId == accountId
+        if (!ok) repo?.log("warn", "reader_reregister_failed", "account=" + accountId.ifBlank { "primary" })
         return ok
     }
 
@@ -673,6 +680,9 @@ object ReaderManager {
                 _state.update { it.copy(conn = ReaderConn.NotConnected, connectedLabel = null, battery = null, updateAvailable = false) }
             }
             override fun onFailure(e: TerminalException) {
+                // Logged before it is put in words, like every other caller of friendly(): the words
+                // send the volunteer to Devices → Logs, so the reason has to be there.
+                repo?.log("error", "reader_disconnect_failed", "${e.errorCode} · ${e.errorMessage}")
                 _state.update { it.copy(error = friendly(e)) }
             }
         })
@@ -701,7 +711,7 @@ object ReaderManager {
         }
 
         override fun onFinishInstallingUpdate(update: ReaderSoftwareUpdate?, e: TerminalException?) {
-            repo?.log(if (e != null) "error" else "info", "reader_update_finished", e?.errorMessage ?: "ok")
+            repo?.log(if (e != null) "error" else "info", "reader_update_finished", e?.let { "${it.errorCode} · ${it.errorMessage}" } ?: "ok")
             val connected = Terminal.isInitialized() && Terminal.getInstance().connectedReader != null
             _state.update {
                 it.copy(
@@ -745,9 +755,18 @@ object ReaderManager {
             connectedSerial = null
             val wasAuto = connectedTransport == autoTransport
             connectedTransport = null
-            _state.update { it.copy(conn = ReaderConn.NotConnected, connectedLabel = null, error = "The reader disconnected. Reconnecting…") }
+            // Only promise a reconnect when one is actually about to be scheduled. Without auto-connect
+            // (a reader that was never remembered) nothing retries, and
+            // "Reconnecting…" would sit on screen for good, describing work nobody is doing.
+            val willRetry = autoEnabled && wasAuto
+            val message = if (willRetry) {
+                "The reader disconnected. Reconnecting…"
+            } else {
+                "The reader disconnected. Switch it on, keep it close, and connect it again."
+            }
+            _state.update { it.copy(conn = ReaderConn.NotConnected, connectedLabel = null, error = message) }
             // The SDK's own auto-reconnect gave up — re-discover + reconnect ourselves.
-            if (autoEnabled && wasAuto) scheduleReconnect(fresh = true)
+            if (willRetry) scheduleReconnect(fresh = true)
         }
 
         // During a payment the reader tells us what to show the donor ("Insert or tap card",
@@ -757,13 +776,14 @@ object ReaderManager {
             // contactless or chip, and naming a third option makes the one instruction a donor has to
             // follow longer and vaguer at exactly the moment they are holding a card and deciding what
             // to do. If the reader genuinely needs a swipe it says so itself through
-            // onRequestReaderDisplayMessage, which is passed through untouched — so the rare magstripe
-            // fallback still tells the donor what to do rather than leaving them stuck.
+            // onRequestReaderDisplayMessage, whose swipe messages keep their meaning when donorPrompt
+            // words them for a donor — so the rare magstripe fallback still tells the donor what to do
+            // rather than leaving them stuck.
             _state.update { it.copy(prompt = "Tap or insert your card") }
         }
 
         override fun onRequestReaderDisplayMessage(message: ReaderDisplayMessage) {
-            _state.update { it.copy(prompt = prettifyReaderMessage(message.toString())) }
+            _state.update { it.copy(prompt = donorPrompt(message)) }
         }
     }
 
@@ -796,24 +816,128 @@ object ReaderManager {
         return if (serial != null) "Card reader ($serial)" else "Card reader"
     }
 
+    /**
+     * A sentence a volunteer can act on, for a reader failure: what happened, and what to do next.
+     * Shown on the kiosk's maintenance screen and on the Mobile Donations reader card.
+     *
+     * NEVER [TerminalException.errorMessage] itself. That is Stripe's developer text — "No such
+     * location: 'tml_…'", "Bluetooth unexpectedly disconnected during operation" — and it used to be
+     * this function's default, so the rarer a failure was, the more likely a volunteer saw it raw.
+     * Every caller logs `errorCode · errorMessage` to Devices → Logs before calling this, and that is
+     * this app's "technical details" place; the screen gets plain words.
+     *
+     * Matched on [TerminalErrorCode]. Every code named here was checked against the classes of the
+     * 5.6.0 SDK pinned in libs.versions.toml, so an SDK bump that renames one fails the build rather
+     * than silently falling through. A code not listed — including one a later SDK adds — gets a plain
+     * default, never Stripe's text.
+     */
     private fun friendly(e: TerminalException): String {
-        val msg = e.errorMessage
-        val low = msg.lowercase()
-        // The M2's most common Bluetooth failure — "Bluetooth unexpectedly disconnected during
-        // operation" — is almost always one of two operational causes, so guide the admin to the fix
-        // rather than showing a bare error. (Stripe: don't pair via Android Bluetooth settings; a
-        // first-connect firmware update needs ≥50% battery.)
-        if ("bluetooth" in low && ("disconnect" in low || "shutdown" in low || "unexpected" in low)) {
-            return "The Bluetooth reader dropped. Two things fix this almost every time: 1) do NOT pair " +
-                "the reader in the tablet's Bluetooth settings — if you did, tap Forget there — and connect " +
-                "it only from here; 2) charge the reader to at least 50% (its first connection may install a " +
-                "required update). Then keep it close and tap Find again."
+        val low = e.errorMessage.lowercase()
+        return when (e.errorCode) {
+            TerminalErrorCode.BLUETOOTH_PERMISSION_DENIED -> PERMISSIONS_MISSING
+            TerminalErrorCode.USB_PERMISSION_DENIED ->
+                "Android didn’t allow the reader’s USB connection. Unplug the reader, plug it back in, and tap Allow when Android asks."
+            TerminalErrorCode.LOCATION_SERVICES_DISABLED ->
+                "Location is switched off on this device, and the card reader needs it to connect. Turn Location on in Android’s quick settings, then try again."
+            TerminalErrorCode.BLUETOOTH_SCAN_TIMED_OUT ->
+                "No reader turned up. Make sure it’s switched on and charged, hold its button until the light flashes, keep it close, and search again."
+            TerminalErrorCode.USB_DISCOVERY_TIMED_OUT ->
+                "No reader was found on the USB cable. Check the cable is pushed in firmly at both ends, then try again."
+            TerminalErrorCode.BLUETOOTH_LOW_ENERGY_UNSUPPORTED ->
+                "This device’s Bluetooth can’t talk to the card reader. Connect the reader with a USB cable instead."
+            TerminalErrorCode.BLUETOOTH_ERROR, TerminalErrorCode.BLUETOOTH_DISCONNECTED -> BLUETOOTH_DROPPED
+            TerminalErrorCode.USB_DISCONNECTED ->
+                "The reader’s USB cable came loose. Push it back in firmly at both ends, then try again."
+            TerminalErrorCode.READER_CONNECTED_TO_ANOTHER_DEVICE ->
+                "This reader is connected to another phone or tablet. Disconnect it there, or switch the reader off and on, then try again."
+            TerminalErrorCode.READER_BUSY ->
+                "The reader is still busy with something. Wait a few seconds, then try again."
+            TerminalErrorCode.READER_BATTERY_CRITICALLY_LOW ->
+                "The reader’s battery is almost empty. Charge it for a while, then try again."
+            TerminalErrorCode.READER_SOFTWARE_UPDATE_FAILED_BATTERY_LOW ->
+                "The reader needs at least half its battery to update. Charge it, then connect it again."
+            TerminalErrorCode.READER_SOFTWARE_UPDATE_FAILED_INTERRUPTED ->
+                "The reader’s update was interrupted. Keep it switched on and close, then connect it again to finish."
+            TerminalErrorCode.READER_SOFTWARE_UPDATE_FAILED,
+            TerminalErrorCode.READER_SOFTWARE_UPDATE_FAILED_READER_ERROR,
+            TerminalErrorCode.READER_SOFTWARE_UPDATE_FAILED_SERVER_ERROR ->
+                "The reader’s update didn’t finish. Keep it charged and close, then connect it again to retry the update."
+            TerminalErrorCode.READER_COMMUNICATION_ERROR,
+            TerminalErrorCode.READER_COMMUNICATION_SSL_ERROR,
+            TerminalErrorCode.GENERIC_READER_ERROR ->
+                "The reader stopped answering. Switch it off and on again, then try again."
+            // The token provider above failed: our SERVER could not (or would not) set the reader up.
+            TerminalErrorCode.CONNECTION_TOKEN_PROVIDER_ERROR,
+            TerminalErrorCode.CONNECTION_TOKEN_PROVIDER_ERROR_WHILE_FORWARDING ->
+                "Couldn’t reach your masjid’s server to set up the reader. Check this device is online, then try again. If it keeps happening, Devices → Logs in the admin panel says why."
+            TerminalErrorCode.STRIPE_API_CONNECTION_ERROR,
+            TerminalErrorCode.REQUEST_TIMED_OUT,
+            TerminalErrorCode.NOT_CONNECTED_TO_INTERNET_AND_REQUIRE_ONLINE_SET ->
+                "The reader couldn’t reach the payment network. Check this device’s internet connection, then try again."
+            TerminalErrorCode.SESSION_EXPIRED ->
+                "The reader’s sign-in ran out. Try again — it signs in afresh when you do."
+            TerminalErrorCode.ALREADY_CONNECTED_TO_READER ->
+                "A reader is already connected. Disconnect it first if you want to use a different one."
+            TerminalErrorCode.CANCELED ->
+                "That was stopped before it finished. Try again when you’re ready."
+            // Filed under something generic, some failures still name their cause in the text. These
+            // are recognised by it — and then described, never quoted.
+            else -> when {
+                // The M2's most common Bluetooth failure — "Bluetooth unexpectedly disconnected during
+                // operation" — is not always filed under a Bluetooth code.
+                "bluetooth" in low && ("disconnect" in low || "shutdown" in low || "unexpected" in low) -> BLUETOOTH_DROPPED
+                // The saved Terminal Location was deleted, or belongs to a different Stripe account
+                // than the one Payments now points at. Nothing done at the reader can fix that.
+                "no such location" in low ->
+                    "The card-reader location saved for this masjid no longer exists in Stripe. An admin needs to open Settings → Payments in the admin panel and choose the location again."
+                "permission" in low -> PERMISSIONS_MISSING
+                else ->
+                    "The card reader ran into a problem. Try again — if it keeps happening, Devices → Logs in the admin panel says what went wrong."
+            }
         }
-        return msg.ifBlank { "Something went wrong with the reader. Try again." }
+    }
+
+    /** The M2's most common Bluetooth failure is almost always one of two operational causes, so guide
+     *  the admin to the fix rather than showing a bare error. (Stripe: don't pair via Android Bluetooth
+     *  settings; a first-connect firmware update needs ≥50% battery.) */
+    private const val BLUETOOTH_DROPPED =
+        "The Bluetooth reader dropped. Two things fix this almost every time: 1) do NOT pair " +
+            "the reader in the tablet's Bluetooth settings — if you did, tap Forget there — and connect " +
+            "it only from here; 2) charge the reader to at least 50% (its first connection may install a " +
+            "required update). Then keep it close and search for it again."
+
+    private const val PERMISSIONS_MISSING =
+        "This app hasn’t been allowed everything the card reader needs. Allow Location and Nearby " +
+            "devices for it in Android Settings, then try again."
+
+    /**
+     * What the reader asks a DONOR to do, in words a passer-by understands. The card step shows it.
+     *
+     * Before this, the SDK's own label was shown, tidied — "Try another read method", "Check your
+     * mobile device", "Multiple contactless cards detected" — which is Stripe's vocabulary, not a
+     * donor's. Matched by enum NAME rather than by constant, because the prettifier's original note
+     * still holds: the set of messages varies between SDK versions, and matching names means a message
+     * a later SDK adds or renames is still shown (tidied) instead of breaking the build. Every name
+     * below was checked against 5.6.0. Worded as instructions with no full stop, like the "Tap or
+     * insert your card" they replace.
+     */
+    private fun donorPrompt(message: ReaderDisplayMessage): String = when (message.name) {
+        "RETRY_CARD" -> "Please try that card again"
+        "INSERT_CARD" -> "Please insert your card"
+        "INSERT_OR_SWIPE_CARD" -> "Please insert or swipe your card"
+        "SWIPE_CARD" -> "Please swipe your card"
+        "REMOVE_CARD" -> "You can take your card now"
+        "MULTIPLE_CONTACTLESS_CARDS_DETECTED" -> "Please tap just one card"
+        "TRY_ANOTHER_READ_METHOD" -> "That didn’t read — please try inserting or tapping instead"
+        "TRY_ANOTHER_CARD" -> "Please try a different card"
+        "CARD_REMOVED_TOO_EARLY" -> "The card came out too soon — please insert it again and leave it in"
+        "CHECK_MOBILE_DEVICE" -> "Please check your phone to finish"
+        else -> prettifyReaderMessage(message.toString())
     }
 
     /** Turn an SDK ReaderDisplayMessage enum name (e.g. "INSERT_OR_SWIPE_CARD") into readable text
-     *  without hard-coding the enum values (which vary by SDK version). */
+     *  without hard-coding the enum values (which vary by SDK version). Now only the fallback, for a
+     *  message [donorPrompt] has no words for yet. */
     private fun prettifyReaderMessage(raw: String): String =
         raw.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }
 }

@@ -40,13 +40,13 @@ reference repos, **those win — and flag it.** Resolutions:
 
 | # | Topic | `CLAUDE.md` says | We do (and why) |
 |---|-------|------------------|-----------------|
-| 1 | **Design accent** | "emerald/gold" | **Cyan `#22D3EE` + amber `#F59E0B`** — the shipped `DESIGN.md` / Donations `tokens.css` are cyan (they "mirror the OpenMasjidOS palette"). Emerald is only a selectable accent. `tokens.css` + `glass.css` are copied verbatim from Donations. |
-| 2 | **Node version** | "Node 20+" | **`node:22-slim`** everywhere — matches every shipped app's Docker build + runtime. |
+| 1 | **Design accent** | "emerald/gold" | **Cyan `#22D3EE` + amber `#F59E0B`** — the shipped `DESIGN.md` / Donations `tokens.css` are cyan (they "mirror the OpenMasjidOS palette"). Emerald is only a selectable accent. `tokens.css` + `glass.css` were first copied verbatim from Donations and have since diverged: light mode was ported from OpenMasjidStudents (see *Light mode* below), and `tokens.css` now mirrors the OpenMasjidOS palette, differing deliberately where a platform value fails WCAG AA (`CLAUDE.md` §19). |
+| 2 | **Node version** | "Node 20+" | **`node:22-slim`** everywhere — matches every shipped app's Docker build + runtime. `CLAUDE.md` §13 has since been corrected to say Node 22. |
 | 3 | **Password/PIN hashing** | argon2 (§13/§14) | **scrypt** (chosen by maintainer, 2026-07-02) — `node:crypto` `scryptSync` on the server (mirrors Donations `auth.ts`), and **BouncyCastle** `org.bouncycastle.crypto.generators.SCrypt` (lightweight API, no JCE provider registration) offline on Android for the kiosk PIN, over the shared wire format `scrypt$N$r$p$saltB64$hashB64`. Zero extra native deps, Pi-friendly. Applied in slice 2; `CLAUDE.md` §13/§14 have since been corrected to say scrypt. |
 | 4 | **Compose hardening** | example omits it | Added `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, `tmpfs: [/tmp]` — matches Donations; the catalog validator permits it; least-privilege is a hard rule. |
-| 5 | **`domain:` / `tunnel:`** | (Kiosk forbade it) | **Set (v0.9.20+)** for opt-in REMOTE adoption. The server is base-path aware (mirrors Donations: `fetchFabricSite()` → `cachedFabricSite().basePath` drives Fastify `rewriteUrl` + `<base href>`/`window.__OMOS_BASE__` injection; `web/base.ts` is now LIVE, no longer a no-op). Kiosk-endpoints-only over the tunnel, and it is an **allowlist, not a denylist**: `blockedOverTunnel` refuses EVERY `/api` path except `/api/app`, `/api/public/*` and `/api/kiosk/*` — so a new `/api` route is refused until it is allow-listed, which is the safe direction. All of `/fabric/*` is refused by a SEPARATE rule, because `/fabric` is not under `/api` and every non-`/api` path otherwise falls through as allowed (correct for the SPA, `/new`, `/download` and `/uploads`). See `REMOTE_ADOPTION.md`. |
+| 5 | **`domain:` / `tunnel:`** | (Kiosk forbade it) | **Set (v0.9.20+)** for opt-in REMOTE adoption. The server is base-path aware (mirrors Donations: `fetchFabricSite()` → `cachedFabricSite().basePath` drives Fastify `rewriteUrl` + `<base href>`/`window.__OMOS_BASE__` injection; `web/base.ts` is now LIVE, no longer a no-op). Kiosk-endpoints-only over the tunnel (plus, since 0.13.0, the remote admin — below), and it is an **allowlist, not a denylist**: `blockedOverTunnel` refuses EVERY `/api` path except `/api/app`, `/api/public/*`, `/api/kiosk/*` and the remote admin's `/api/session`, `/api/logout` and `/api/admin/*` — which over the tunnel answer only to an admin OpenMasjidOS vouches for, while `/api/login` and `/api/setup` stay LAN-only — so a new `/api` route is refused until it is allow-listed, which is the safe direction. All of `/fabric/*` is refused by a SEPARATE rule, because `/fabric` is not under `/api` and every non-`/api` path otherwise falls through as allowed (correct for the SPA, `/new`, `/download` and `/uploads`). See `REMOTE_ADOPTION.md`. |
 | 6 | **Webhooks** | (Kiosk has none) | No raw-body JSON parser; default JSON parsing. Payment truth is confirmed by *retrieving* the PaymentIntent from Stripe, not by webhook. |
-| 7 | **Cookie Secure** | — | `COOKIE_SECURE=1` in the image (we're always behind the platform's TLS). |
+| 7 | **Cookie Secure** | — | `COOKIE_SECURE=1` in `docker-compose.yml`'s `environment:` (we're always behind the platform's TLS). |
 | 8 | **Stripe Terminal** | Mirror Donations | Donations uses **web Elements / `automatic_payment_methods`**, NOT Terminal — so connection tokens, Terminal Locations, `card_present`, and `generated_card`→Subscription are **net-new** here, built from the Stripe Terminal SDK docs (slices 3, 6, 7). Only the Fabric/SSO/DB/CSV patterns are mirrored. |
 
 ### Decisions locked by the maintainer (2026-07-02)
@@ -58,8 +58,8 @@ reference repos, **those win — and flag it.** Resolutions:
   written in slice 3.
 - **Android applicationId / namespace = `org.openmasjidos.kiosk`** — reverse-domain of the
   maintainer-owned openmasjidos.org. Permanent once released (a different id can't update
-  an installed app), so it is fixed now. The `CLAUDE.md` §10 ADB example still shows the
-  old default `com.openmasjid.kiosk` — the real command is
+  an installed app), so it is fixed now. The `CLAUDE.md` §10 ADB example once showed the
+  old default `com.openmasjid.kiosk`; it now has the real command,
   `adb shell dpm set-device-owner org.openmasjidos.kiosk/.KioskAdminReceiver`.
 - **Release signing keystore** — deferred to first release (slice 9); CI debug-signs until
   then. When ready: `keytool` → `.jks` → 4 GitHub secrets (`SIGNING_KEYSTORE_BASE64`,
@@ -74,7 +74,8 @@ reference repos, **those win — and flag it.** Resolutions:
 
 ## Fabric wire contract (never rename)
 
-Env `OPENMASJID_BASE_URL` / `OPENMASJID_APP_ID` / `OPENMASJID_APP_SECRET`; header
+Env `OPENMASJID_BASE_URL` / `OPENMASJID_APP_ID` / `OPENMASJID_APP_SECRET` (plus
+`OPENMASJID_PUBLIC_URL`, a convenience mirror of `/api/fabric/site` for remote adoption); header
 `X-OpenMasjid-App-Secret`; cookie `omos_session`. Endpoints used: `/api/auth/session`
 (SSO), `/api/public/appearance` (theme + reachability), `/api/fabric/stripe/accounts` +
 `/api/fabric/stripe?account=<id>` (Stripe), `/api/fabric/notify`, and **`/api/fabric/site`**
@@ -99,7 +100,7 @@ Built since the slice plan ran out, each worth knowing about architecturally:
 | **Refunds** | `/api/admin/donations/:id/refund`, `store.recordRefund` | Refund → record → notify, in that order. Totals are netted in SQL (`SUM(amount_minor - refunded_minor)`), so a headline figure can never overstate what the masjid kept. |
 | **The donor's cancel link** | the encapsulated `donor` plugin in `index.ts` | The **only public route that changes anything**. The token is the credential: 256-bit, stored only as a hash, and able to do exactly one thing. Its urlencoded body parser is scoped to that plugin so no other POST route gains cross-origin form acceptance. |
 | **Multi-account reader** | `ReaderManager.registerFor`, `locationForAccount` | A Terminal reader is bound to one account by its connection token. The tablet re-registers against the campaign's account just before collecting, and each account gets its own Location, created from the masjid address already on file. |
-| **WhatsApp pacing** | `WhatsAppPacing` + `whatsappPermit` in `alerts.ts`, `raiseAlert` in `index.ts` | OpenMasjidOS 0.51.1 removed every send limit it used to impose (per-recipient cooldown, caps, quiet hours, the warm-up ramp). That silently deleted a backstop this app depended on without knowing: `payment-failed` fires per refused PaymentIntent and has no natural bound, so a Stripe outage during jummah is one message per attempted donation. Ban risk attaches to the NUMBER, is shared by every app on the box, and is unrecoverable. **The pacing is now the masjid's to set** (0.12.0-dev.10): a per-hour and per-day message budget plus a per-alert burst gap, defaulting to 20/100/2min. The first version was one per alert id per 30 minutes — two an hour, *below* the platform's own retired caps, so a flapping reader told you once and went quiet; and the platform's contract says an app is the wrong place for a hard ceiling anyway (“an app-level limiter cannot see the number's total traffic”). The ledger is PERSISTED, because an in-memory one resets a *daily* cap on every deploy. Budget counts messages, is charged only for what actually went out, and groups go first under a squeeze. Refusals are stored **per recipient** and shown on the row that caused them; the 202's `id` is resolved to sent/failed via the 0.51.1 status endpoint, with a 15-minute reconcile that keeps asking for the platform's full 24-hour window — the first version gave up at ten minutes because the history was then 200 records SHARED across all apps, so a late failure read as `queued` for ever. |
+| **WhatsApp pacing** | `WhatsAppPacing` + `whatsappPermit` in `alerts.ts`, `raiseAlert` in `index.ts` | OpenMasjidOS 0.51.1 removed every send limit it used to impose (per-recipient cooldown, caps, quiet hours, the warm-up ramp). That silently deleted a backstop this app depended on without knowing: `payment-failed` fires per refused PaymentIntent and has no natural bound, so a Stripe outage during jummah is one message per attempted donation. Ban risk attaches to the NUMBER, is shared by every app on the box, and is unrecoverable. **The pacing is now the masjid's to set** (0.12.0-dev.10): a per-hour and per-day message budget plus a per-alert burst gap, defaulting to 20/100/2min. The first version was one per alert id per 30 minutes — two an hour, *below* the platform's own retired caps, so a flapping reader told you once and went quiet; and the platform's contract says an app is the wrong place for a hard ceiling anyway (“an app-level limiter cannot see the number's total traffic”). The ledger is PERSISTED, because an in-memory one resets a *daily* cap on every deploy. Budget counts messages, is charged only for what actually went out, and groups go first under a squeeze. Refusals are stored **per recipient** and shown on the row that caused them; the 202's `id` is resolved to sent/failed via the 0.51.1 status endpoint, with a 15-minute reconcile that keeps asking for up to seven days, because the platform now keeps a still-queued message's record for as long as it waits (0.51.1-dev.13) — the first version gave up at ten minutes because the history was then 200 records SHARED across all apps, so a late failure read as `queued` for ever. |
 | **Payer-covered card fee** | `students.ts` (`grossUpForStudentsFee`, `kioskFeeRate`), `GivingStep.TuitionFeeConfirm` | students/billing 0.51.0, additive — contract still `v: 2`. The fee is a percentage of the **gross**, not the tuition, or the school lands a few cents short and the invoice never closes. Two things are kept deliberately apart: the PaymentIntent charges the gross, the Students ledger is sent the **tuition** (a gross in `amountCents` reads as an overpayment and compounds). The rate is pinned to the tuition SESSION at lookup, so a rate change mid-payment cannot alter a quoted total — and **no rate is ever sent to the tablet**, which renders the disclosure from the server's own reply so the total shown cannot differ from the total charged. |
 | **Light mode** | `web/src/styles/tokens.css`, `server/src/theme-contrast.test.ts` | Ported from OpenMasjidStudents (2026-08-17). Light mode used to lighten only the glass and keep the dark backdrop — a workaround for the real cause, which is that every `[data-wallpaper]` block is a dark gradient at the SAME specificity as `[data-theme="light"]` but later in the file, so it overwrote the light scene. Fixed by giving each wallpaper a **light counterpart at two-attribute specificity** (hue kept, lightness inverted) and making on-scene ink follow **the scene, not the theme** — a custom image states its own tone, in both directions, so a dark photo under light theme still gets light ink. All 18 theme×wallpaper combinations are contrast-tested. |
 | **WhatsApp admin commands** | `commands.ts`, `POST /fabric/commands/run`, `CLAUDE.md` §18 | The **first inbound Fabric route** — everything else in `fabric.ts` is us calling the platform. So it is the first place this app *checks* a credential rather than presenting one, and it authenticates on two independent facts: our own app secret, and a caller header (`omos:platform`) that no app id can hold because the colon is outside the app-id charset. LAN-only: `/fabric` is **not** covered by the `/api` tunnel allowlist and had to be added to it explicitly. |
@@ -115,7 +116,9 @@ Built since the slice plan ran out, each worth knowing about architecturally:
 
 `.github/workflows/test.yml` runs the server suite (`tsc`, `tsc -p tsconfig.test.json`,
 `node --test`) and the web build on every push to `dev`/`main` **and on every pull request**, and
-`build-image.yml` will not publish an image unless it is green.
+`build-image.yml` will not publish an image unless it is green. (On a push it runs from
+`build-image.yml`, so a push touching only that workflow's `paths-ignore` files — docs, `LICENSE`,
+`screenshots/`, `docker-compose.yml` — runs neither.)
 
 That gate is new as of 0.12.0, and its absence is worth recording rather than quietly fixing: for
 the whole of 0.1.0–0.11.0 **CI never ran `npm test` at all.** The Dockerfile's `npm run build`
@@ -128,14 +131,14 @@ because `tsconfig.json` excludes `*.test.ts` and tsx strips types without checki
 
 Still unverifiable here:
 
-- **No Android SDK and no Docker on the dev machine.** `./gradlew assembleDebug` and
-  `docker compose up` are proven by CI only — so **CI's `build-apk` job remains the only compile
-  check the Kotlin gets**, and a Kotlin change is not proven until that job is green. There are no
+- **No Android SDK on the dev machine.** `./gradlew assembleDebug` is proven by CI only — so
+  **CI's `build-apk` job remains the only compile check the Kotlin gets**, and a Kotlin change is not proven until that job is green. There are no
   Android unit tests at all (`ACTION_REQUIRED.md` §7).
 - Anything user-facing on the server should also be checked by **booting it and pressing the
   thing** — a `415` shipped to a donor's cancel button precisely because it was only reasoned about.
-- **The admin panel has no test runner of its own.** Two server tests reach across into `web/` for
-  the parts where being wrong costs real money or readability — `theme-contrast.test.ts` (design
-  tokens) and `refund-amount.test.ts` (currency arithmetic). Everything else in `web/` is checked by
-  `tsc` and by eye.
+- **The admin panel has no test runner of its own.** Nine server tests reach across into `web/` for
+  the parts where being wrong costs real money or readability — among them `theme-contrast.test.ts`,
+  `accent-contrast.test.ts` and `ink-contrast.test.ts` (design tokens), `prepaint.test.ts` (the
+  pre-paint script), `dates-parity.test.ts` (dates) and `refund-amount.test.ts` (currency
+  arithmetic). Everything else in `web/` is checked by `tsc` and by eye.
 - Hardware paths — a real M2 reader, a real card, a real refund — can only be confirmed on a box.

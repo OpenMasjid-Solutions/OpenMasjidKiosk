@@ -6,9 +6,9 @@
   gets its colors from ui/theme/Color.kt; these mirror the same values for non-Compose use.
 -->
 <resources>
-    <!-- Surfaces used for the pre-Compose window background + system bars. -->
+    <!-- The surface for the pre-Compose window background + system bars. Dark only: the kiosk is
+         dark in both system modes (see themes.xml), so the light surface it once had is gone. -->
     <color name="surface_dark">#FF030D1A</color>
-    <color name="surface_light">#FFF0F9FF</color>
 
     <!-- Launcher icon (adaptive): white, to match the black-on-white brand mark. -->
     <color name="ic_launcher_background">#FFFFFFFF</color>

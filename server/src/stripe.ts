@@ -6,8 +6,8 @@
  *  ever receives Terminal **connection tokens** and PaymentIntent client secrets.
  *
  *  Unlike the web-checkout apps, the kiosk uses Stripe **Terminal** (card-present via the
- *  M2 reader): connection tokens, a Terminal Location, and (in later slices) card_present
- *  PaymentIntents. The API version is pinned explicitly (Terminal features are version-
+ *  M2 reader): connection tokens, a Terminal Location, and card_present PaymentIntents —
+ *  plus card ones for keyed entry, both captured by the server after it re-checks them. The API version is pinned explicitly (Terminal features are version-
  *  sensitive) rather than floating with the SDK default. */
 import Stripe from 'stripe';
 
@@ -124,17 +124,33 @@ export async function verifySecretKey(secretKey: string): Promise<{ ok: boolean;
 }
 
 // ── Currency minor units ──────────────────────────────────────────────────────
+// The SAME three tables are in web/src/money.ts and android core ui/Money.kt — a test keeps the web
+// copy equal to this one, and the tablet's copy has to be changed by hand alongside.
 const ZERO_DECIMAL = new Set([
-  'BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
+  'BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
 ]);
-// Three-decimal currencies (Gulf/Maghreb) — 1 major unit = 1000 minor units. (Stripe requires the
-// smallest amount to be a multiple of 10 for these; we don't enforce that here.)
+// Zero-decimal in ISO, but Stripe takes them as TWO-decimal values "where the decimal amount is always
+// 00" (docs.stripe.com/currencies, special cases) — 5 UGX is `amount: 500`. UGX sat in the
+// zero-decimal list until 0.14.0, so every Ugandan charge went to Stripe at a hundredth.
+const WHOLE_UNITS_IN_HUNDREDTHS = new Set(['ISK', 'UGX']);
+// Three-decimal currencies (Gulf/Maghreb) — 1 major unit = 1000 minor units, and the last digit must
+// be 0 (card acquirers refuse a non-zero third decimal), which minorStep encodes.
 const THREE_DECIMAL = new Set(['BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND']);
 export function currencyDecimals(currency: string): number {
   const c = currency.toUpperCase();
   if (ZERO_DECIMAL.has(c)) return 0;
   if (THREE_DECIMAL.has(c)) return 3;
   return 2;
+}
+/** The smallest amount Stripe can charge, in minor units: 100 for ISK and UGX (whole units only),
+ *  10 for the three-decimal dinars, 1 everywhere else. Every amount we send is a multiple of it —
+ *  presets are rounded to it on save, the cover-fee total rounds UP to it, and a custom amount that
+ *  is not one is refused (store.isAllowedAmountForCampaign). */
+export function minorStep(currency: string): number {
+  const c = currency.toUpperCase();
+  if (WHOLE_UNITS_IN_HUNDREDTHS.has(c)) return 100;
+  if (THREE_DECIMAL.has(c)) return 10;
+  return 1;
 }
 export function toMinor(major: number, currency: string): number {
   return Math.round(major * 10 ** currencyDecimals(currency));
@@ -296,8 +312,11 @@ export async function createCardPresentPaymentIntent(
 
 /** Create a **keyed/manual** (card, not card-present) PaymentIntent. The donor types the card into
  *  Stripe's own SDK form on the tablet, which tokenises it and confirms this PI directly with Stripe
- *  — our code/server never sees the card number (same posture as the reader). Automatic capture: the
- *  SDK confirm settles it, and [completeCardPresentPaymentIntent] verifies `succeeded` before we record. */
+ *  — our code/server never sees the card number (same posture as the reader). MANUAL capture, like
+ *  the reader: the confirm only authorises, and [completeCardPresentPaymentIntent] captures after
+ *  re-checking with Stripe. It used to auto-capture, so a lost `/complete` (a dropped connection, a
+ *  crash) left the money taken and no donation recorded; now Stripe releases that authorisation on
+ *  its own. kioskpay.html already treats `requires_capture` as a completed confirm. */
 export async function createCardPaymentIntent(
   secretKey: string,
   input: CreatePaymentIntentInput,
@@ -313,6 +332,7 @@ export async function createCardPaymentIntent(
       // never confirm. Cards authenticate via native 3DS2 in-process (or, rarely, a Custom Tab we now
       // allow-list during lock task — see KioskController.enterKiosk).
       payment_method_types: ['card'],
+      capture_method: 'manual',
       description: input.description || undefined,
       receipt_email: input.receiptEmail || undefined,
       // Monthly only. There is no `generated_card` for a keyed card — the PaymentIntent's own
@@ -351,11 +371,22 @@ export interface CompletedPaymentIntent {
   metadata: Record<string, string>;
 }
 
+/** A PaymentIntent the caller did not make — never captured, never recorded. */
+export class NotOurPaymentIntent extends Error {}
+
 /** The server side of "verify before we record": retrieve the PI from Stripe, capture it if it's
- *  `requires_capture`, and report the TRUE outcome. Never trusts the tablet. */
-export async function completeCardPresentPaymentIntent(secretKey: string, id: string): Promise<CompletedPaymentIntent> {
+ *  `requires_capture`, and report the TRUE outcome. Never trusts the tablet — including about WHICH
+ *  payment it is finishing: `owns` sees the metadata we set at create time and must accept it before
+ *  anything is captured, or a device token plus a guessed id could capture another kiosk's (or
+ *  another system's, on a shared account) authorisation and book it as its own donation. */
+export async function completeCardPresentPaymentIntent(
+  secretKey: string,
+  id: string,
+  owns: (metadata: Record<string, string>) => boolean,
+): Promise<CompletedPaymentIntent> {
   const c = client(secretKey);
   let pi = await c.paymentIntents.retrieve(id, { expand: ['latest_charge'] });
+  if (!owns((pi.metadata ?? {}) as Record<string, string>)) throw new NotOurPaymentIntent(id);
   if (pi.status === 'requires_capture') {
     pi = await c.paymentIntents.capture(id, { expand: ['latest_charge'] });
   }
@@ -900,10 +931,13 @@ export async function listPlanInvoices(secretKey: string, subscriptionId: string
 /** Fetch a subscription and refuse to touch anything the kiosk didn't create. These writes stop a
  *  real person's standing order, and the account may well hold the masjid's own subscriptions — an
  *  id that arrived by hand must never be able to cancel one of those from our screens. */
-async function requireKioskSubscription(c: Stripe, id: string): Promise<Stripe.Subscription> {
+async function requireKioskSubscription(c: Stripe, id: string, ownedLocally = false): Promise<Stripe.Subscription> {
   assertSubscriptionId(id);
   const sub = await c.subscriptions.retrieve(id, { expand: PLAN_EXPAND });
-  if (((sub.metadata ?? {}) as Record<string, string>).app !== 'kiosk') {
+  // A plan we hold a local record of is ours whatever its metadata now says (someone may have edited
+  // it in the Stripe dashboard) — the same rule retrievePlan applies, so a plan the screens can show
+  // can also be stopped. Without it a donor's own cancel link failed and they kept being charged.
+  if (!ownedLocally && ((sub.metadata ?? {}) as Record<string, string>).app !== 'kiosk') {
     throw new Error('That subscription wasn’t set up by the kiosk.');
   }
   return sub;
@@ -918,9 +952,9 @@ async function planAfterWrite(c: Stripe, sub: Stripe.Subscription): Promise<Stri
 /** End a recurring donation. `immediately` stops it now; otherwise it runs to the end of the period
  *  the donor has already paid for — the kind thing to do with a gift already given, and what the
  *  admin screen offers by default. */
-export async function cancelPlan(secretKey: string, id: string, immediately: boolean): Promise<StripePlan> {
+export async function cancelPlan(secretKey: string, id: string, immediately: boolean, ownedLocally = false): Promise<StripePlan> {
   const c = client(secretKey);
-  const sub = await requireKioskSubscription(c, id);
+  const sub = await requireKioskSubscription(c, id, ownedLocally);
   // Stripe (rightly) refuses to cancel the same subscription twice, but a double-clicked button
   // shouldn't read as a failure when the admin's intent is already true.
   if (sub.status === 'canceled') return planAfterWrite(c, sub);
@@ -939,9 +973,9 @@ export async function cancelPlan(secretKey: string, id: string, immediately: boo
  *  the moment collection resumes, which is not what anyone means by "pause my donation".
  *  pause_collection leaves the subscription's status alone (it does NOT become `paused`), so
  *  resuming is simply clearing it — subscriptions.resume answers a different kind of pause. */
-export async function pausePlan(secretKey: string, id: string, paused: boolean): Promise<StripePlan> {
+export async function pausePlan(secretKey: string, id: string, paused: boolean, ownedLocally = false): Promise<StripePlan> {
   const c = client(secretKey);
-  const sub = await requireKioskSubscription(c, id);
+  const sub = await requireKioskSubscription(c, id, ownedLocally);
   // Stripe refuses any update to a dead subscription, which would surface as the route's generic
   // "try again" — advice that can never work. Say the true thing instead.
   if (sub.status === 'canceled' || sub.status === 'incomplete_expired') throw new Error('That plan has already ended.');
@@ -1002,13 +1036,13 @@ export function scheduledEndSec(currentPeriodEndSec: number, interval: string, i
 export async function schedulePlanEnd(
   secretKey: string,
   id: string,
-  opts: { endAt?: number | null; charges?: number | null },
+  opts: { endAt?: number | null; charges?: number | null; ownedLocally?: boolean },
 ): Promise<StripePlan> {
   const endAt = opts.endAt ?? null;
   const charges = opts.charges ?? null;
   if (endAt !== null && charges !== null) throw new Error('Choose either an end date or a number of charges, not both.');
   const c = client(secretKey);
-  const sub = await requireKioskSubscription(c, id);
+  const sub = await requireKioskSubscription(c, id, opts.ownedLocally === true);
   let cancelAt: number | null = null;
   if (endAt !== null) {
     // Stripe rejects a cancel_at in the past, and so should we — with words the admin can act on

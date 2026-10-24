@@ -124,6 +124,99 @@ test('panel text clears AA on the glass in both themes', () => {
   }
 });
 
+// ── The ink on FILLED things, and the status colours used as text ─────────────────────────────
+// "A filled button needs ink chosen for its fill, not a fixed white" (app UI spec §2). These are the
+// pairs the stylesheet actually paints, read from the file so a "tidy" of any value is caught here.
+
+const appCss = readFileSync(new URL('../../web/src/styles/app.css', import.meta.url), 'utf8');
+const dark = () => block(':root,\n[data-theme="dark"]');
+const light = () => block('[data-theme="light"]');
+/** Every light/dark surface text can sit on, from the file itself. */
+const surfaces = (b: string) => ['color-surface', 'color-surface-raised', 'color-surface-overlay'].map((t) => tokenIn(b, t));
+/** An rgba() wash composited over a surface, as a hex. */
+function over(rgba: string, bg: string): string {
+  const m = /rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/.exec(rgba);
+  assert.ok(m, `not an rgba(): ${rgba}`);
+  const a = Number(m[4]);
+  const [br, bgc, bb] = rgb(bg);
+  const mix = [Number(m[1]), Number(m[2]), Number(m[3])].map((v, i) => Math.round(v * a + [br, bgc, bb][i] * (1 - a)));
+  return `#${mix.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+test('a filled danger button’s ink reads in both themes — and the stylesheet uses it', () => {
+  for (const [theme, b] of [['dark', dark()], ['light', light()]] as const) {
+    const ink = tokenIn(b, 'color-on-danger');
+    for (const fill of [tokenIn(b, 'color-danger'), tokenIn(b, 'color-danger-hover')]) {
+      assert.ok(/^#[0-9a-fA-F]{6}$/.test(ink) && /^#[0-9a-fA-F]{6}$/.test(fill), `${theme}: on-danger/danger missing`);
+      const r = contrast(ink, fill);
+      assert.ok(r >= AA, `${theme}: ${ink} on ${fill} is ${r.toFixed(2)}:1 — this is the delete button`);
+    }
+  }
+  // It used to borrow the primary button's ink, and passed only by coincidence.
+  assert.match(appCss, /\.device-danger\s*\{[^}]*color:\s*var\(--color-on-danger\)/);
+});
+
+test('the default button’s ink reads on its fill in both themes', () => {
+  for (const [theme, b] of [['dark', dark()], ['light', light()]] as const) {
+    for (const fill of [tokenIn(b, 'color-btn'), tokenIn(b, 'color-btn-hover')]) {
+      const r = contrast(tokenIn(b, 'color-on-primary'), fill);
+      assert.ok(r >= AA, `${theme}: on-primary on ${fill} is ${r.toFixed(2)}:1`);
+    }
+  }
+});
+
+test('filled selected controls paint the FILL colour their ink was chosen for', () => {
+  // In light theme --color-primary is a darker FOREGROUND shade; the on-primary ink belongs on
+  // --color-btn. A selected tab painted with --color-primary puts dark ink on a dark fill.
+  for (const sel of ['.btn--primary', '.seg__opt--on', '.ce-tab--on', '.emblem']) {
+    const i = appCss.indexOf(`\n${sel}`);
+    assert.ok(i >= 0, `${sel} not found`);
+    const rule = appCss.slice(i, appCss.indexOf('}', i));
+    assert.match(rule, /background:\s*var\(--color-btn\)/, `${sel} must fill with --color-btn`);
+  }
+});
+
+test('text-coloured tokens clear AA on every surface and on their own washes, in both themes', () => {
+  const failures: string[] = [];
+  for (const [theme, b] of [['dark', dark()], ['light', light()]] as const) {
+    const bgs = surfaces(b);
+    const checks: [string, string[]][] = [
+      ['color-ink', bgs],
+      ['color-ink-muted', bgs],
+      ['color-ink-faint', bgs],
+      ['color-primary', [...bgs, ...bgs.map((s) => over(tokenIn(b, 'color-primary-subtle'), s))]],
+      ['color-success-ink', bgs],
+      ['color-warning-ink', bgs],
+      ['color-gold-ink', [...bgs, ...bgs.map((s) => over(tokenIn(b, 'color-gold-subtle'), s))]],
+      ['color-danger-ink', [...bgs, ...bgs.map((s) => over(tokenIn(b, 'color-danger-subtle'), s))]],
+    ];
+    for (const [token, backgrounds] of checks) {
+      const ink = tokenIn(b, token);
+      if (!/^#[0-9a-fA-F]{6}$/.test(ink)) {
+        failures.push(`${theme}: --${token} is not a hex colour (${ink || 'missing'})`);
+        continue;
+      }
+      for (const bg of backgrounds) {
+        const r = contrast(ink, bg);
+        if (r < AA) failures.push(`${theme}: --${token} ${ink} on ${bg} = ${r.toFixed(2)}:1`);
+      }
+    }
+  }
+  assert.deepEqual(failures, [], `text below ${AA}:1 —\n  ${failures.join('\n  ')}`);
+});
+
+test('status colours are never used as TEXT directly — only their -ink variants', () => {
+  // The fills (#16A34A, #D97706 in light) measure 3.0–3.3:1 as text. A graphic (a dot, a tick in the
+  // kiosk preview) may still use them; text must not.
+  const allowed = new Set(['.gv-check']);
+  const bad: string[] = [];
+  for (const m of appCss.matchAll(/\n([^\n{}]+)\{[^}]*?(?<![-\w])color:\s*var\(--color-(gold|warning|success|danger)\)/g)) {
+    const sel = m[1].trim();
+    if (!allowed.has(sel)) bad.push(`${sel} → --color-${m[2]}`);
+  }
+  assert.deepEqual(bad, [], `use the -ink token for text:\n  ${bad.join('\n  ')}`);
+});
+
 test('the two themes really are different themes', () => {
   // A guard against a merge or a "tidy" collapsing light mode back into the dark values, which is
   // how it would silently stop being a light mode at all.

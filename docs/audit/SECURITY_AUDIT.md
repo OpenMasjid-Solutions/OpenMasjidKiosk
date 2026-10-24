@@ -33,7 +33,8 @@
 >
 > Still open and unchanged, both needing a decision rather than a patch:
 > **KIOSK-012** (container runs as root — needs a coordinated volume migration) and
-> **KIOSK-013** (donation totals use UTC day boundaries). See `ACTION_REQUIRED.md` §5 and §6.
+> **KIOSK-013** (donation totals use UTC day boundaries — since resolved in 0.14.0 by a masjid time
+> zone setting). See `ACTION_REQUIRED.md` §5 and §6.
 
 **Audit date:** 2026-08-04
 **Baseline commit:** `b5df3612dd2e3f281deef5ad0b69c241fda01485` (tag `pre-audit-2026-08-04`, `main`, tree clean)
@@ -133,14 +134,23 @@ There are no webhooks, no message consumers, no cron, no deep links.
 | KIOSK-010 | Missing `X-Content-Type-Options` / `Referrer-Policy` | Low | Confirmed | `server/src/index.ts` | Fixed |
 | KIOSK-011 | HTTPS-upgrade redirect port is influenced by an untrusted header | Low | Likely | `server/src/index.ts:112-127` | **Deferred** |
 | KIOSK-012 | Container runs as root | Low | Confirmed | `Dockerfile:33` | **Deferred** |
-| KIOSK-013 | "Today / this week / this month" totals use the container's timezone | Info | Confirmed | `server/src/store.ts:1422-1453` | **Deferred** |
-| KIOSK-014 | `consumeTuitionSession` is dead code; its doc comment describes behavior that does not happen | Info | Confirmed | `server/src/students.ts:536` | **Deferred** |
+| KIOSK-013 | "Today / this week / this month" totals use the container's timezone | Info | Confirmed | `server/src/store.ts:1422-1453` | **Resolved (0.14.0)** |
+| KIOSK-014 | `consumeTuitionSession` is dead code; its doc comment describes behavior that does not happen | Info | Confirmed | `server/src/students.ts:536` | **Deferred**; deleted 2026-08-13 |
 | KIOSK-015 | `ScryptPin` accepts an unbounded cost parameter | Low | Likely | `android/…/security/ScryptPin.kt:51` | Fixed |
 | KIOSK-016 | No Android unit tests exist, so pure security-relevant functions can't be tested | Info | Confirmed | `android/app/build.gradle.kts` | **Deferred** |
 
 ---
 
+<a id="kiosk-001"></a>
+
 ### KIOSK-001 — Tunnel guard bypassed by percent-encoding — **High**, Confirmed
+
+> **Status note, 2026-10-23:** the boundary this finding defended moved by design in 0.13.0. Over
+> the tunnel, `/api/session`, `/api/logout` and `/api/admin/*` are now allow-listed for remote
+> administration and answer only to an admin OpenMasjidOS vouches for; `/api/login` and `/api/setup`
+> stay LAN-only in every spelling, dot segments included (`server/src/tunnel.ts`,
+> `remote-access.test.ts`). The fix still stands; the "admin panel stays LAN-only" promise quoted
+> below no longer does.
 
 **Where:** [`server/src/index.ts:137-143`](../../server/src/index.ts#L137-L143)
 
@@ -379,6 +389,8 @@ No security headers are set on any response (verified with `curl -D -` against a
 
 ---
 
+<a id="kiosk-012"></a>
+
 ### KIOSK-012 — Container runs as root — Low, Confirmed — **DEFERRED**
 
 **Where:** [`Dockerfile:33`](../../Dockerfile#L33) — `FROM node:22-slim AS runtime` with no `USER` directive.
@@ -391,7 +403,12 @@ Doing this properly needs a coordinated change (image + compose `user:` + a one-
 
 ---
 
-### KIOSK-013 — Donation totals use the container's timezone — Info, Confirmed — **DEFERRED**
+<a id="kiosk-013"></a>
+
+### KIOSK-013 — Donation totals use the container's timezone — Info, Confirmed — **DEFERRED**, resolved in 0.14.0
+
+> Resolved in 0.14.0 by a masjid time zone setting; see `ACTION_REQUIRED.md` §6. The finding below
+> is kept as written, so its line numbers refer to the audited 0.10.0.
 
 **Where:** [`server/src/store.ts:1422-1453`](../../server/src/store.ts#L1422-L1453)
 
@@ -401,7 +418,12 @@ Not a security issue, but it is exactly the domain-correctness class the engagem
 
 ---
 
+<a id="kiosk-014"></a>
+
 ### KIOSK-014 — Dead code with a misleading contract — Info, Confirmed — **DEFERRED**
+
+> Deleted 2026-08-13 — see the addendum at the top and `ACTION_REQUIRED.md` §7. The finding below is
+> kept as written.
 
 [`server/src/students.ts:536`](../../server/src/students.ts#L536): `consumeTuitionSession` is exported and never called anywhere in the repo. Its doc comment — *"Drop a session once it has been used to mint a PaymentIntent (single-use for the pay step)"* — describes behavior that does not happen: a tuition session survives until its 15-minute TTL and can mint several PaymentIntents.
 
@@ -417,7 +439,7 @@ That is not itself a vulnerability. Every mint recomputes the amount server-side
 
 ### KIOSK-015 — `ScryptPin` accepts an unbounded cost parameter — Low, Likely
 
-[`android/…/security/ScryptPin.kt:51`](../../android/app/src/main/java/org/openmasjidos/kiosk/security/ScryptPin.kt#L51) floors `N` at 2 but sets no ceiling. A config carrying an absurd `N` would make `SCrypt.generate` attempt a huge allocation; the resulting `OutOfMemoryError` is an `Error`, not an `Exception`, so the `catch (_: Exception)` below it would not catch it and the app would crash at the PIN pad. The hash arrives from our own server over pinned TLS, so this needs a compromised or buggy server rather than an attacker — but a crash at the PIN pad on a locked kiosk is an annoying failure mode for a one-line guard.
+[`android/…/security/ScryptPin.kt:51`](../../android/core/src/main/java/org/openmasjidos/kiosk/security/ScryptPin.kt) floors `N` at 2 but sets no ceiling. A config carrying an absurd `N` would make `SCrypt.generate` attempt a huge allocation; the resulting `OutOfMemoryError` is an `Error`, not an `Exception`, so the `catch (_: Exception)` below it would not catch it and the app would crash at the PIN pad. The hash arrives from our own server over pinned TLS, so this needs a compromised or buggy server rather than an attacker — but a crash at the PIN pad on a locked kiosk is an annoying failure mode for a one-line guard.
 
 ---
 

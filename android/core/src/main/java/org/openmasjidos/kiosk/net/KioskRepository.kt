@@ -182,7 +182,7 @@ class KioskRepository(context: Context) {
         readerSerial: String? = null,
         readerBattery: Int? = null,
         // The live on-screen loop is foreground; the WorkManager backstop passes false so it never
-        // consumes the server's one-shot "open update" flag (only the foreground loop can act on it).
+        // consumes the server's one-shot Identify flash (only the foreground loop can show it).
         foreground: Boolean = true,
     ): HeartbeatOutcome = withContext(Dispatchers.IO) {
         val p = store.pairing.first() ?: return@withContext HeartbeatOutcome.NotPaired
@@ -207,7 +207,10 @@ class KioskRepository(context: Context) {
                 clearPairing()
                 return@withContext HeartbeatOutcome.Revoked
             }
-            if (resp.configVersion > localVersion) {
+            // DIFFERENT, not greater: a server restored from a backup counts from an older version,
+            // and `>` kept every running tablet on its stale config — an old exit PIN included —
+            // until the new count overtook the old.
+            if (resp.configVersion != localVersion) {
                 runCatching { fetchConfig() }
             }
             HeartbeatOutcome.Ok(resp.identify, resp.latestAppVersion)

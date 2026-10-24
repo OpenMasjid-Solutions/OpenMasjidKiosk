@@ -1,12 +1,34 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 /* Copyright (C) 2026 OpenMasjid-Solutions */
 
-/* Token system first (mirrors OpenMasjidOS), then the glass material, then our base +
-   components, then Tailwind's additive utilities (preflight is disabled in the Tailwind
-   config so it doesn't fight the hand-written base styles). */
+/* Every @import first — CSS ignores an @import that follows any other rule, silently.
+ *
+ * The two self-hosted families the platform uses (app UI spec §4), bundled by Vite into ./assets —
+ * never a CDN: a masjid may have no route to the internet at all. Each ships per-script subsets with a
+ * unicode-range, so an English page downloads only the Latin files.
+ *
+ * Then the token system (mirrors OpenMasjidOS), the surfaces, and our base + components. Tailwind's
+ * additive utilities come last (preflight is disabled in the Tailwind config so it doesn't fight the
+ * hand-written base styles). */
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/space-grotesk';
 @import './tokens.css';
 @import './glass.css';
 @import './app.css';
+
+/* A proper Naskh for Arabic (spec §11: never let it fall back to a system serif). Anything an admin or
+   donor types can be Arabic — a campaign's title and thank-you in the live preview, a donor's name.
+   Hand-written rather than importing the package's index.css ON PURPOSE: that file also claims Latin,
+   arrows, ✓, ✉ and other symbols, and would pull those glyphs out of Naskh across the whole English
+   UI. This declares the Arabic subset alone, so it is fetched only when Arabic is on screen. */
+@font-face {
+  font-family: 'Noto Naskh Arabic Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400 700;
+  src: url('@fontsource-variable/noto-naskh-arabic/files/noto-naskh-arabic-arabic-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
+}
 
 @tailwind components;
 @tailwind utilities;

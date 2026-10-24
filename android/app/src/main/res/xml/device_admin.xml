@@ -3,9 +3,10 @@
   SPDX-License-Identifier: AGPL-3.0-only
   Copyright (C) 2026 OpenMasjid-Solutions
 
-  Minimal device-admin policy set. Empty <uses-policies/> for now: we only need the
-  receiver to exist so the tablet can be provisioned as device owner for Lock Task Mode
-  (later slice). Specific policies will be added when the kiosk hardening lands.
+  Minimal device-admin policy set. <uses-policies/> is empty on purpose: the receiver only
+  has to exist so the tablet can be provisioned as device owner. The kiosk hardening (Lock
+  Task Mode, status bar, persistent HOME, permission grants) is applied by KioskController
+  through device-owner DevicePolicyManager calls, which use no policy declared here.
 -->
 <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-policies>

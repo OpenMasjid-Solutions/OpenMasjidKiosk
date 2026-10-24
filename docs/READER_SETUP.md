@@ -7,8 +7,8 @@ The kiosk takes payments with a **Stripe Reader M2**, connected to the tablet ov
 or **USB**. All of this is done from inside the kiosk app's **maintenance screen**, which is
 protected by the exit PIN — donors never see any of it.
 
-> **Before you start**, an admin must finish **Payments** setup in the OpenMasjidOS admin panel
-> (Settings → Payments): pick your Stripe account and create/choose a **card-reader location**.
+> **Before you start**, an admin must finish **Payments** setup in the kiosk's admin panel (opened
+> from OpenMasjidOS; Settings → Payments): pick your Stripe account and create/choose a **card-reader location**.
 > The reader can't connect without a location, and the kiosk will tell you so.
 
 ---
@@ -25,7 +25,7 @@ protected by the exit PIN — donors never see any of it.
 
 1. On the kiosk's giving screen, tap the background **10 times** within 3 seconds (anywhere that
    isn't a button).
-2. Enter the **exit PIN** (set in the admin panel, Devices → this kiosk).
+2. Enter the **exit PIN** (set in the admin panel, Devices → Kiosk exit PIN).
 3. You're now on the maintenance screen. Find the **Card reader** section.
 
 ## 3. Connect
@@ -36,7 +36,8 @@ protected by the exit PIN — donors never see any of it.
    (There is no three-way "Bluetooth / USB / Test reader" chooser; this step used to describe one.
    USB connects on its own, and the simulated reader was taken out of the shipped app — it is a
    development tool, and a "Test reader" button on a wall kiosk is a way for a real donation to be
-   silently not taken. Simulated readers are still available in local development.)
+   silently not taken. The simulated transport is still in the code, but no build offers it; for
+   development without hardware, use typed entry with Stripe test cards.)
 
    **No reader at all?** The kiosk offers typed card entry automatically. Donations keep working.
 2. Tap **Find a reader**. The first time, Android asks for Bluetooth/Location permission — allow it
@@ -47,9 +48,9 @@ protected by the exit PIN — donors never see any of it.
    nearby**; this can take a few minutes. Don't unplug it.
 5. Once it says **Reader connected**, you'll see its battery level. Tap **Return to kiosk**.
 
-The reader stays connected and reconnects automatically if it briefly drops out. Its status,
-serial and battery show on the **Devices** page in the admin panel so you can spot a flat or
-disconnected reader remotely.
+The reader stays connected and reconnects automatically if it briefly drops out. Its status shows
+on the **Devices** page in the admin panel, so you can spot a disconnected reader remotely; its
+battery level is on the tablet's maintenance screen.
 
 ---
 

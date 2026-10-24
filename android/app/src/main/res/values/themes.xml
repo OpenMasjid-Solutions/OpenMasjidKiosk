@@ -3,16 +3,24 @@
   SPDX-License-Identifier: AGPL-3.0-only
   Copyright (C) 2026 OpenMasjid-Solutions
 
-  DayNight app theme (light values here; dark in values-night/). This XML theme only
-  governs the brief pre-Compose window (background + system bars); all real theming is
-  done in Compose via SakinaTheme. Parented on the platform Material theme so we pull in
-  no extra support library — Compose supplies Material 3 itself.
+  The app theme — DARK IN BOTH SYSTEM MODES. This XML theme only governs the brief pre-Compose window
+  (background + system bars); all real theming is done in Compose via SakinaTheme, and MainActivity
+  forces SakinaTheme(darkTheme = true) because the kiosk is a dark-by-design giving station.
+
+  This used to be a light theme with a dark variant under values-night/, which followed the TABLET's
+  system setting rather than the kiosk's: on a tablet left in light mode every cold start painted a
+  pale window, with dark status-bar icons, before the dark kiosk drew over it — the native form of
+  the "flash of the wrong theme" the design spec's first-paint rule exists to prevent. The window now
+  matches what Compose will draw, so there is nothing for a night variant to vary, and there is none.
+
+  Parented on the platform Material theme so we pull in no extra support library — Compose supplies
+  Material 3 itself.
 -->
 <resources>
-    <style name="Theme.OpenMasjidKiosk" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@color/surface_light</item>
+    <style name="Theme.OpenMasjidKiosk" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/surface_dark</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

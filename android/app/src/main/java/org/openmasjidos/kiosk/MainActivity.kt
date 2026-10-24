@@ -33,9 +33,10 @@ import org.openmasjidos.kiosk.ui.theme.SakinaTheme
  * The single kiosk activity, and the device HOME launcher (see AndroidManifest), so a wall tablet
  * boots straight into the kiosk.
  *
- * Slice 4 wires the full state machine: pairing → attract, the hidden-gesture PIN unlock, the
- * maintenance screen, heartbeats, and kiosk lockdown. Lock Task Mode is re-asserted on every
- * resume (idempotently) so returning from maintenance re-locks the device.
+ * It wires the full state machine: pairing → the giving screen, the hidden-gesture PIN unlock, the
+ * maintenance screen, heartbeats, and kiosk lockdown. The lockdown (Lock Task Mode on a device-owner
+ * tablet; immersive bars on a soft kiosk) is re-asserted on every resume (idempotently) so returning
+ * from maintenance re-locks the device.
  */
 class MainActivity : ComponentActivity() {
 

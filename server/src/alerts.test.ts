@@ -34,6 +34,8 @@ import {
   normalisePhone,
   pacingUsage,
   phoneLooksValid,
+  reasonWords,
+  RECIPIENT_LABEL_MAX,
   recipientsFor,
   recordWhatsAppSends,
   sanitizePacing,
@@ -278,6 +280,11 @@ test('a number without a country code is REFUSED, not guessed at', () => {
   assert.equal(normalisePhone('07700 900123'), '');
   assert.equal(phoneLooksValid('07700 900123'), false);
   assert.equal(normalisePhone('0044 7700 900123'), '447700900123', 'an explicit 00 prefix is fine');
+  // A trunk 0 after a known country code is the national habit, never part of the number: dropped.
+  assert.equal(normalisePhone('+44 (0)7700 900123'), '447700900123');
+  assert.equal(normalisePhone('4407700900123'), '447700900123', 'what the panel stored before 0.14.0');
+  assert.equal(normalisePhone('9203001234567'), '923001234567');
+  assert.equal(normalisePhone('+39 06 1234 5678'), '390612345678', 'Italy keeps its 0 — not in the list');
 });
 
 test('the usual ways of writing an international number all work', () => {
@@ -537,7 +544,7 @@ test('only the dismissals are ours to remember', () => {
   // recovery, so the platform is the source of truth and this is all that is left on our side.
   const s = mem();
   // A REAL epoch, not a small synthetic one: these are pruned by age, so `1000` would be read as
-  // 1970 and dropped on the way back out. (The same shape of trap `whatsappGate` documents, from
+  // 1970 and dropped on the way back out. (The same shape of trap `whatsappPermit` documents, from
   // the other direction — there a small clock breaks a subtraction, here it breaks a cutoff.)
   const from = Date.now() - 60_000;
   assert.deepEqual(s.getDismissedSuspectWindows(), []);
@@ -614,6 +621,67 @@ test('a NEW message to a recipient is not in doubt just because an older one was
   // The link is back; this one went fine. The flag must not be carried over onto it.
   s.setWhatsAppOutcome('r', { state: 'sent', at: 50_000, messageId: 'new', reason: '', suppressed: 0, alertId: 'reader-offline' });
   assert.equal(s.getWhatsAppOutcomes()['r'].suspect, false);
+});
+
+// ── What an admin reads when something did not go ────────────────────────────
+// The test button used to answer "Nothing was sent — OpenMasjidOS: http_503; email Treasurer:
+// threw". Every code below is one fabric.ts really returns.
+
+test('reasonWords turns our own failure codes into something a volunteer can act on', () => {
+  assert.equal(reasonWords('no-fabric'), 'this app isn’t connected to OpenMasjidOS');
+  for (const c of ['unreachable', 'threw', 'http_500', 'http_502', 'http_503', 'http_504']) {
+    assert.equal(reasonWords(c), 'OpenMasjidOS didn’t answer — check it’s running, then try again', c);
+  }
+  for (const c of ['http_400', 'http_403', 'http_404', 'http_429']) assert.equal(reasonWords(c), 'OpenMasjidOS turned it down', c);
+  assert.equal(reasonWords('not_configured'), 'no email provider is set up (OpenMasjidOS → Settings → Email)');
+  assert.equal(reasonWords('rate_limited'), 'the email provider asked us to slow down — try again in a few minutes');
+  assert.equal(reasonWords('disabled_by_admin'), 'switched off in OpenMasjidOS → Settings → Alerts');
+  assert.equal(reasonWords('refused'), 'OpenMasjidOS refused it');
+  // Nothing to say is said as nothing — never as a failure that did not happen.
+  assert.equal(reasonWords('empty'), '');
+  assert.equal(reasonWords(''), '');
+  assert.equal(reasonWords('   '), '');
+  // A code we do not know is still a code: it reads as a plain failure, never as itself.
+  for (const c of ['unknown', 'http_302', 'weird_code', 'E_FAIL']) assert.equal(reasonWords(c), 'it didn’t go through', c);
+  assert.equal(reasonWords(undefined as unknown as string), '');
+});
+
+test('…but a sentence the PLATFORM wrote passes through word for word', () => {
+  // That sentence is the reason a refusal is shown beside the switch that caused it. Flattening it
+  // would bring back "a refused message and a lost one look identical".
+  for (const s of [
+    'That group has not been approved for sending in OpenMasjidOS.',
+    'That number needs its country code.',
+    'The masjid’s own WhatsApp number can’t be sent to.',
+  ]) {
+    assert.equal(reasonWords(s), s);
+  }
+});
+
+test('no internal code survives reasonWords, whatever the input', () => {
+  for (const c of ['no-fabric', 'unreachable', 'threw', 'http_503', 'http_418', 'not_configured', 'rate_limited', 'disabled_by_admin', 'refused', 'unknown']) {
+    const w = reasonWords(c);
+    assert.ok(!/http_|\d{3}|_|no-fabric/.test(w), `${c} → ${w}`);
+  }
+});
+
+test('a recipient’s name is capped at the length the admin panel’s box allows', () => {
+  // The panel's label input carries the same maxLength, so the cut is visible while typing; this is
+  // the backstop for anything PUT to the API directly.
+  assert.equal(RECIPIENT_LABEL_MAX, 80);
+  const long = 'Ustādh Bilāl — '.repeat(10);
+  assert.equal(sanitizeRecipient({ label: long }, rcp()).label.length, RECIPIENT_LABEL_MAX);
+  assert.equal(sanitizeRecipient({ label: '  Treasurer  ' }, rcp()).label, 'Treasurer', 'a short name is kept as given');
+  const web = readFileSync(new URL('../../web/src/alerts.tsx', import.meta.url), 'utf8');
+  const box = /id="rcp-label"[\s\S]{0,400}?maxLength=\{(\d+)\}/.exec(web);
+  assert.ok(box, 'the recipient label box in the admin panel shows its limit');
+  assert.equal(Number(box[1]), RECIPIENT_LABEL_MAX, 'and it is the same limit the server keeps');
+});
+
+test('the alert catalogue is written for a volunteer, in US English', () => {
+  for (const m of ALERT_META) {
+    assert.ok(!/\bkeys?\b|standing order|webhook|gateway|credential|PaymentIntent|token/i.test(`${m.label} ${m.description}`), `${m.id}: ${m.description}`);
+  }
 });
 
 // ── The Terminal Location outliving its credentials ──────────────────────────

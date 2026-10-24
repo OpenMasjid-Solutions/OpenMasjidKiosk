@@ -18,15 +18,19 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.util.Locale
 import org.openmasjidos.kiosk.KioskViewModel
 import org.openmasjidos.kiosk.Overlay
 import org.openmasjidos.kiosk.Phase
 import org.openmasjidos.kiosk.R
 import org.openmasjidos.kiosk.ui.theme.InkMutedDark
+import org.openmasjidos.kiosk.ui.theme.bestTextOn
 
 /**
  * The kiosk state-machine host. Renders exactly one top-level surface for the current
@@ -163,17 +167,30 @@ fun KioskRoot(
         // Keyed card entry (Stripe.js Card Element in a WebView) — a full-screen overlay on top of
         // everything while a keyed PaymentIntent is pending. Stays in-app, so Lock Task never blocks it.
         manual?.let { m ->
+            // The page paints its Pay button in the campaign's accent, so it is handed the INK for that
+            // fill too, worked out here by the same rule as every accent button on the giving screen
+            // (bestTextOn). Set the ink with the fill, or not at all (spec §3): the page used to keep a
+            // fixed near-black, which on a deep custom accent measured 1.8:1. The accent goes through
+            // accentOf as well, so a blank or malformed campaign colour becomes the kiosk default here
+            // exactly as it does on the giving screen, instead of reaching the page as-is.
+            val accent = accentOf(ui.activeCampaign)
+            // The masjid's own currency when the PaymentIntent names none; dollars only as a last resort.
+            val currency = m.currency.ifBlank { ui.config?.currency.orEmpty() }.ifBlank { "USD" }
             ManualCardWebView(
                 clientSecret = m.clientSecret,
                 publishableKey = m.publishableKey,
-                accentHex = ui.activeCampaign?.accentColor?.takeIf { it.isNotBlank() } ?: "#22d3ee",
-                payLabel = if (m.chargeMinor > 0) "Pay ${formatMoney(m.chargeMinor, m.currency.ifBlank { "USD" })}" else "Pay",
+                accentHex = accent.toHex(),
+                onAccentHex = bestTextOn(accent).toHex(),
+                payLabel = if (m.chargeMinor > 0) "Pay ${formatMoney(m.chargeMinor, currency)}" else "Pay",
                 amountLabel = ui.config?.masjidName?.takeIf { it.isNotBlank() } ?: "",
                 onResult = vm::onManualResult,
             )
         }
     }
 }
+
+/** "#rrggbb" for an opaque colour, for handing a campaign colour to the keyed-entry web page. */
+private fun Color.toHex(): String = String.format(Locale.US, "#%06x", toArgb() and 0xFFFFFF)
 
 @Composable
 private fun LoadingScreen() {

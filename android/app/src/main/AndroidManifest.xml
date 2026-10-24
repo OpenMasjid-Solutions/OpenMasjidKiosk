@@ -9,9 +9,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
-      Slice 4 networking: the tablet talks HTTPS to the LAN server (pairing, heartbeats,
-      config, logs) and — in later slices — to Stripe. ACCESS_NETWORK_STATE lets WorkManager's
-      CONNECTED constraint and our "internet down" messaging read connectivity. Everything is
+      Networking: the tablet talks HTTPS to its server (pairing, heartbeats, config, logs)
+      and, through the Terminal SDK and keyed card entry, to Stripe. ACCESS_NETWORK_STATE
+      lets WorkManager's CONNECTED constraint and our "internet down" messaging read connectivity. Everything is
       OUTBOUND only; nothing is exposed inbound.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -28,8 +28,10 @@
 
     <!--
       Slice 5 — Stripe Reader M2 (Bluetooth + USB). The Terminal SDK needs these; they are
-      requested-and-explained ONLY inside the PIN-protected maintenance screen, never in the
-      donor flow. Pairing uses a typed 6-digit code (no camera/QR), so no CAMERA permission.
+      requested-and-explained inside the PIN-protected maintenance screen, with one exception:
+      on a tablet that is not device owner, MainActivity asks for ACCESS_FINE_LOCATION once at
+      launch so a USB reader can be discovered (device owner grants it silently, no dialog).
+      Pairing uses a typed 6-digit code (no camera/QR), so no CAMERA permission.
         - Bluetooth on API 31+: BLUETOOTH_SCAN (neverForLocation) + BLUETOOTH_CONNECT
         - Bluetooth pre-31: legacy BLUETOOTH/BLUETOOTH_ADMIN + ACCESS_FINE_LOCATION (BLE scan)
         - Location: still required by the SDK for ALL discovery configs (location must be ON)
@@ -125,9 +127,9 @@
 
         <!--
           Device admin receiver — required for Lock Task Mode (true kiosk) once the tablet
-          is provisioned as device owner via a one-time ADB step (see docs/TABLET_SETUP.md,
-          later slice). No policies are used yet; the presence of the receiver + device_admin
-          metadata is what device-owner provisioning needs.
+          is provisioned as device owner via a one-time ADB step (see docs/TABLET_SETUP.md).
+          It declares no policies; the presence of the receiver + device_admin metadata is what
+          device-owner provisioning needs, and KioskController applies the lockdown through it.
         -->
         <receiver
             android:name=".KioskAdminReceiver"

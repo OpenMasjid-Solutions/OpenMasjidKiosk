@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import org.openmasjidos.kiosk.ui.MoneyFormat
 import java.io.IOException
 
 // Single DataStore instance for the whole process. The delegate must be declared exactly
@@ -71,11 +72,14 @@ class DeviceStore(private val context: Context) {
         val CFG_CELEBRATE_THRESHOLD = longPreferencesKey("cfg_celebrate_threshold")
         val CFG_MAIN_CAMPAIGN = stringPreferencesKey("cfg_main_campaign")
         val CFG_CAMPAIGNS = stringPreferencesKey("cfg_campaigns") // JSON array of campaigns
+        val CFG_LOCALE = stringPreferencesKey("cfg_locale") // BCP-47 tag amounts are written in
 
         // The reader the admin last connected, so it auto-reconnects on boot. USB stores just the
         // transport ("Usb"); Bluetooth also stores the serial so we reconnect that exact reader.
         val LAST_READER_TRANSPORT = stringPreferencesKey("last_reader_transport")
         val LAST_READER_SERIAL = stringPreferencesKey("last_reader_serial")
+        val PIN_ATTEMPTS = intPreferencesKey("pin_attempts")
+        val PIN_LOCKED_UNTIL = longPreferencesKey("pin_locked_until") // wall-clock epoch ms
     }
 
     /** Emits the current pairing, or null when the kiosk is not (yet) paired. */
@@ -98,6 +102,13 @@ class DeviceStore(private val context: Context) {
         .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
         .map { p ->
             val version = p[Keys.CFG_VERSION] ?: return@map null
+            // Applied here, on LOAD, as well as when a config is fetched: a tablet that boots with no
+            // network must still write amounts the masjid's way, not the way it did before the admin
+            // set the masjid's country. Set before the config is emitted, so no frame renders from this
+            // config in the old format. (A store written before this key existed reads as en-US, which
+            // is exactly what that build rendered.)
+            val locale = p[Keys.CFG_LOCALE]?.takeIf { it.isNotBlank() } ?: "en-US"
+            MoneyFormat.setFromTag(locale)
             KioskConfig(
                 version = version,
                 pinHash = p[Keys.CFG_PIN_HASH].orEmpty(),
@@ -122,6 +133,7 @@ class DeviceStore(private val context: Context) {
                 celebrateThresholdMinor = p[Keys.CFG_CELEBRATE_THRESHOLD] ?: 0L,
                 mainCampaignId = p[Keys.CFG_MAIN_CAMPAIGN].orEmpty(),
                 campaigns = CampaignJson.parseString(p[Keys.CFG_CAMPAIGNS]),
+                locale = locale,
             )
         }
 
@@ -161,6 +173,7 @@ class DeviceStore(private val context: Context) {
             p[Keys.CFG_CELEBRATE_THRESHOLD] = config.celebrateThresholdMinor
             p[Keys.CFG_MAIN_CAMPAIGN] = config.mainCampaignId
             p[Keys.CFG_CAMPAIGNS] = CampaignJson.toJsonString(config.campaigns)
+            p[Keys.CFG_LOCALE] = config.locale
         }
     }
 
@@ -170,6 +183,21 @@ class DeviceStore(private val context: Context) {
             p[Keys.LAST_READER_TRANSPORT] = transport
             p[Keys.LAST_READER_SERIAL] = serial.orEmpty()
         }
+    }
+
+    /** The exit-PIN backoff. Persisted because holding the power button reboots even a Lock Task
+     *  tablet, and an in-memory count handed every boot three fresh tries and a reset ramp. */
+    suspend fun savePinLockout(attempts: Int, lockedUntilMs: Long) {
+        store.edit { p ->
+            p[Keys.PIN_ATTEMPTS] = attempts
+            p[Keys.PIN_LOCKED_UNTIL] = lockedUntilMs
+        }
+    }
+
+    /** (wrong attempts so far, locked until epoch ms) — (0, 0) when nothing is recorded. */
+    suspend fun getPinLockout(): Pair<Int, Long> {
+        val p = store.data.first()
+        return (p[Keys.PIN_ATTEMPTS] ?: 0) to (p[Keys.PIN_LOCKED_UNTIL] ?: 0L)
     }
 
     /** The last-connected reader as (transport, serial?) — or null if none remembered. */

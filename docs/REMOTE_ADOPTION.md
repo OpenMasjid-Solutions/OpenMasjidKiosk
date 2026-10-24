@@ -19,8 +19,9 @@ works only on the masjid's network (see *Security posture*).
 1. The admin turns on **Remote access** in **OpenMasjidOS → Settings** (a Cloudflare tunnel + domain)
    and **exposes OpenMasjid Kiosk** there. The manifest requests this with `domain: true` +
    `tunnel: true`; nothing is public until the admin confirms it.
-2. The admin turns on **"Allow remote adoption"** in the kiosk admin → **Devices → Add a kiosk →
-   Remote**. This is our own gate (stored server-side, off by default).
+2. The admin turns on remote adoption — **"Let tablets at other sites pair"** in the kiosk admin →
+   **Devices → Add a kiosk → Remote (another site)**. This is our own gate (stored server-side, off
+   by default).
 
 When both are true, the kiosk is reachable at `https://omos.<masjid-domain>/<basePath>/…`
 (`basePath` defaults to `/kiosk`, admin-renamable). We read it from `GET /api/fabric/site`
@@ -59,7 +60,8 @@ When both are true, the kiosk is reachable at `https://omos.<masjid-domain>/<bas
   (`/api/login`), first-run setup (`/api/setup`), the Fabric relay and the WhatsApp admin-command
   handler all stay LAN-only, in every spelling (percent-encoded, double-encoded, dot segments). Open
   to anyone: `/new`, the APK (`/download`), the public bootstrap (`/api/app`,
-  `/api/public/appearance`), and the device API (`/api/kiosk/*`).
+  `/api/public/appearance`, `/api/public/logo`), the donor's monthly-cancel page (`/m/:token`,
+  `/api/public/monthly/:token/cancel`), and the device API (`/api/kiosk/*`).
 - **The admin panel over the tunnel answers only to OpenMasjidOS** (OS 0.51.2+ remote
   administration). `/api/session`, `/api/logout` and `/api/admin/*` pass the guard, but there
   `requireAdmin` accepts nothing but the platform vouching for *this* request: OpenMasjidOS's
@@ -74,8 +76,8 @@ When both are true, the kiosk is reachable at `https://omos.<masjid-domain>/<bas
   quietly wrong the moment this app served its first `/fabric/*` route (the WhatsApp command
   handler, which reports the masjid's takings). Adding any route outside `/api` means checking this
   guard again; `tunnel.test.ts` pins both halves.
-- **Remote pairing is gated.** Over the tunnel, `POST /api/kiosk/pair` is refused unless "Allow remote
-  adoption" is on. LAN pairing is always allowed. The gate runs **before** a pairing code is consumed.
+- **Remote pairing is gated.** Over the tunnel, `POST /api/kiosk/pair` is refused unless remote
+  adoption is on. LAN pairing is always allowed. The gate runs **before** a pairing code is consumed.
 - **Pairing codes** are single-use, 10-minute TTL, and attempt-limited. Device tokens are 256-bit,
   hashed at rest (HMAC), scoped, and revocable — revoke a device to cut its remote access immediately.
 - **Secrets never travel.** The Stripe secret key and the per-app `OPENMASJID_APP_SECRET` are never
@@ -104,6 +106,6 @@ When both are true, the kiosk is reachable at `https://omos.<masjid-domain>/<bas
 
 ## Turning it off
 
-Flip "Allow remote adoption" off to stop **new** remote pairings. Existing remote devices keep working
+Turn "Let tablets at other sites pair" off to stop **new** remote pairings. Existing remote devices keep working
 via their device token until you **revoke** them (Devices → Remove) or the admin turns off Remote
 access / un-exposes the app in OpenMasjidOS.

@@ -13,6 +13,7 @@ import org.openmasjidos.kiosk.local.Campaign
 import org.openmasjidos.kiosk.local.CampaignJson
 import org.openmasjidos.kiosk.local.KioskConfig
 import org.openmasjidos.kiosk.local.LogEntry
+import org.openmasjidos.kiosk.ui.MoneyFormat
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -92,6 +93,11 @@ data class TuitionInvoice(
     val balanceMinor: Long,
     val studentName: String = "",
     val items: List<TuitionItem> = emptyList(),
+    /** [dueDate] already written for a person by the SERVER, from the masjid's own date settings —
+     *  Gregorian and Hijri together, the way every date in the admin panel reads. Formatted there
+     *  rather than here so the tablet needs no calendar of its own and cannot disagree with the
+     *  panel about what day a bill is due. Blank from an older server: show [dueDate] as it is. */
+    val dueLabel: String = "",
 )
 
 /** One CHILD's section of the account: their own balance, their own credit, and their own bills.
@@ -103,6 +109,11 @@ data class TuitionStudent(
     val balanceMinor: Long,
     val creditMinor: Long,
     val invoices: List<TuitionInvoice>,
+    /** The child's first name exactly as the school gave it, for "How much towards Abdul Rahman's
+     *  balance?". The server sends it on its own so nothing here has to cut it out of [name] — and
+     *  cutting at the first space is exactly what went wrong: [name] is "first name + last initial",
+     *  so "Abdul Rahman K" became "Abdul". Blank from an older server; fall back to [name] whole. */
+    val firstName: String = "",
 )
 
 /** A looked-up family + its balance. [session] is the OPAQUE server-side session id used to pay — the
@@ -264,6 +275,12 @@ class KioskApi(private val client: OkHttpClient) {
                 ),
             )
         }
+        // The masjid's formatting locale. Read from the config object, and from beside it too in case
+        // a server ever sends it at the top level with `version`; absent (an older server) is en-US,
+        // which is what the tablet has always rendered. Applied BEFORE the config is returned, so the
+        // first screen drawn from this config already writes amounts the masjid's way.
+        val locale = cfg.text("locale").ifBlank { json.text("locale") }.ifBlank { "en-US" }
+        MoneyFormat.setFromTag(locale)
         return KioskConfig(
             version = version,
             pinHash = cfg.optString("pinHash", ""),
@@ -288,6 +305,7 @@ class KioskApi(private val client: OkHttpClient) {
             celebrateThresholdMinor = cfg.optLong("celebrateThresholdMinor", 0L),
             mainCampaignId = cfg.optString("mainCampaignId", ""),
             campaigns = campaigns,
+            locale = locale,
         )
     }
 
@@ -402,6 +420,7 @@ class KioskApi(private val client: OkHttpClient) {
                 balanceMinor = o.optLong("balanceCents", 0L),
                 creditMinor = o.optLong("creditCents", 0L),
                 invoices = parseInvoices(o.optJSONArray("invoices")),
+                firstName = o.text("firstName"),
             )
         }
         return TuitionLookupResult(
@@ -430,6 +449,7 @@ class KioskApi(private val client: OkHttpClient) {
                 dueDate = o.optString("dueDate"),
                 balanceMinor = o.optLong("balanceCents", 0L),
                 studentName = o.optString("studentName"),
+                dueLabel = o.text("dueLabel"),
                 items = (0 until itemArr.length()).map { j ->
                     val line = itemArr.getJSONObject(j)
                     TuitionItem(
@@ -534,6 +554,11 @@ class KioskApi(private val client: OkHttpClient) {
             return obj.optJSONObject("data") ?: obj
         }
     }
+
+    /** A string field, or "" when it is missing OR an explicit JSON null. `optString` alone turns a
+     *  null into the four letters "null", which on a tablet would read as a child called Null. Used
+     *  for the fields added since that was noticed; the older ones are left as they have always read. */
+    private fun JSONObject.text(key: String): String = if (isNull(key)) "" else optString(key, "")
 
     /** Pull a human message out of a `{ "error": "…" }` body if the server sent one. */
     private fun extractError(raw: String): String? =

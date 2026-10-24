@@ -3,8 +3,7 @@
 
 /* Base + components for the OpenMasjid Kiosk admin. Layout uses logical properties so it
    works LTR and RTL. Mirrors the OpenMasjidOS / Donations look; values come from
-   tokens.css — no raw hex here. Slice 1 covers the shell + the /new setup page; more
-   component styles arrive with each slice. */
+   tokens.css — no raw hex here. */
 
 html, body { height: 100%; }
 body {
@@ -15,12 +14,68 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
+/* A modal dialog holds the page still behind it. */
+html:has(dialog[open]) { overflow: hidden; }
 #root { min-height: 100vh; min-height: 100dvh; }
 * { box-sizing: border-box; }
 button { font: inherit; color: inherit; cursor: pointer; }
 a { color: var(--color-primary); text-decoration: none; }
 :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 4px; }
 h1, h2, h3, p, ul { margin: 0; }
+
+/* Read by assistive technology, not drawn. Pinned to its containing block's corner: left at its own
+   position, an sr-only label deep inside a sideways-scrolling table (the alerts matrix) escaped the
+   scroll box — its containing block is the panel outside it — and stretched the whole page to 920px
+   on a phone. Where it sits on screen does not change what is read, or when. */
+.sr-only {
+  position: absolute; inset-block-start: 0; inset-inline-start: 0;
+  width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+/* ── Tabular digits, where figures change or line up (spec §4) ─────────────
+   Every amount, total, count, clock, countdown, code and time — Inter's default digits are proportional
+   ('1' is narrower than '4'), so a figure that updates would jitter and a column would not line up.
+   NOT on body text, deliberately: Inter's tabular set also widens the hyphen and the parentheses, so set
+   on <body> it put "thank - you" and "Wi - Fi" into every sentence on the panel. For the same reason
+   this list names only elements that hold NOTHING BUT a figure: a line that mixes figures with words
+   or names (a stat tile's subtitle, a facts value, a donation row's "who · where · when") puts each
+   figure in `.num` instead — `figures()` in primitives.tsx does it for a string. */
+.num, .topclock-time, .stat-tile__value, .donation-amt, .detail-amt, .inv-amt,
+.pair-code, .pair-clock, .pin-input, .mx-pacing strong, .gv-tile-amt, .er-receipt__table td + td, .preset-input .input,
+input[inputmode="decimal"], input[inputmode="numeric"], input[type="number"], input[type="tel"] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Right to left ────────────────────────────────────────────────────────
+   The layout mirrors with the dashboard's language (prefs.ts applyDir) — every margin, inset and
+   alignment here is logical, so the dock, the cards and the menus flip on their own. The COPY is
+   still English, though, and English inside an RTL paragraph is where the bidi algorithm bites: a
+   sentence's full stop jumps to its left end, "Sending…" reads "…Sending", and a date's parts swap
+   round. `plaintext` gives each run of text the direction of its own first strong character, so an
+   English sentence lays out as English and a masjid's Arabic campaign name lays out as Arabic, inside
+   the same mirrored page. Flex and grid order still follow `direction`, which this does not touch.
+   Text with no letters at all — a phone number, a pairing code — carries dir="ltr" in the markup. */
+[dir="rtl"] :where(p, h1, h2, h3, h4, h5, li, dt, dd, td, th, label, legend, figcaption, summary, button, a, span, b, strong, em, small, code, time, input, textarea, select, option) {
+  unicode-bidi: plaintext;
+}
+/* …and what `plaintext` costs. It resolves `start` and `end` against each paragraph's OWN direction,
+   so in RTL an English hint under a mirrored field sat on the LEFT while the field's title sat on the
+   right, on every screen. So alignment here is never the logical keyword: the page's default is a
+   PHYSICAL side (it inherits, and plaintext cannot re-resolve it), and every rule in this file that
+   means "start" or "end" says var(--align-start) / var(--align-end), which name a physical side per
+   direction. In LTR they are exactly left and right, so nothing there changes. Containers that
+   centre (.setup-head, .auth-card, the empty states) still pass `center` down. Use these, not
+   `text-align: start|end`, in anything new — `match-parent` does not help in Chromium. */
+:root { --align-start: left; --align-end: right; }
+html[dir="rtl"] { --align-start: right; --align-end: left; text-align: right; }
+/* A character counter under a field sits at the field's end. */
+.char-count { text-align: var(--align-end); }
+/* A `.num` is a figure lifted out of a sentence only to give it tabular digits (`figures()`). It must
+   not become an isolate of its own, or "$25" would split into "$" and "25" and an Arabic-led line
+   could put them either side of each other. */
+[dir="rtl"] .num { unicode-bidi: normal; }
+/* An icon that points along the line — an arrow, "send", "sign out" — points the other way in RTL. */
+[dir="rtl"] .rtl-flip { transform: scaleX(-1); }
 
 /* ── Ambient scene ──────────────────────────────────────────────────────── */
 .scene { position: fixed; inset: 0; z-index: -1; background: var(--scene-gradient); overflow: hidden; }
@@ -30,20 +85,17 @@ h1, h2, h3, p, ul { margin: 0; }
     radial-gradient(40% 50% at 20% 25%, var(--aurora-cyan), transparent 70%),
     radial-gradient(45% 55% at 80% 20%, var(--aurora-navy), transparent 70%),
     radial-gradient(50% 50% at 60% 85%, var(--aurora-gold), transparent 75%);
-  filter: blur(var(--aurora-blur)); will-change: transform;
-  animation: auroraDrift 32s ease-in-out infinite alternate;
-}
-@keyframes auroraDrift {
-  0% { transform: translate3d(0,0,0) scale(1); }
-  50% { transform: translate3d(2.5%,-2%,0) scale(1.08) rotate(1.2deg); }
-  100% { transform: translate3d(-2%,2.5%,0) scale(1.04) rotate(-1deg); }
+  filter: blur(var(--aurora-blur));
+  /* STILL, deliberately. It drifted forever on a 32 s loop — a blurred layer half again the size of
+     the viewport, recomposited every frame, behind every frosted surface on the page, so each of those
+     re-blurred every frame too, on a page where nothing else was moving. On a Raspberry Pi that is the
+     spec's "continuous GPU animation" exactly (§8). At rest it looks the same. */
 }
 .scene::after {
   content: ""; position: absolute; inset: 0;
   background-image: var(--geometric-pattern); opacity: var(--pattern-opacity);
   box-shadow: inset 0 0 240px 80px var(--scene-vignette);
 }
-@media (prefers-reduced-motion: reduce) { .scene::before { animation: none; } }
 
 /* ── Shell + top bar ──────────────────────────────────────────────────────── */
 .shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
@@ -59,10 +111,10 @@ h1, h2, h3, p, ul { margin: 0; }
    theme it lands as a bright tile. Round it and give it a hairline ring so that reads as a
    deliberate logo chip rather than a stray white block. `contain` keeps the mark un-cropped
    whatever square we ask for. */
-.brand__logo { border-radius: 0.5rem; object-fit: contain; display: block; box-shadow: 0 0 0 1px var(--color-border, rgba(255, 255, 255, 0.12)); }
+.brand__logo { border-radius: 0.5rem; object-fit: contain; display: block; box-shadow: 0 0 0 1px var(--color-border); }
 .spacer { flex: 1; }
 .icon-btn {
-  width: 2.4rem; height: 2.4rem; border-radius: 0.6rem; display: grid; place-items: center;
+  width: 2.4rem; height: 2.4rem; border-radius: var(--radius-button); display: grid; place-items: center;
   background: transparent; border: 0; color: var(--color-ink-muted);
   transition: color var(--dur-micro) ease, background-color var(--dur-micro) ease, transform var(--dur-micro) var(--ease-settle);
 }
@@ -70,7 +122,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .icon-btn:active { transform: scale(0.94); }
 
 /* ── Content column ───────────────────────────────────────────────────────── */
-.main { flex: 1; }
+.main { flex: 1; min-inline-size: 0; }
 .wrap {
   min-height: calc(100vh - 4.2rem); min-height: calc(100dvh - 4.2rem);
   display: grid; place-items: center; padding: 1.5rem 1.1rem 3rem;
@@ -87,27 +139,14 @@ h1, h2, h3, p, ul { margin: 0; }
 .emblem {
   width: 4.2rem; height: 4.2rem; border-radius: 50%;
   display: grid; place-items: center; color: var(--color-on-primary);
-  background: var(--color-primary); box-shadow: var(--glow-primary);
+  background: var(--color-btn); box-shadow: var(--glow-primary);
 }
-.hero-title { font-family: var(--font-display); font-size: 1.9rem; font-weight: 700; letter-spacing: -0.02em; }
-.hero-lead { color: var(--color-ink-muted); line-height: 1.6; max-width: 32rem; }
 .pill {
   display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; font-weight: 600;
   padding: 0.2rem 0.6rem; border-radius: 999px; color: var(--color-ink-muted);
   background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
-.pill--ok { color: var(--color-success); }
-.pill--test { color: var(--color-gold); background: var(--color-gold-subtle); box-shadow: inset 0 0 0 1px var(--color-gold); }
-
-/* Next-steps checklist on the dashboard shell */
-.steps-list { text-align: start; width: 100%; max-width: 30rem; margin-inline: auto; display: flex; flex-direction: column; gap: 0.55rem; }
-.steps-list li { display: flex; align-items: flex-start; gap: 0.6rem; color: var(--color-ink); line-height: 1.5; }
-.steps-list li svg { color: var(--color-primary); flex-shrink: 0; margin-block-start: 0.15rem; }
-.steps-list .num {
-  flex-shrink: 0; width: 1.5rem; height: 1.5rem; border-radius: 50%; display: grid; place-items: center;
-  font-size: 0.78rem; font-weight: 700; color: var(--color-primary);
-  background: var(--color-primary-subtle);
-}
+.pill--ok { color: var(--color-success-ink); }
 
 /* ── Buttons ──────────────────────────────────────────────────────────────── */
 .btn {
@@ -120,10 +159,15 @@ h1, h2, h3, p, ul { margin: 0; }
 .btn:active { transform: scale(0.97); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn--primary { background: var(--color-btn); color: var(--color-on-primary); box-shadow: var(--glow-primary); }
-.btn--primary:hover { background: var(--color-btn-hover); transform: translateY(-1px); }
+/* `:not(:disabled)` so a disabled button stops pretending; and the press comes AFTER the hover lift,
+   because both are two classes deep and the later rule wins — written the other way round, the main
+   call to action on every screen lifted while it was being pressed and never pressed at all. */
+.btn--primary:hover:not(:disabled) { background: var(--color-btn-hover); transform: translateY(-1px); }
+.btn--primary:active:not(:disabled) { transform: scale(0.97); }
+.btn:disabled:hover { background: var(--color-surface-hover); }
+.btn--primary:disabled:hover { background: var(--color-btn); }
 .btn--ghost { background: transparent; box-shadow: inset 0 0 0 1px var(--color-border); }
 .btn--ghost:hover { background: var(--color-surface-hover); }
-.btn--lg { padding: 0.8rem 1.3rem; font-size: 1rem; }
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 .muted { color: var(--color-ink-muted); }
@@ -141,17 +185,25 @@ h1, h2, h3, p, ul { margin: 0; }
 .setup { width: min(40rem, 100%); padding: 2rem 1.9rem; }
 .setup-head { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.6rem; margin-block-end: 1.4rem; }
 .setup-title { font-family: var(--font-display); font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; }
+/* The masjid's own identity at the top of /new — its logo from OpenMasjidOS, or its name as a
+   wordmark when there is no logo (spec §1b: never a broken image). Rendered as given. */
+.setup-logo { display: block; block-size: 4.5rem; inline-size: auto; max-inline-size: min(16rem, 100%); object-fit: contain; }
+.setup-wordmark {
+  font-family: var(--font-display); font-size: 1.2rem; font-weight: 700; letter-spacing: -0.01em; line-height: 1.3;
+  color: var(--color-ink); max-inline-size: 100%; overflow-wrap: anywhere;
+}
 /* Which of the two apps am I installing? Shown only when the image bundles both. Two big targets,
    because this page is read on a phone held in one hand while standing next to the device. */
 .app-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.6rem; margin-block-end: 1.4rem; }
 .app-pick__opt {
   display: flex; flex-direction: column; align-items: flex-start; gap: 0.25rem;
-  padding: 0.85rem 0.95rem; text-align: start; cursor: pointer;
-  border: 1px solid var(--color-border); border-radius: 14px;
+  padding: 0.85rem 0.95rem; text-align: var(--align-start); cursor: pointer;
+  border: 1px solid var(--color-border); border-radius: var(--radius-card);
   background: var(--glass-bg-inset); color: var(--color-ink);
-  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: transform var(--dur-settle) var(--ease-settle), background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
-.app-pick__opt:hover { background: var(--color-surface-hover); }
+.app-pick__opt:hover { background: var(--color-surface-hover); transform: translateY(var(--lift-y)); }
+.app-pick__opt:active { transform: translateY(calc(var(--lift-y) + 3px)) scale(0.992); }
 .app-pick__opt--on { border-color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary); background: var(--color-primary-subtle); }
 .app-pick__name { font-weight: 600; }
 .app-pick__sub { font-size: 0.8rem; color: var(--color-ink-muted); line-height: 1.4; }
@@ -172,14 +224,10 @@ h1, h2, h3, p, ul { margin: 0; }
   background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
 
-/* ── On-scene text (sits directly on the wallpaper, outside a glass card) ──── */
-.on-scene { color: var(--ink-scene); text-shadow: var(--text-shadow-scene); }
-.on-scene .muted { color: var(--ink-scene-muted); }
-
 .btn--block { width: 100%; }
 
 /* ── Forms ────────────────────────────────────────────────────────────────── */
-.field { display: flex; flex-direction: column; gap: 0.35rem; margin-block-end: 0.9rem; text-align: start; }
+.field { display: flex; flex-direction: column; gap: 0.35rem; margin-block-end: 0.9rem; text-align: var(--align-start); }
 .label { font-size: 0.82rem; font-weight: 600; color: var(--color-ink-muted); }
 .input {
   width: 100%; padding: 0.6rem 0.8rem; border-radius: var(--radius-button);
@@ -188,12 +236,21 @@ h1, h2, h3, p, ul { margin: 0; }
 }
 .input::placeholder { color: var(--color-ink-faint); }
 .hint { font-size: 0.82rem; color: var(--color-ink-faint); }
-.form-error { color: var(--color-danger); font-size: 0.85rem; margin-block: 0.25rem 0.7rem; }
+.form-error { color: var(--color-danger-ink); font-size: 0.85rem; margin-block: 0.25rem 0.7rem; }
+/* The outcome of something the admin just did — a tick or a warning sign, then one plain sentence.
+   Rendered by <ResultLine> (ui.tsx), which also gives it role=status / role=alert so it is announced;
+   before this, five of these were grey help text whether they said "done" or "that failed". */
+.result { display: flex; align-items: flex-start; gap: 0.4rem; margin-block: 0.6rem 0; font-size: 0.86rem; line-height: 1.5; }
+.result svg { flex: none; margin-block-start: 0.15rem; }
+.result--ok { color: var(--color-success-ink); }
+.result--bad { color: var(--color-danger-ink); }
+.result--info { color: var(--color-ink-muted); }
+.result--warn { color: var(--color-warning-ink); }
 
 /* ── Auth cards (login / setup / SSO prompt) ──────────────────────────────── */
 .auth-card { width: min(24rem, 100%); padding: 2rem; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
 .auth-card .emblem { margin-block-end: 0.6rem; }
-.auth-card form { text-align: start; width: 100%; margin-block-start: 0.6rem; }
+.auth-card form { text-align: var(--align-start); width: 100%; margin-block-start: 0.6rem; }
 .auth-title { font-family: var(--font-display); font-size: 1.4rem; font-weight: 700; letter-spacing: -0.01em; }
 .auth-sub { margin-block: 0.3rem 0.9rem; font-size: 0.92rem; line-height: 1.5; }
 
@@ -202,11 +259,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .kv-row { display: flex; justify-content: space-between; gap: 0.8rem; padding: 0.6rem 0; border-block-end: 1px solid var(--color-border); }
 .kv-row:last-child { border-block-end: 0; }
 .kv-k { color: var(--color-ink-muted); font-size: 0.9rem; }
-.kv-v { font-weight: 600; text-align: end; }
-
-/* ── Footer ───────────────────────────────────────────────────────────────── */
-.foot { text-align: center; padding: 1.2rem; font-size: 0.8rem; color: var(--ink-scene-muted); text-shadow: var(--text-shadow-scene); }
-.foot a { display: inline-flex; align-items: center; gap: 0.2rem; }
+.kv-v { font-weight: 600; text-align: var(--align-end); }
 
 /* ── Custom wallpaper image (inherited from OpenMasjidOS or set in-app) ──────── */
 /* A standalone backdrop with NO preset gradient/aurora/pattern, so an inherited image
@@ -220,7 +273,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .scene-img::after { content: ""; position: absolute; inset: 0; background: var(--scrim); pointer-events: none; }
 
 /* ── Live clock (top bar, like the OpenMasjidOS dashboard) ─────────────────── */
-.topclock { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.12; }
+.topclock { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.12; text-align: var(--align-end); }
 .topclock-time { font-weight: 700; font-size: 0.95rem; color: var(--color-ink); }
 .topclock-date { font-size: 0.72rem; color: var(--color-ink-muted); }
 @media (max-width: 420px) { .topclock-date { display: none; } }
@@ -237,17 +290,18 @@ h1, h2, h3, p, ul { margin: 0; }
 .profile-menu {
   position: absolute; inset-inline-end: 0; inset-block-start: calc(100% + 0.5rem); z-index: 50;
   min-width: 13rem; padding: 0.5rem; border-radius: var(--radius-card);
-  display: flex; flex-direction: column; gap: 0.1rem; animation: menuIn 0.16s ease both;
+  display: flex; flex-direction: column; gap: 0.1rem; animation: menuIn var(--dur-micro) var(--ease-settle) both;
 }
 @keyframes menuIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .profile-menu { animation: none; } }
 .menu-item {
-  display: flex; align-items: center; gap: 0.7rem; width: 100%; text-align: start;
+  display: flex; align-items: center; gap: 0.7rem; width: 100%; text-align: var(--align-start);
   padding: 0.6rem 0.7rem; border: 0; background: transparent; color: var(--color-ink);
   font-weight: 600; font-size: 0.95rem; border-radius: var(--radius-button); cursor: pointer;
-  transition: background-color var(--dur-micro) ease;
+  transition: background-color var(--dur-micro) ease, transform var(--dur-micro) var(--ease-settle);
 }
 .menu-item:hover { background: var(--color-surface-hover); }
+.menu-item:active { transform: scale(0.97); }
 .menu-item svg { color: var(--color-ink-muted); flex-shrink: 0; }
 .menu-foot { padding: 0.55rem 0.7rem 0.25rem; margin-block-start: 0.3rem; border-block-start: 1px solid var(--color-border); font-size: 0.8rem; color: var(--color-ink-faint); }
 
@@ -269,11 +323,16 @@ h1, h2, h3, p, ul { margin: 0; }
 .wn-release:last-child { border-block-end: 0; }
 .wn-version {
   display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
-  margin: 0 0 0.4rem; font-size: 1.05rem; font-weight: 700; color: var(--color-ink);
+  margin: 0 0 0.4rem; font-family: var(--font-display); letter-spacing: -0.01em;
+  font-size: 1.05rem; font-weight: 700; color: var(--color-ink);
 }
 .wn-list { margin: 0; padding-inline-start: 1.1rem; display: flex; flex-direction: column; gap: 0.45rem; }
 .wn-list li { font-size: 0.92rem; line-height: 1.6; color: var(--color-ink-muted); }
 .wn-list strong { color: var(--color-ink); font-weight: 650; }
+.wn-list em { font-style: italic; }
+/* An "also fixed" sub-point under the item it belongs to. */
+.wn-list .wn-list { margin-block-start: 0.35rem; }
+.wn-list .wn-list li { font-size: 0.88rem; }
 .wn-list code {
   font-size: 0.86em; padding: 0.05rem 0.3rem; border-radius: 5px;
   background: var(--glass-bg-inset); color: var(--color-ink);
@@ -292,18 +351,26 @@ h1, h2, h3, p, ul { margin: 0; }
 }
 .dock::-webkit-scrollbar { display: none; }
 .dock .nav-item {
-  flex-shrink: 0; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 14px;
+  flex-shrink: 0; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: var(--radius-button);
   display: inline-flex; align-items: center; justify-content: center;
   background: transparent; color: var(--color-ink-muted);
-  transition: transform var(--dur-micro) var(--ease-settle), background-color var(--dur-micro) ease, color var(--dur-micro) ease;
+  transition: transform var(--dur-settle) var(--ease-settle), background-color var(--dur-micro) ease, color var(--dur-micro) ease;
 }
 .dock .nav-item .nav-label { display: none; }
-.dock .nav-item:hover { color: var(--color-ink); background: var(--color-surface-hover); }
+/* A small lift rather than the dashboard's lift-and-grow: the dock scrolls sideways on a narrow
+   screen, which clips it vertically, and there is only its own padding to lift into. */
+.dock .nav-item:hover { color: var(--color-ink); background: var(--color-surface-hover); transform: translateY(-3px); }
 .dock .nav-item.is-active { color: var(--color-primary); background: var(--color-primary-subtle); }
 .dock .nav-item:active { transform: scale(0.92); }
 
 /* ── Admin area (authed shell content) ──────────────────────────────────────── */
-.admin { max-width: 720px; margin-inline: auto; padding: 0.5rem 1.1rem 7rem; }
+.admin {
+  max-width: 720px; margin-inline: auto; padding: 0.5rem 1.1rem 7rem;
+  /* A flex item's automatic minimum width is its widest content. The alerts matrix scrolls sideways
+     inside its own box on a phone — but as the shell's flex child this column still grew to the
+     matrix's full width, and the WHOLE page scrolled sideways instead (920px on a 390px screen). */
+  min-inline-size: 0; inline-size: 100%;
+}
 .page-head { margin-block: 0.5rem 1.25rem; }
 .page-title { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; }
 .page-sub { color: var(--color-ink-muted); margin-block-start: 0.25rem; font-size: 0.95rem; }
@@ -325,12 +392,12 @@ h1, h2, h3, p, ul { margin: 0; }
   padding: 0.2rem 0.6rem; border-radius: 999px; color: var(--color-ink-muted);
   background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
-.status-pill--ok { color: var(--color-success); }
+.status-pill--ok { color: var(--color-success-ink); }
 .badge {
   font-size: 0.62rem; font-weight: 800; letter-spacing: 0.06em; padding: 0.15rem 0.5rem;
   border-radius: 999px; text-transform: uppercase;
 }
-.badge--test { background: var(--color-gold-subtle); color: var(--color-gold); box-shadow: inset 0 0 0 1px var(--color-gold); }
+.badge--test { background: var(--color-gold-subtle); color: var(--color-gold-ink); box-shadow: inset 0 0 0 1px var(--color-gold); }
 
 /* ── Stat tiles (dashboard + analytics) ─────────────────────────────────────── */
 .metrics { display: flex; flex-direction: column; gap: 1rem; }
@@ -339,13 +406,24 @@ h1, h2, h3, p, ul { margin: 0; }
 @media (max-width: 620px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
 .stat-tile {
   position: relative; display: flex; flex-direction: column; gap: 0.12rem;
-  padding: 0.85rem 0.9rem; border-radius: var(--radius-button);
-  background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
+  padding: 0.85rem 0.9rem; border-radius: var(--radius-card);
+  /* A solid surface, not a veil: these sit straight on the wallpaper, outside any panel, and a
+     translucent tile over a custom photo put the label at 1.6:1. */
+  background: var(--color-surface-raised); box-shadow: inset 0 0 0 1px var(--color-border);
 }
-.stat-tile--accent { background: var(--color-primary-subtle); box-shadow: inset 0 0 0 1px var(--color-primary-subtle); }
+.stat-tile--accent { background: linear-gradient(var(--color-primary-subtle), var(--color-primary-subtle)), var(--color-surface-raised); box-shadow: inset 0 0 0 1px var(--color-primary-subtle); }
 .stat-tile__icon { color: var(--color-primary); margin-block-end: 0.3rem; display: inline-flex; }
 .stat-tile__label { font-size: 0.74rem; font-weight: 600; color: var(--color-ink-muted); }
 .stat-tile__value { font-family: var(--font-display); font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
+.stat-tile__value .skeleton { display: inline-block; inline-size: 4.5rem; block-size: 1.2rem; vertical-align: middle; }
+
+/* ── Entrance: a grid staggers in ONCE, on first mount ─────────────────────
+   `--i` is each child's index (set inline). Never on a refresh: these grids stay mounted across the
+   20 s / 60 s polls, and React keeps their nodes, so the animation cannot replay — if the screen
+   re-animated every poll it would never settle (spec §5). The reduced-motion rule is explicit because
+   the global one does not reset animation-DELAY, which would leave later items invisible for it. */
+.stagger > * { animation: enter var(--dur-settle) var(--ease-settle) both; animation-delay: calc(40ms + var(--i, 0) * 50ms); }
+@media (prefers-reduced-motion: reduce) { .stagger > * { animation: none; } }
 .stat-tile--accent .stat-tile__value { color: var(--color-primary); }
 .stat-tile__sub { font-size: 0.71rem; color: var(--color-ink-faint); min-height: 0.85rem; }
 
@@ -358,7 +436,6 @@ h1, h2, h3, p, ul { margin: 0; }
 .empty-title { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; }
 .empty-state .muted { max-width: 26rem; line-height: 1.55; }
 .empty-state .btn { margin-block-start: 0.7rem; }
-.pair-hint--block { display: block; margin-block-start: 0.85rem; text-align: start; line-height: 1.55; }
 .devices-note { margin-block-start: 1rem; text-align: center; }
 
 /* ── Payments (Settings → in-app Stripe setup) ──────────────────────────────── */
@@ -391,10 +468,22 @@ h1, h2, h3, p, ul { margin: 0; }
   animation: spin 0.9s linear infinite;
 }
 
+/* ── Loading: a skeleton of what is coming, never a bare spinner (spec §5) ───
+   Ported from the platform. It shimmers only while a request is in flight, and the global
+   reduced-motion rule freezes it. <Skeleton> in ui.tsx renders it with a spoken "Loading…". */
+.skeleton {
+  display: block; border-radius: var(--radius-button);
+  background: linear-gradient(90deg, var(--color-surface-overlay) 25%, var(--color-surface-shimmer) 50%, var(--color-surface-overlay) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.skel-stack { display: flex; flex-direction: column; gap: 0.55rem; }
+
 /* A number that reports something taken back rather than received — the refunded total in a
    donation's detail window. Used before it existed, so the figure that most needs to stand out was
    rendering in ordinary body color. */
-.text-warn { color: var(--color-warning); }
+.text-warn { color: var(--color-warning-ink); }
 
 /* A quiet explanatory line under a panel heading: the WhatsApp availability note, the pacing note,
    the "not connected to OpenMasjidOS" note. Pairs with `.muted`, which sets the color. Also
@@ -413,7 +502,7 @@ h1, h2, h3, p, ul { margin: 0; }
   background: var(--color-primary-subtle); box-shadow: inset 0 0 0 1px var(--color-border);
 }
 .pair-code {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: clamp(2.2rem, 9vw, 3.2rem); font-weight: 700; line-height: 1.1;
   letter-spacing: 0.35em; padding-inline-start: 0.35em; /* re-center against trailing spacing */
   color: var(--color-primary); font-variant-numeric: tabular-nums;
@@ -428,7 +517,7 @@ h1, h2, h3, p, ul { margin: 0; }
   background: var(--color-surface-overlay); box-shadow: inset 0 0 0 1px var(--color-border);
 }
 .server-addr__url {
-  flex: 1; min-width: 10rem; font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  flex: 1; min-width: 10rem; font-family: var(--font-mono);
   font-size: 0.95rem; font-weight: 600; color: var(--color-ink); word-break: break-all;
 }
 
@@ -442,10 +531,13 @@ h1, h2, h3, p, ul { margin: 0; }
   display: inline-flex; align-items: center; gap: 0.4rem; border: 0; background: none; cursor: pointer;
   font: inherit; font-size: 0.9rem; font-weight: 600; color: var(--color-ink-muted);
   padding: 0.42rem 0.9rem; border-radius: calc(var(--radius-button) - 0.2rem);
-  transition: background-color var(--dur-micro) ease, color var(--dur-micro) ease;
+  transition: background-color var(--dur-micro) ease, color var(--dur-micro) ease, transform var(--dur-micro) var(--ease-settle);
 }
 .seg__opt:hover { color: var(--color-ink); }
-.seg__opt--on { background: var(--color-primary); color: var(--color-on-primary); }
+.seg__opt:active { transform: scale(0.96); }
+/* The FILL colour, which is the one its ink is chosen for (in light theme --color-primary is a
+   darker foreground shade, and the button ink would sit on the wrong colour). */
+.seg__opt--on, .seg__opt--on:hover { background: var(--color-btn); color: var(--color-on-primary); }
 .seg__opt:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
 /* One kiosk in the fleet list. */
@@ -455,7 +547,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .device-row__id { min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
 .device-name {
   display: inline-flex; align-items: center; gap: 0.35rem; align-self: flex-start;
-  background: none; border: 0; padding: 0; text-align: start;
+  background: none; border: 0; padding: 0; text-align: var(--align-start);
   font-family: var(--font-display); font-size: 1.02rem; font-weight: 700; color: var(--color-ink);
 }
 .device-name svg { color: var(--color-ink-faint); transition: color var(--dur-micro) ease; }
@@ -465,7 +557,7 @@ h1, h2, h3, p, ul { margin: 0; }
 .device-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
 .device-orient { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; color: var(--color-ink-muted); }
 .device-orient-select {
-  font: inherit; padding: 0.2rem 0.4rem; border-radius: 8px; color: var(--color-ink);
+  font: inherit; padding: 0.2rem 0.4rem; border-radius: var(--radius-button); color: var(--color-ink);
   background: var(--glass-bg-inset); border: 1px solid var(--color-border);
 }
 
@@ -477,18 +569,19 @@ h1, h2, h3, p, ul { margin: 0; }
   border-radius: 999px; background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
   font-size: 0.82rem; color: var(--color-ink);
 }
-.camp-pill__dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15); }
-.camp-pill__main { color: var(--color-gold); font-weight: 600; }
+.camp-pill__dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--ring-swatch); }
+.camp-pill__main { color: var(--color-gold-ink); font-weight: 600; }
 
 /* Theme presets (campaign editor): a row of two-swatch chips that fill the color fields. */
 .theme-presets { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .theme-preset {
-  display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.6rem 0.35rem 0.4rem;
+  display: inline-flex; align-items: center; gap: 0.4rem; padding-block: 0.35rem; padding-inline: 0.4rem 0.6rem;
   border-radius: 999px; border: 1.5px solid var(--color-border); background: var(--glass-bg-inset);
   color: var(--color-ink); font: inherit; font-size: 0.85rem; cursor: pointer;
+  transition: transform var(--dur-micro) var(--ease-settle);
 }
 .theme-preset--on { border-color: var(--color-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 35%, transparent); }
-.theme-preset-sw { width: 0.95rem; height: 0.95rem; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15); }
+.theme-preset-sw { width: 0.95rem; height: 0.95rem; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--ring-swatch); }
 .theme-preset-sw + .theme-preset-sw { margin-inline-start: -0.5rem; }
 .theme-preset-name { margin-inline-start: 0.25rem; }
 
@@ -497,11 +590,14 @@ h1, h2, h3, p, ul { margin: 0; }
 .device-chip {
   padding: 0.35rem 0.75rem; border-radius: 999px; border: 1.5px solid var(--color-border);
   background: var(--glass-bg-inset); color: var(--color-ink-muted); font: inherit; font-size: 0.85rem; cursor: pointer;
+  transition: transform var(--dur-micro) var(--ease-settle);
 }
 .device-chip--on { border-color: var(--color-primary); color: var(--color-ink); background: color-mix(in srgb, var(--color-primary) 18%, transparent); }
-.device-warn { color: var(--color-warning); }
+.device-warn { color: var(--color-warning-ink); }
 /* The "Update available" pill doubles as a button that toggles the how-to steps. */
-button.status-pill { border: 0; cursor: pointer; font-family: inherit; }
+button.status-pill { border: 0; cursor: pointer; font-family: inherit; transition: transform var(--dur-micro) var(--ease-settle); }
+/* Buttons press (spec §5) — every small control, not just .btn. */
+.theme-preset:active, .device-chip:active, .preset-rm:active, button.status-pill:active { transform: scale(0.96); }
 button.status-pill:hover { filter: brightness(1.08); }
 .device-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 /* Step-by-step "how to update this kiosk" panel. */
@@ -516,23 +612,18 @@ button.status-pill:hover { filter: brightness(1.08); }
 .update-steps strong { color: var(--color-ink); font-weight: 600; }
 
 /* ── Giving-screen designer ──────────────────────────────────────────────────── */
-/* Editor + live preview side by side on wide screens, stacked on narrow. */
-.giving-layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
-@media (max-width: 860px) { .giving-layout { grid-template-columns: 1fr; } }
-.giving-preview-panel { position: sticky; top: 5rem; }
-@media (max-width: 860px) { .giving-preview-panel { position: static; } }
-
 .preset-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
 @media (max-width: 460px) { .preset-grid { grid-template-columns: 1fr; } }
 .preset-input { display: flex; align-items: center; gap: 0.35rem; }
 .preset-input .input { flex: 1; min-width: 0; }
-.preset-sym { font-size: 0.85rem; color: var(--color-ink-muted); min-width: 1.4rem; text-align: end; }
+.preset-sym { font-size: 0.85rem; color: var(--color-ink-muted); min-width: 1.4rem; text-align: var(--align-end); }
 .preset-rm {
   display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
-  width: 1.6rem; height: 1.6rem; border-radius: 8px; border: 0; flex: none;
+  width: 1.6rem; height: 1.6rem; border-radius: var(--radius-button); border: 0; flex: none;
   color: var(--color-ink-muted); background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
+  transition: transform var(--dur-micro) var(--ease-settle);
 }
-.preset-rm:hover { color: var(--color-danger); }
+.preset-rm:hover { color: var(--color-danger-ink); }
 
 /* Toggle rows + switch */
 .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: 0.7rem; }
@@ -545,7 +636,9 @@ button.status-pill:hover { filter: brightness(1.08); }
 .switch--on { background: var(--color-primary); box-shadow: none; }
 .switch-knob {
   position: absolute; top: 50%; inset-inline-start: 0.18rem; width: 1.1rem; height: 1.1rem; border-radius: 50%;
-  background: #fff; transform: translateY(-50%); transition: inset-inline-start var(--dur-micro) var(--ease-settle);
+  /* Travels on inset-inline-start, not translateX — a logical property mirrors by itself in RTL,
+     where a translateX(+n) walks the thumb straight out of its track (spec §6). Keep it that way. */
+  background: var(--color-knob); box-shadow: var(--shadow-knob); transform: translateY(-50%); transition: inset-inline-start var(--dur-micro) var(--ease-settle);
 }
 .switch--on .switch-knob { inset-inline-start: calc(100% - 1.28rem); }
 
@@ -564,10 +657,16 @@ button.status-pill:hover { filter: brightness(1.08); }
   width: 100%; border-radius: 16px; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; text-align: center;
   padding: 1.1rem 1rem 1.2rem; gap: 0.35rem;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: var(--shadow-device);
 }
 .gv-logo { max-height: 2.2rem; max-width: 50%; object-fit: contain; margin-block-end: 0.2rem; border-radius: 6px; }
-.gv-title { font-family: var(--font-display); font-weight: 800; font-size: 1.35rem; line-height: 1.1; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gv-title {
+  font-family: var(--font-display); font-weight: 700; font-size: 1.35rem; line-height: 1.2; max-width: 100%;
+  /* Wraps to two lines, as the tablet's headline now does, instead of cutting an appeal's name short
+     (spec §10: render names as given). The title is capped at 48 characters, so two lines always
+     hold it; the clamp is only a backstop. Line-height leaves room for Naskh's taller marks. */
+  overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 .gv-desc {
   font-size: 0.86rem; line-height: 1.3; max-width: 96%;
   display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -584,13 +683,13 @@ button.status-pill:hover { filter: brightness(1.08); }
 .gv-empty { grid-column: 1 / -1; align-self: center; font-size: 0.86rem; opacity: 0.85; padding: 1.5rem 0; }
 .gv-thanks {
   font-size: 0.82rem; line-height: 1.5; color: var(--color-ink-muted); text-align: center;
-  padding: 0.6rem 0.7rem; border-radius: 12px; background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
+  padding: 0.6rem 0.7rem; border-radius: var(--radius-card); background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
 .gv-check { color: var(--color-success); font-weight: 800; }
 
 /* Tuition-campaign preview note (a tuition tile shows a Student ID lookup, not amount tiles). */
 .tuition-preview-note {
-  padding: 1.2rem 1.1rem; border-radius: 14px; text-align: center; line-height: 1.55;
+  padding: 1.2rem 1.1rem; border-radius: var(--radius-card); text-align: center; line-height: 1.55;
   color: var(--color-ink-muted); background: var(--glass-bg-inset); box-shadow: inset 0 0 0 1px var(--color-border);
 }
 .tuition-preview-title { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-ink); margin-block-end: 0.5rem; }
@@ -609,24 +708,21 @@ button.status-pill:hover { filter: brightness(1.08); }
 .camp-reorder { display: inline-flex; flex-direction: column; }
 .icon-btn--sm { width: 1.9rem; height: 1.9rem; }
 .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.badge--main { display: inline-flex; align-items: center; gap: 0.2rem; background: var(--color-gold-subtle); color: var(--color-gold); box-shadow: inset 0 0 0 1px var(--color-gold); }
-
-/* Campaign editor: a big, roomy window — the tabbed settings on the left, a live preview of both
-   kiosk orientations pinned on the right (reuses .modal / .modal-body chrome). */
-.modal--form {
-  width: min(72rem, 96vw);
-  max-height: min(92vh, 62rem);
-  padding: 1.6rem 1.9rem;
-}
-.modal--form .modal-body { padding-inline-end: 0.4rem; } /* breathing room beside the scrollbar */
-.modal--form .field { margin-block-end: 1.1rem; }        /* more space between fields */
+.badge--main { display: inline-flex; align-items: center; gap: 0.2rem; background: var(--color-gold-subtle); color: var(--color-gold-ink); box-shadow: inset 0 0 0 1px var(--color-gold); }
 
 /* The campaign editor as a full PAGE (its own browser tab) rather than a dialog. Same form, no window
    chrome: it gets the page's own width and the page's own scrollbar, instead of a scrolling box inside
    a scrolling box — which is what made a two-column form with a live kiosk preview cramped in a modal.
    `max-height: none` is the load-bearing line; the modal caps its body height so the dialog can't grow
    past the viewport, and that cap is exactly what must NOT apply here. */
-.ce-page { width: 100%; }
+.ce-page {
+  width: 100%;
+  /* A solid panel of its own. It used to sit straight on the wallpaper with the panel's inks, which on
+     a light photo under dark theme put its headings at 1.04:1. Not frosted: the form and the live
+     preview do not need a blur behind them. */
+  background: var(--color-surface-raised); border: 1px solid var(--color-border);
+  border-radius: var(--radius-card); padding: 1.2rem 1.3rem;
+}
 .ce-page .modal-body { overflow: visible; max-height: none; padding-inline-end: 0; }
 .ce-page .field { margin-block-end: 1.1rem; }
 
@@ -647,10 +743,11 @@ button.status-pill:hover { filter: brightness(1.08); }
 .ce-tab {
   border: 0; background: none; cursor: pointer; font: inherit; font-size: 0.86rem; font-weight: 600;
   color: var(--color-ink-muted); padding: 0.4rem 0.72rem; border-radius: var(--radius-button);
-  transition: background-color var(--dur-micro) ease, color var(--dur-micro) ease;
+  transition: background-color var(--dur-micro) ease, color var(--dur-micro) ease, transform var(--dur-micro) var(--ease-settle);
 }
 .ce-tab:hover { color: var(--color-ink); background: var(--color-surface-overlay); }
-.ce-tab--on { color: var(--color-on-primary); background: var(--color-primary); }
+.ce-tab:active { transform: scale(0.96); }
+.ce-tab--on, .ce-tab--on:hover { color: var(--color-on-primary); background: var(--color-btn); }
 .ce-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -664,13 +761,13 @@ button.status-pill:hover { filter: brightness(1.08); }
 
 /* Accent-color picker row. */
 .accent-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.accent-swatch-input { width: 2.8rem; height: 2.2rem; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer; box-shadow: inset 0 0 0 1px var(--color-border); }
+.accent-swatch-input { width: 2.8rem; height: 2.2rem; padding: 0; border: 0; border-radius: var(--radius-button); background: none; cursor: pointer; box-shadow: inset 0 0 0 1px var(--color-border); }
 .accent-swatch-input::-webkit-color-swatch-wrapper { padding: 2px; }
 .accent-swatch-input::-webkit-color-swatch { border: 0; border-radius: 6px; }
 
 /* Amber callout: a cross-account (keyed-entry) appeal, etc. — token-driven, matches the gold pill. */
 .note-amber {
-  color: var(--color-gold); background: var(--color-gold-subtle); box-shadow: inset 0 0 0 1px var(--color-gold);
+  color: var(--color-gold-ink); background: var(--color-gold-subtle); box-shadow: inset 0 0 0 1px var(--color-gold);
   border-radius: var(--radius-button); padding: 0.55rem 0.7rem; font-size: 0.82rem; line-height: 1.5; margin-block-start: 0.4rem;
 }
 
@@ -683,17 +780,17 @@ button.status-pill:hover { filter: brightness(1.08); }
 /* A donation row rendered as a full-width button (opens the detail window). */
 .donation-row--btn {
   width: 100%; border: 0; border-block-end: 0; background: none; cursor: pointer;
-  text-align: start; padding-inline: 0.5rem; border-radius: var(--radius-button);
-  transition: background-color var(--dur-micro) ease;
+  text-align: var(--align-start); padding-inline: 0.5rem; border-radius: var(--radius-button);
+  transition: background-color var(--dur-micro) ease, transform var(--dur-micro) var(--ease-settle);
 }
 .donation-row--btn:hover { background: var(--color-surface-overlay); }
-.donation-row--btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.donation-row--btn:active { transform: scale(0.995); }
 /* Donation detail window */
 .detail-amt {
-  font-family: var(--font-display); font-weight: 800; font-size: 2rem; color: var(--color-ink);
+  font-family: var(--font-display); font-weight: 700; font-size: 2rem; color: var(--color-ink);
   text-align: center; margin-block: 0.2rem 0.9rem;
 }
-.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.8rem; word-break: break-all; }
+.mono { font-family: var(--font-mono); font-size: 0.8rem; word-break: break-all; }
 .donation-row__main { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .donation-amt { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-ink); }
 .donation-row__meta { font-size: 0.82rem; }
@@ -702,45 +799,78 @@ button.status-pill:hover { filter: brightness(1.08); }
    happened and stays in the log, but scanning the list must never read a returned gift as income.
    The strike is what carries the meaning, so the color is a reinforcement and not the only signal
    (it still reads on a mono display, and to anyone who can't distinguish the two colors). */
-.badge--refunded { background: color-mix(in srgb, var(--color-danger) 12%, transparent); color: var(--color-danger); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent); }
+.badge--refunded { background: var(--color-danger-subtle); color: var(--color-danger-ink); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent); }
 .donation-amt--refunded,
 .detail-amt--refunded { text-decoration: line-through; text-decoration-thickness: 2px; color: var(--color-ink-muted); }
-.device-remove-btn:hover { color: var(--color-danger); }
-.device-danger { background: var(--color-danger); color: var(--color-on-primary); }
-.device-danger:hover { background: var(--color-danger); filter: brightness(1.06); }
+.device-remove-btn:hover { color: var(--color-danger-ink); }
+/* Every destructive button — Remove kiosk, Delete campaign, Refund, End plan. Its ink is chosen for
+   the DANGER fill: it used to borrow the primary button's ink, and passed only while that happened to
+   be dark in dark theme and white in light. */
+.device-danger { background: var(--color-danger); color: var(--color-on-danger); }
+.device-danger:hover:not(:disabled) { background: var(--color-danger-hover); }
 
-/* Per-device activity log modal — a real centered window over a dimmed, blurred backdrop
-   (z-index above the sticky top bar + dock) so it never overlaps the cards behind it. */
-.modal-scrim {
-  position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
-  padding: 1rem; background: rgba(2, 8, 18, 0.62);
-  -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px);
-  animation: enter var(--dur-micro) var(--ease-settle) both;
-}
-.modal {
-  width: min(34rem, 100%); max-height: min(80vh, 40rem);
-  display: flex; flex-direction: column; padding: 1.1rem 1.2rem;
+/* ── Dialogs (<Modal> in modal.tsx, a native <dialog> opened with showModal()) ──
+   The dialog sits in the browser's top layer — above the sticky top bar and the dock with no z-index —
+   and its ::backdrop is the dim. Neither blurs: the dialog's own fill is opaque, so a blur behind it was
+   GPU work nobody could see (§5, §8).
+   `position: fixed` is restated on purpose: the dialog also carries .glass-raised, whose
+   `position: relative` beats the browser's own `dialog:modal { position: fixed }` — and a top-layer
+   element that is not fixed is laid out from the top of the DOCUMENT, so opening one scrolled a long
+   donations list back to the top to bring the window into view. */
+dialog.modal {
+  position: fixed; inset: 0;
+  border: 0; margin: auto; color: var(--color-ink);
+  width: min(34rem, calc(100vw - 2rem)); max-height: min(80vh, 40rem);
+  padding: 1.1rem 1.2rem;
   background: var(--color-surface-raised); /* opaque so the cards behind never show through */
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  box-shadow: var(--shadow-modal), 0 0 0 1px var(--color-border);
+  overflow: hidden;
+  /* `backwards`, not `both`: a fill that outlives the animation holds its final `transform: none` over
+     any inline transform the dialog is given — which silently pinned the draggable activity log in
+     place the moment its entrance finished. */
+  animation: enter var(--dur-settle) var(--ease-settle) backwards;
 }
-/* A larger, draggable "window" (used by the activity log). Fixed height so the list scrolls
-   inside it; the JS applies a translate() for dragging. */
-.modal--window {
+/* A <dialog> is display:none until it is open; a class rule setting `display` would override that
+   and draw a closed dialog, so the layout only applies while it IS open. */
+dialog.modal[open] { display: flex; flex-direction: column; }
+dialog.modal::backdrop { background: var(--scrim-modal); animation: scrimIn var(--dur-micro) ease both; }
+@keyframes scrimIn { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  dialog.modal, dialog.modal::backdrop { animation: none; }
+}
+/* A browser with no showModal() (Safari before 15.4 — an older office iPad) gets a plain open
+   <dialog> instead: no top layer and no ::backdrop, so it stacks itself above the page and draws its
+   own dim with a spread shadow. modal.tsx adds the class and handles Escape for it. */
+dialog.modal.modal--fallback {
+  z-index: 100;
+  box-shadow: 0 0 0 1px var(--color-border), var(--shadow-modal), 0 0 0 100vmax var(--scrim-modal);
+}
+/* A larger "window" (the activity log, What's new, a plan). Fixed height so its list scrolls inside.
+   Qualified with the element on purpose: `dialog.modal` above outranks a bare class, and a bare
+   `.modal--window` silently left every big window at the small dialog's size. */
+dialog.modal.modal--window {
   width: min(52rem, 94vw); height: min(78vh, 46rem); max-height: none;
-  will-change: transform;
 }
+/* Only the activity log is dragged, so only it is promoted to a layer of its own. */
+.modal--drag { will-change: translate; }
 .modal-head { display: flex; align-items: flex-start; gap: 0.6rem; margin-block-end: 0.8rem; }
 .modal-head .card-head__main { flex: 1; }
-.modal-body { overflow-y: auto; min-height: 0; }
+.modal-body { overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
 
 /* macOS-style window chrome (traffic lights); red closes. Mirrors OpenMasjidOS/Donations.
    The bar doubles as the window's drag handle. */
 .tl-bar { display: flex; align-items: center; gap: 0.5rem; margin-block-end: 0.7rem; cursor: move; user-select: none; touch-action: none; }
 .tl { width: 0.85rem; height: 0.85rem; border-radius: 50%; border: 0; padding: 0; flex-shrink: 0; display: grid; place-items: center; }
-.tl--red { background: #ff5f57; cursor: pointer; }
-.tl--amber { background: #febc2e; }
-.tl--green { background: #28c840; }
+.tl--red { position: relative; background: var(--tl-red); cursor: pointer; transition: transform var(--dur-micro) var(--ease-settle); }
+/* A 24px target around a 14px dot — on a touch screen the dot alone is hard to hit. */
+.tl--red::before { content: ""; position: absolute; inset: -0.35rem; border-radius: 50%; }
+.tl--amber { background: var(--tl-amber); }
+.tl--green { background: var(--tl-green); }
 .tl--red:active { transform: scale(0.9); }
-.tl--red svg { color: rgba(60, 0, 0, 0.7); opacity: 0; transition: opacity var(--dur-micro) ease; }
+/* The ✕ shows at rest too: on a tablet there is no hover to reveal it, and an unmarked red dot does
+   not say "close". */
+.tl--red svg { color: var(--tl-glyph); opacity: 0.8; transition: opacity var(--dur-micro) ease; }
 .tl-bar:hover .tl--red svg, .tl--red:focus-visible svg { opacity: 1; }
 .log-list { display: flex; flex-direction: column; list-style: none; padding: 0; }
 .log-item { display: flex; gap: 0.6rem; padding: 0.55rem 0.1rem; border-block-end: 1px solid var(--color-border); }
@@ -755,8 +885,11 @@ button.status-pill:hover { filter: brightness(1.08); }
 .log-body { min-width: 0; flex: 1; }
 .log-top { display: flex; justify-content: space-between; gap: 0.6rem; align-items: baseline; }
 .log-event { font-weight: 600; font-size: 0.9rem; }
-.log-item--warn .log-event { color: var(--color-warning); }
-.log-item--error .log-event { color: var(--color-danger); }
+.log-item--warn .log-event { color: var(--color-warning-ink); }
+.log-item--error .log-event { color: var(--color-danger-ink); }
+.log-event svg { vertical-align: -0.1em; margin-inline-end: 0.25rem; }
+.log-tech { margin-block-start: 0.2rem; font-size: 0.78rem; }
+.log-tech summary { cursor: pointer; color: var(--color-ink-faint); }
 .log-time { font-size: 0.75rem; flex-shrink: 0; }
 .log-detail { font-size: 0.82rem; line-height: 1.5; margin-block-start: 0.15rem; word-break: break-word; }
 
@@ -774,22 +907,27 @@ button.status-pill:hover { filter: brightness(1.08); }
 @media (max-width: 46rem) { .er-grid { grid-template-columns: 1fr; } }
 .er-form { display: flex; flex-direction: column; gap: 0.8rem; min-width: 0; }
 .er-preview-wrap { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
-.er-logo-thumb { max-height: 44px; max-width: 140px; height: auto; border-radius: 8px; background: #fff; padding: 4px; }
-/* The preview is a light Stripe-style card regardless of the admin theme (email clients are light). */
-.er-receipt { background: #ffffff; color: #16242b; border: 1px solid #e6eaed; border-radius: 12px; padding: 20px 18px; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow-wrap: anywhere; }
-.er-receipt__head { text-align: center; padding-bottom: 6px; }
+.er-logo-thumb { max-height: 44px; max-width: 140px; height: auto; border-radius: var(--radius-button); background: var(--er-card); padding: 4px; }
+/* The preview is a light Stripe-style card regardless of the admin theme (email clients are light).
+   Its colours are the --er-* tokens, which mirror server/src/email.ts; the greys were raised with it
+   for AA (they were 2.5–3.6:1 on white). It stays LTR in an RTL panel (dir="ltr" on the element),
+   because the email it previews is. Email-safe system fonts, like the email. */
+.er-receipt { text-align: left; background: var(--er-card); color: var(--er-ink); border: 1px solid var(--er-rule); border-radius: 12px; padding: 20px 18px; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow-wrap: anywhere; }
+.er-receipt__head { text-align: center; padding-block-end: 6px; }
 .er-receipt__logo { max-height: 48px; max-width: 180px; height: auto; }
-.er-receipt__masjid { font-size: 18px; font-weight: 700; color: #16242b; }
-.er-receipt__ref { margin-top: 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #9aa7af; }
+.er-receipt__masjid { font-size: 18px; font-weight: 700; color: var(--er-ink); }
+.er-receipt__ref { margin-block-start: 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--er-faint); }
 .er-receipt__heading { margin: 10px 0 8px; font-size: 18px; line-height: 1.25; text-align: center; }
-.er-receipt__body { margin: 0 0 12px; font-size: 14px; line-height: 1.6; color: #42535c; text-align: center; white-space: pre-wrap; }
+.er-receipt__body { margin: 0 0 12px; font-size: 14px; line-height: 1.6; color: var(--er-body); text-align: center; white-space: pre-wrap; }
 .er-receipt__table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.er-receipt__table td { padding: 9px 0; color: #16242b; border-top: 1px solid #eef1f3; }
-.er-receipt__table tr:first-child td { border-top: 0; }
-.er-receipt__table td:first-child { color: #7a8892; }
+.er-receipt__table td { padding: 9px 0; color: var(--er-ink); border-block-start: 1px solid var(--er-rule-soft); }
+.er-receipt__table tr:first-child td { border-block-start: 0; }
+.er-receipt__table td:first-child { color: var(--er-label); }
+/* The preview is an LTR island (dir="ltr", like the email it imitates), so its sides are physical:
+   the page's RTL defaults would otherwise flip its amounts to the left. */
 .er-receipt__table td:last-child { text-align: right; }
 .er-receipt__table td.er-strong { font-weight: 700; font-size: 15px; }
-.er-receipt__foot { margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef1f3; text-align: center; font-size: 12px; line-height: 1.6; color: #7a8892; }
+.er-receipt__foot { margin-block-start: 14px; padding-block-start: 14px; border-block-start: 1px solid var(--er-rule-soft); text-align: center; font-size: 12px; line-height: 1.6; color: var(--er-faint); }
 
 /* ── Recurring plans (Recurring screen) ───────────────────────────────────────── */
 /* A plan row carries far more than a donation row does — the cadence, the card, two dates and a
@@ -798,13 +936,13 @@ button.status-pill:hover { filter: brightness(1.08); }
 .plan-list > li { border-block-end: 1px solid var(--color-border); }
 .plan-list > li:last-child { border-block-end: 0; }
 .plan-row {
-  width: 100%; border: 0; background: none; cursor: pointer; text-align: start;
+  width: 100%; border: 0; background: none; cursor: pointer; text-align: var(--align-start);
   display: flex; flex-direction: column; gap: 0.28rem;
   padding: 0.7rem 0.5rem; border-radius: var(--radius-button);
-  transition: background-color var(--dur-micro) ease;
+  transition: background-color var(--dur-micro) ease, transform var(--dur-micro) var(--ease-settle);
 }
 .plan-row:hover { background: var(--color-surface-overlay); }
-.plan-row:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.plan-row:active { transform: scale(0.995); }
 .plan-row__top { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .plan-amt { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--color-ink); }
 .plan-who { font-size: 0.85rem; color: var(--color-ink-muted); }
@@ -812,17 +950,17 @@ button.status-pill:hover { filter: brightness(1.08); }
 .plan-facts { display: flex; flex-wrap: wrap; gap: 0.15rem 1.1rem; font-size: 0.78rem; color: var(--color-ink-faint); }
 .plan-fact b { font-weight: 600; color: var(--color-ink-muted); }
 /* The quiet mark on a total we know is short (the first reader payment isn't in it). */
-.plan-star { color: var(--color-warning); font-weight: 700; cursor: help; }
+.plan-star { color: var(--color-warning-ink); font-weight: 700; cursor: help; }
 .plan-foot { margin-block-start: 0.7rem; padding-inline: 0.5rem; font-size: 0.78rem; line-height: 1.5; }
 
 /* Severity on the status pill: past due / unpaid must not read the same as active. */
-.status-pill--warn { color: var(--color-warning); }
-.status-pill--danger { color: var(--color-danger); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent); }
+.status-pill--warn { color: var(--color-warning-ink); }
+.status-pill--danger { color: var(--color-danger-ink); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent); }
 .status-pill--muted { color: var(--color-ink-faint); }
 
 /* A stat tile that has to be noticed — plans whose card has stopped working. */
-.stat-tile--alert { background: color-mix(in srgb, var(--color-danger) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 35%, transparent); }
-.stat-tile--alert .stat-tile__icon, .stat-tile--alert .stat-tile__value { color: var(--color-danger); }
+.stat-tile--alert { background: linear-gradient(var(--color-danger-subtle), var(--color-danger-subtle)), var(--color-surface-raised); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 35%, transparent); }
+.stat-tile--alert .stat-tile__icon, .stat-tile--alert .stat-tile__value { color: var(--color-danger-ink); }
 
 /* Action groups in the plan window (pause / end date / end the plan), each divided off so a
    destructive button is never adjacent to a harmless one. */
@@ -831,19 +969,15 @@ button.status-pill:hover { filter: brightness(1.08); }
 .plan-act:last-child { margin-block-end: 0; }
 .plan-act__title { font-weight: 600; font-size: 0.92rem; margin-block-end: 0.25rem; }
 .plan-act__row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-.plan-end-btn:hover { color: var(--color-danger); }
-/* Action feedback is a whole sentence ("Paused — nothing will be collected until you resume"), which
-   a 999px status pill turns into an odd stretched lozenge. */
-.plan-note { display: flex; align-items: flex-start; gap: 0.4rem; margin-block-start: 0.6rem; font-size: 0.84rem; line-height: 1.5; color: var(--color-success); }
-.plan-note svg { flex: none; margin-block-start: 0.15rem; }
+.plan-end-btn:hover { color: var(--color-danger-ink); }
 /* The danger twin of .note-amber — for the confirm step before a standing order is ended outright. */
 .note-danger {
-  color: var(--color-danger);
-  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  color: var(--color-danger-ink);
+  background: var(--color-danger-subtle);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 40%, transparent);
   border-radius: var(--radius-button); padding: 0.55rem 0.7rem; font-size: 0.82rem; line-height: 1.5;
 }
-.note-danger strong { color: var(--color-danger); }
+.note-danger strong { color: var(--color-danger-ink); }
 /* This window doesn't drag (it holds forms and a scrolling list), so the bar mustn't promise it can. */
 .tl-bar--static { cursor: default; }
 
@@ -856,19 +990,24 @@ button.status-pill:hover { filter: brightness(1.08); }
 .inv-row--ok .inv-dot { background: var(--color-success); }
 .inv-row--warn .inv-dot { background: var(--color-warning); }
 .inv-row--bad .inv-dot { background: var(--color-danger); }
-.inv-row--bad { background: color-mix(in srgb, var(--color-danger) 8%, transparent); border-radius: var(--radius-button); padding-inline: 0.5rem; }
+.inv-row--bad { background: var(--color-danger-subtle); border-radius: var(--radius-button); padding-inline: 0.5rem; }
 .inv-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
 .inv-top { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
 .inv-date { font-size: 0.88rem; font-weight: 600; }
 .inv-amt { font-weight: 600; font-variant-numeric: tabular-nums; }
 .inv-sub { font-size: 0.78rem; color: var(--color-ink-faint); }
-.inv-row--warn .inv-sub { color: var(--color-warning); }
-.inv-row--bad .inv-sub { color: var(--color-danger); }
+.inv-row--warn .inv-sub { color: var(--color-warning-ink); }
+.inv-row--bad .inv-sub { color: var(--color-danger-ink); }
+/* Stripe's ids, for looking a record up in the Stripe dashboard — behind a disclosure, because a
+   volunteer reading the window has no use for them (spec §9 "view technical details"). */
+.tech-details { margin-block-start: 0.9rem; font-size: 0.82rem; }
+.tech-details summary { cursor: pointer; color: var(--color-ink-muted); font-weight: 600; }
+.tech-details[open] summary { margin-block-end: 0.4rem; }
 
 /* The hex box beside a color swatch. Monospace so a code reads as a code, and narrow so the row
    still fits the swatch, the field and the reset button on a laptop. */
 .color-hex {
-  width: 8.5rem; flex: none; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: lowercase;
+  width: 8.5rem; flex: none; font-family: var(--font-mono); text-transform: lowercase;
 }
 .color-hex[aria-invalid="true"] { box-shadow: inset 0 0 0 1px var(--color-danger); }
 
@@ -881,16 +1020,16 @@ button.status-pill:hover { filter: brightness(1.08); }
    here used to do, and the change is deliberate. A matrix that reflows loses the thing that makes
    it readable — the alignment between a row and a column. On a phone the first column stays put
    (`position: sticky`) so you can always see whose row you are ticking. */
-.mx-wrap { margin-top: 0.9rem; overflow-x: auto; border: 1px solid var(--color-border); border-radius: 12px; background: var(--glass-bg-inset); }
+.mx-wrap { position: relative; margin-block-start: 0.9rem; overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--glass-bg-inset); }
 .mx { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-.mx th, .mx td { padding: 0.6rem 0.7rem; text-align: left; vertical-align: top; }
+.mx th, .mx td { padding: 0.6rem 0.7rem; text-align: var(--align-start); vertical-align: top; }
 .mx thead th { font-size: 0.72rem; letter-spacing: 0.03em; text-transform: uppercase; color: var(--color-ink-muted); font-weight: 600; border-block-end: 1px solid var(--color-border); }
 .mx tbody tr + tr th, .mx tbody tr + tr td { border-block-start: 1px solid var(--color-border); }
 
 /* Narrow enough that ten alerts fit without the table becoming absurd, wide enough that a label
    wraps to two lines instead of one word per line. */
 .mx-head { min-width: 6.5rem; white-space: normal; }
-.mx-head__flag { display: block; margin-block-start: 0.2rem; font-size: 0.62rem; text-transform: none; letter-spacing: 0; color: var(--color-gold); font-weight: 500; }
+.mx-head__flag { display: block; margin-block-start: 0.2rem; font-size: 0.62rem; text-transform: none; letter-spacing: 0; color: var(--color-gold-ink); font-weight: 500; }
 
 /* The identity column. Sticky so it survives a sideways scroll — a checkbox with no visible row
    label is a coin flip. It needs its own background for that: a transparent sticky cell shows the
@@ -921,19 +1060,22 @@ button.status-pill:hover { filter: brightness(1.08); }
 .mx-names { display: flex; align-items: flex-start; gap: 0.35rem; margin-block-start: 0.4rem; font-size: 0.78rem; color: var(--color-ink-muted); }
 .mx-names small { display: block; }
 .mx-last { display: flex; align-items: center; gap: 0.3rem; margin-block-start: 0.4rem; font-size: 0.74rem; color: var(--color-ink-faint); overflow-wrap: anywhere; }
+/* A refused, failed or doubted last message. `.mx-last` sits after `.text-warn` at the same
+   specificity, so on its own it overrode the warning colour — every bad state was drawn in faint grey. */
+.mx-last.text-warn { color: var(--color-warning-ink); }
 
 /* Adding one. Wraps freely — unlike the matrix, there is no alignment here worth preserving. */
-.mx-add { margin-top: 0.85rem; padding: 0.85rem 0.9rem; border: 1px solid var(--color-border); border-radius: 12px; background: var(--glass-bg-inset); }
+.mx-add { margin-block-start: 0.85rem; padding: 0.85rem 0.9rem; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--glass-bg-inset); }
 .mx-add__kinds { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-block-end: 0.7rem; }
 .mx-add__row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.6rem; }
 .mx-add__row .field { margin: 0; }
 .mx-add__grow { flex: 1 1 14rem; min-width: 0; }
 .mx-add__grow .input { width: 100%; }
-.mx-add__hint { margin: 0.6rem 0 0; font-size: 0.8rem; line-height: 1.5; }
+.mx-add__hint { margin-block: 0.6rem 0; margin-inline: 0; font-size: 0.8rem; line-height: 1.5; }
 
 /* WhatsApp limits. Three numbers and what they have been used for so far. */
-.mx-pacing { margin-top: 0.85rem; padding: 0.85rem 0.9rem; border: 1px solid var(--color-border); border-radius: 12px; background: var(--glass-bg-inset); }
-.mx-pacing__row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; }
+.mx-pacing { margin-block-start: 0.85rem; padding: 0.85rem 0.9rem; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--glass-bg-inset); }
+.mx-pacing__row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-block-start: 0.6rem; }
 .mx-pacing__row .field { margin: 0; flex: 1 1 9rem; min-width: 0; }
 .mx-pacing__row .input { width: 100%; }
 
@@ -942,3 +1084,18 @@ button.status-pill:hover { filter: brightness(1.08); }
    is in doubt and only the admin can decide whether it mattered. */
 .suspect { border-color: color-mix(in srgb, var(--color-warning) 45%, var(--color-border)); margin-block-end: 0.9rem; }
 .suspect .note { margin-block: 0.5rem 0.7rem; }
+
+/* ── Busy, but still focusable ─────────────────────────────────────────────
+   While a request runs, the control that started it is `aria-disabled` rather than `disabled`: a
+   disabled element drops keyboard focus to the page, so a keyboard user who pressed Save would land at
+   the top of the screen (spec §7). It looks and behaves disabled here, and each handler returns early.
+   LAST in the file on purpose — these match the `:hover:not(:disabled)` lift and press rules at equal
+   specificity, so order is what lets them win. */
+.btn[aria-disabled="true"], .icon-btn[aria-disabled="true"] { opacity: 0.5; cursor: progress; }
+.btn[aria-disabled="true"]:hover { background: var(--color-surface-hover); }
+.btn--ghost[aria-disabled="true"]:hover { background: transparent; }
+.btn--primary[aria-disabled="true"]:hover { background: var(--color-btn); transform: none; }
+.device-danger[aria-disabled="true"]:hover { background: var(--color-danger); }
+.icon-btn[aria-disabled="true"]:hover { background: transparent; color: var(--color-ink-muted); }
+.btn[aria-disabled="true"]:active, .icon-btn[aria-disabled="true"]:active { transform: none; }
+.switch[aria-disabled="true"], select[aria-disabled="true"], input[aria-disabled="true"] { opacity: 0.55; cursor: progress; }

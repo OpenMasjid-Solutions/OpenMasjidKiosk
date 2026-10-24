@@ -97,3 +97,22 @@ jobs:
       # as well as its build.
       - name: Build the admin panel
         run: npm run build
+
+      # "Zero external network requests in the built output" (OpenMasjid app UI spec §8). A masjid may
+      # be LAN-only with no route to the internet, so a CDN font, script or stylesheet is a panel that
+      # renders wrong there. This fails on request-SHAPED references only — an <script src>/<link href>
+      # to another host, a CSS url()/@import to one, a hard-coded fetch/import — and lets inert strings
+      # through: XML namespaces, the AGPL "Source code" link (a navigation the admin clicks, rendered
+      # from JS, not a request), placeholders and example addresses.
+      - name: No external requests in the built output
+        run: |
+          set -eu
+          found=0
+          if grep -rEn '(src|href)="(https?:)?//' dist --include='*.html'; then found=1; fi
+          if grep -rEn 'url\(\s*["'"'"']?(https?:)?//|@import[^;]*(https?:)?//' dist --include='*.css'; then found=1; fi
+          if grep -rEn '(fetch|import)\(\s*["'"'"'`](https?:)?//' dist --include='*.js'; then found=1; fi
+          if [ "$found" -ne 0 ]; then
+            echo "::error::The built panel references another host (above). Bundle it instead — no CDNs."
+            exit 1
+          fi
+          echo "ok — nothing in dist/ is fetched from another host"

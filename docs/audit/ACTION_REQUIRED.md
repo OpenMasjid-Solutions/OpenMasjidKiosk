@@ -8,6 +8,49 @@ is outside what I should decide or do on my own.
 
 ---
 
+## From the 2026-10-23 repository check — fixed, and left for a decision
+
+**Fixed in 0.14.0:** the LAN admin API refused nothing cross-site (a page on another port of the same
+host could post multipart or text/plain with the session cookie — one consequence was an unpaced
+WhatsApp flood through Send test), so `requireAdmin` now checks `Sec-Fetch-Site`/`Origin` on the LAN
+too and the test alert is budgeted · keyed cards are manual-capture (§10 below) · `/complete` checks
+the PaymentIntent is this kiosk's before capturing it · the exit-PIN backoff survives a reboot · the
+CSV quotes `;` and tab, which Excel splits on in much of Europe · the Gradle distribution is
+checksum-pinned.
+
+**Left alone, each needing a decision or a coordinated change:**
+
+- **Rate limits key on the TCP peer**, which is the OS proxy for every HTTPS and tunnel request — so
+  all of them share one bucket, and with remote adoption on an internet attacker can keep LAN pairing
+  in backoff. The fix is to key on `X-Forwarded-For` *only* when the peer is the platform's proxy;
+  getting that check wrong turns a DoS into a bypass, so it wants the platform's address confirmed.
+- **The APK signing key is live while Gradle runs third-party code** (`build-apk.yml`). Build
+  unsigned, then sign with `apksigner` in a step that runs nothing else; add Gradle dependency
+  verification. A CI restructure, best done with a release build to compare against.
+- **Admin sessions cannot be revoked** — a 30-day stateless token, and sign-out only clears the
+  browser's copy. Needs a session epoch in the store, ideally alongside the password-change route
+  (§11 below).
+- **A remote kiosk's HTTP client follows redirects with its device token.** Not switched off, because
+  the server's own tunnel recovery answers with a same-address 307.
+
+**Dead or half-dead features, each a product decision rather than a deletion:**
+
+- **A campaign's "Cover image"** is offered in the designer ("Shown on the giving card"), stored and
+  sent to the tablets — and shown nowhere, on the tablet or in the preview, since it was added. Either
+  render it or take the field out of the designer.
+- **"Leave blank to use your default thank-you"** points at a global message no screen has set since
+  campaigns arrived; on an install that customised it before then, the preview shows a different
+  thank-you from the one the tablet shows.
+- **`manualEntryEnabled`** is clamped and sent to tablets but nothing reads it (its toggle was removed);
+  typed entry is always the fallback.
+- **The simulated Terminal reader** is still in `ReaderManager` but nothing can select it, and
+  CLAUDE.md §16's definition of done still asks for "a simulated-reader donation". Typed entry with
+  Stripe's test cards is what actually exercises the flow without a reader.
+- **Tailwind generates nothing the panel uses** (every style is hand-written CSS), but CLAUDE.md §13
+  lists it as part of the stack — removing the dependency is a stack decision.
+- **The `APP_VERSION_SUFFIX` plumbing** is always empty since versioned dev builds; harmless, documented
+  as retired, removable.
+
 ## From the 2026-09-01 pre-release sweep — one thing needs a tablet
 
 ### 13. A monthly gift can still be downgraded to a one-off silently, on ONE remaining path — HIGH
@@ -82,6 +125,12 @@ leading to "your exit PIN", which is only true once one is set.
 
 ### 10. Keyed-card donations are captured on the tablet, not by the server — HIGH
 
+> **2026-10-23: fixed in 0.14.0.** `createCardPaymentIntent` now sets `capture_method: 'manual'`.
+> The WebView concern below does not hold: `kioskpay.html` has accepted `requires_capture` as a
+> completed confirm since 57638a2 (2026-07-10), and `/complete` captures it. The hardware check this
+> section asks for — one test-mode keyed card on a tablet with the reader unplugged — is still worth
+> doing before 0.14.0 goes to stable.
+
 `createCardPaymentIntent` (`stripe.ts`) sets no `capture_method`, so keyed intents **auto-capture** on
 confirm. The reader path sets `capture_method: 'manual'` and the server captures only after
 re-checking with Stripe — which is the invariant the whole app is built on ("never trust the
@@ -130,6 +179,11 @@ an auth route is not something to slip into a sweep unannounced.
   and is on by default. **So this may be exactly what you intended**; it is only worth flagging
   because the same reasoning was applied so carefully one paragraph away. If you want it changed, the
   shape is a WhatsApp-specific rendering that keeps the amount, kiosk and fund and drops the person.
+
+  **Status note, 2026-10-23:** partly addressed since. Alerts now go to a recipient list, and each
+  recipient has an `includeNames` switch — off by default for a WhatsApp group, on for a single
+  number or email — with the redacted body built at the call site (`server/src/alerts.ts`,
+  `CLAUDE.md` §18).
 - **The Gradle wrapper downloads its distribution unverified** (no `distributionSha256Sum`), in the
   job that has just decoded the APK signing keystore to disk. Adding the checksum is the right fix
   and I did not, because I cannot obtain the published hash from here in a way worth trusting — and a
@@ -224,6 +278,13 @@ Worth coordinating across the other OpenMasjid apps, since they share this postu
 ---
 
 ## 6. "Today's donations" resets at the wrong time
+
+**Resolved in 0.14.0.** The masjid now has a time zone of its own — Settings → Payments → Masjid
+details — and `donationTotals()` starts "today" and "this month" at the masjid's midnight
+(`startOfDay` / `startOfMonth` in `server/src/dates.ts`); "this week" is a rolling seven days, which
+needs no zone. It is filled in from the signed-in admin's own computer the first time the panel
+loads, shown, and changeable — a starting point the admin can see, not a silent guess. Until then the
+container's zone (UTC) is used, as before. The rest of this section is kept as written.
 
 [KIOSK-013](SECURITY_AUDIT.md#kiosk-013). The container sets no `TZ`, so it is UTC, and `donationTotals()` treats UTC midnight as the start of "today". A masjid in California sees today's total reset at 5 pm local; one in Auckland at midday. "This week" and "this month" drift the same way. The conversion code itself is correct — it just has no idea where the masjid is.
 

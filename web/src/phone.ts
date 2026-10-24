@@ -108,15 +108,23 @@ export function formatNational(country: Country, raw: string): string {
  * punctuation) and the server has the final say on whether it is usable.
  */
 export function toE164Digits(country: Country, national: string): string {
-  const nat = digits(national);
+  let nat = digits(national);
   if (!nat) return '';
   if (!country.dial) return nat;
+  // `0044 7700 900123` — the international prefix much of the world dials — is already international.
+  if (nat.startsWith(`00${country.dial}`)) nat = nat.slice(2);
   // Someone pasting `+1 555 010 1234` into the national box while +1 is selected should not get
   // `11555…`. If what they typed already starts with the dial code AND is too long to be a national
   // number on its own, treat it as already-international.
   if (country.nationalDigits && nat.startsWith(country.dial) && nat.length > country.nationalDigits) {
-    return nat;
+    nat = nat.slice(country.dial.length);
   }
+  // How a number is written at home — `07700 900123`, `0300 1234567` — starts with a trunk 0 that is
+  // not part of the international number in any country listed here, and keeping it stored a number
+  // that does not exist. NANP numbers have no trunk 0. A country that KEEPS its 0 internationally
+  // (Italy) must not be added without changing this. The server applies the same rule
+  // (TRUNK_ZERO_DIALS), which is also what repairs numbers this used to store.
+  if (!country.nanp && nat.startsWith('0')) nat = nat.slice(1);
   return `${country.dial}${nat}`;
 }
 
@@ -129,13 +137,6 @@ export function countryForE164(stored: string): Country {
     if (!best || c.dial.length > best.dial.length) best = c;
   }
   return best ?? COUNTRIES[COUNTRIES.length - 1];
-}
-
-/** The national part of a stored number, for putting back in the input. */
-export function nationalForE164(stored: string): string {
-  const d = digits(stored);
-  const c = countryForE164(stored);
-  return c.dial && d.startsWith(c.dial) ? d.slice(c.dial.length) : d;
 }
 
 /** A stored number, written out for a human: `+1 (555) 010-1234`. */

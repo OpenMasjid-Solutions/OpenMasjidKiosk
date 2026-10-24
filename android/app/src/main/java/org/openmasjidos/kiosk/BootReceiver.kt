@@ -9,8 +9,8 @@ import android.content.Intent
 
 /**
  * Brings the kiosk back up after a reboot so a wall tablet self-heals without a human.
- * This works even when the app is not provisioned as device owner. Lock-task hardening
- * is layered on top in a later slice.
+ * This works even when the app is not provisioned as device owner. On a device-owner tablet,
+ * KioskController's Lock Task hardening is layered on top once the activity is up.
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

@@ -141,9 +141,11 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Collecting --------------------------------------------------------------------------
 
-    /** The campaigns this masjid is running, from the synced config. */
+    /** The campaigns this phone can take money for. Not tuition (that needs the Students lookup only
+     *  the kiosk has), and not one that settles to another Stripe account: unlike the kiosk, this app
+     *  never re-registers its reader, which is what `readerCapable` still means here. */
     val campaigns: StateFlow<List<Campaign>> = store.config
-        .map { it?.campaigns.orEmpty() }
+        .map { cfg -> cfg?.campaigns.orEmpty().filter { it.readerCapable && it.type != "tuition" } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val currency: StateFlow<String> = store.config
@@ -222,7 +224,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             _collect.value = if (outcome.succeeded) {
                 Collect.Done(outcome.amountMinor, outcome.currency)
             } else {
-                Collect.Failed("That payment was declined. No money was taken.")
+                Collect.Failed("That card was declined — no money was taken. The donor can try again or use another card.")
             }
         }
     }
@@ -279,13 +281,13 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         PairResult.Reason.INVALID_URL ->
             "That address doesn’t look right. It should start with https:// — copy it exactly as the masjid gave it to you."
         PairResult.Reason.INVALID_CODE ->
-            "A pairing code is 6 digits."
+            "A pairing code is 6 digits. Check it against the one in Devices and try again."
         PairResult.Reason.CODE_REJECTED ->
             "That code wasn’t accepted. Codes work once and expire after 10 minutes — ask for a fresh one in Devices."
         PairResult.Reason.UNREACHABLE ->
             "Couldn’t reach that server. Check this phone has internet, and that the address is the one the masjid gave you."
         PairResult.Reason.CERT ->
-            "Couldn’t establish a secure connection to that server. If the masjid has just changed its address or certificate, ask them to check it."
+            "This phone couldn’t make a secure connection to that server. If the masjid has just changed its address, ask them for the new one and try again."
         PairResult.Reason.GENERIC ->
             "That didn’t work. Please check the address and the code, then try again."
     }

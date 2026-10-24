@@ -21,6 +21,23 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 RUN npm run build
+# Pre-compress the built assets: a .br and a .gz beside every text file in dist/assets, which the
+# server hands out in place of the original to any browser that accepts one (@fastify/static
+# `preCompressed`). A Raspberry Pi is a target, and nothing between us and the browser compresses —
+# the platform's TLS edge pipes our bytes straight through — so this is the difference between 337 KB
+# of JavaScript and 82 KB on every cold load. Done ONCE, here, with Node's own zlib: no dependency to
+# add (CLAUDE.md §13), and no CPU spent per request on the box, which compressing on the fly would.
+# Text types only — fonts and images are compressed already — and only when it actually shrinks.
+RUN node -e "\
+const fs = require('node:fs'), path = require('node:path'), zlib = require('node:zlib'); \
+const dir = 'dist/assets'; \
+for (const f of fs.readdirSync(dir, { recursive: true })) { \
+  const p = path.join(dir, f); \
+  if (!/\.(js|mjs|css|svg|json|txt|html)$/.test(f) || !fs.statSync(p).isFile()) continue; \
+  const b = fs.readFileSync(p), br = zlib.brotliCompressSync(b), gz = zlib.gzipSync(b, { level: 9 }); \
+  if (br.length < b.length) fs.writeFileSync(p + '.br', br); \
+  if (gz.length < b.length) fs.writeFileSync(p + '.gz', gz); \
+}"
 
 # ---- Compile the server (TypeScript → dist) --------------------------------
 FROM --platform=$BUILDPLATFORM node:22-slim AS server

@@ -26,9 +26,11 @@ import {
   tidyReply,
   validCommandId,
   validFollowUpToken,
+  whenShort,
   type CommandStore,
   type KioskCommand,
 } from './commands';
+import type { ClockSettings } from './dates';
 import { blockedOverTunnel } from './tunnel';
 
 const SECRET = 'a'.repeat(48);
@@ -388,7 +390,7 @@ test('kiosks leads with what needs attention', async () => {
   const text = r.ok ? r.text : '';
   assert.match(text, /1 of 2 need attention/);
   assert.match(text, /Foyer — online, reader connected, v0\.12\.0/);
-  assert.match(text, /Hall — OFFLINE \(last seen 3h ago\), NO READER, v0\.11\.0/);
+  assert.match(text, /Hall — OFFLINE \(last seen 3h ago\), reader NOT CONNECTED, v0\.11\.0/);
   assert.equal(r.ok && r.followUp, undefined);
 });
 
@@ -434,7 +436,7 @@ test('recent lists the last few gifts and NEVER a donor', async () => {
   assert.match(text, /\$10\.00/);
   assert.match(text, /Foyer/);
   assert.match(text, /General Fund/);
-  assert.match(text, /monthly/, 'a standing order is worth distinguishing');
+  assert.match(text, /monthly/, 'a monthly plan is worth distinguishing');
   assert.ok(!/@/.test(text), 'no email address');
 });
 
@@ -535,6 +537,91 @@ test('a failed turn can never carry a follow-up', () => {
   // that widens the type has to think about it.
   const failure: Awaited<ReturnType<KioskCommand['run']>> = { ok: false, error: 'nope' };
   assert.equal('followUp' in failure, false);
+});
+
+// ── The masjid's clock (app UI spec §10) ─────────────────────────────────────
+// The server runs in UTC, so every time `recent` read out used to be UTC and always 24-hour, and
+// "today" rolled over at 7 pm for a masjid in Chicago. None of that is visible from a test that runs
+// on a developer's own machine in their own zone, which is why these pin an explicit zone and instant.
+
+const CHICAGO: ClockSettings = { timeZone: 'America/Chicago', clock24h: false, hijriOffset: 0, locale: 'en-US' };
+const FRI_10PM_CHICAGO = new Date('2026-09-26T03:00:00Z'); // already Saturday in UTC
+
+test('whenShort tells the time on the masjid’s clock, and decides "today" by the masjid’s calendar', () => {
+  // Friday 8 pm in Chicago is 01:00 SATURDAY in UTC; the old reply said "01:00 today".
+  assert.match(whenShort('2026-09-26T01:00:00Z', CHICAGO, FRI_10PM_CHICAGO), /^8:00\sPM today$/);
+  // Thursday 11:30 pm in Chicago — "yesterday" there, whatever day UTC thinks it is.
+  assert.match(whenShort('2026-09-25T04:30:00Z', CHICAGO, FRI_10PM_CHICAGO), /^11:30\sPM yesterday$/);
+  // The masjid's 24-hour choice.
+  assert.equal(whenShort('2026-09-26T01:00:00Z', { ...CHICAGO, clock24h: true }, FRI_10PM_CHICAGO), '20:00 today');
+  assert.equal(whenShort('not a date', CHICAGO, FRI_10PM_CHICAGO), '');
+});
+
+test('an older gift reads its day in BOTH calendars, nudged by the masjid’s Hijri adjustment', () => {
+  const gb = { ...CHICAGO, locale: 'en-GB' };
+  const plain = whenShort('2026-09-20T15:00:00Z', gb, FRI_10PM_CHICAGO);
+  assert.match(plain, /^20 Sept? · 9 Rabiʻ II$/, plain);
+  assert.ok(!/\d{4}/.test(plain), 'no year — this is one line of a phone message');
+  // A masjid that follows a local sighting a day later sees the day it actually keeps.
+  assert.match(whenShort('2026-09-20T15:00:00Z', { ...gb, hijriOffset: 1 }, FRI_10PM_CHICAGO), / · 10 Rabiʻ II$/);
+});
+
+test('"yesterday" is the calendar day before, even across a clock change', () => {
+  // Monday 9 March 2026 at noon in Chicago; the clocks went forward on Sunday, so Sunday was 23 hours
+  // long. "Midnight minus 24 hours" reaches back into SATURDAY — the old arithmetic called a gift at
+  // 11:30 pm on Saturday "yesterday".
+  const monNoon = new Date('2026-03-09T17:00:00Z');
+  assert.match(whenShort('2026-03-08T05:30:00Z', CHICAGO, monNoon), /^Mar 7 · /, 'Saturday night is two days ago');
+  assert.match(whenShort('2026-03-08T07:30:00Z', CHICAGO, monNoon), /^1:30\sAM yesterday$/, 'Sunday is yesterday');
+});
+
+test('`recent` reads the clock from the store on every call, or uses the one it is given', async () => {
+  const at = new Date().toISOString();
+  const withClock = (clock: ClockSettings) =>
+    buildCommands({
+      store: fakeStore({
+        getClock: () => clock,
+        listDonations: () => [
+          { deviceName: 'Foyer', campaignTitle: 'General Fund', amountMinor: 10_00, refundedMinor: 0, currency: 'USD', kind: 'one_time', status: 'succeeded', createdAt: at },
+        ],
+      }),
+      money,
+      onlineWithinMs: 35_000,
+    });
+  const utc = { timeZone: 'UTC', clock24h: true, hijriOffset: 0, locale: 'en-GB' };
+  const r24 = await runCommand(findCommand(withClock(utc), 'recent')!, turn());
+  assert.match(r24.ok ? r24.text : '', /· \d{2}:\d{2} today ·/, '24-hour, from the store’s clock');
+  const r12 = await runCommand(findCommand(withClock({ ...utc, clock24h: false, locale: 'en-US' }), 'recent')!, turn());
+  assert.match(r12.ok ? r12.text : '', /· \d{1,2}:\d{2}\s(AM|PM) today ·/i, '12-hour when the masjid chose it');
+
+  // A caller that formats times itself is obeyed.
+  const fixed = buildCommands({ store: fakeStore(), money, onlineWithinMs: 35_000, when: () => 'AT A FIXED TIME' });
+  const r = await runCommand(findCommand(fixed, 'recent')!, turn());
+  assert.match(r.ok ? r.text : '', /\$10\.00 · AT A FIXED TIME · Foyer/);
+});
+
+test('reader statuses read the way the Devices page words them — including the four the tablet sends', async () => {
+  const statuses = ['not_connected', 'discovering', 'updating', 'error', 'ready', 'none', 'some_new_state', '__proto__'];
+  const list = buildCommands({
+    store: fakeStore({
+      listDevices: () =>
+        statuses.map((s, i) => ({ id: 'd' + i, name: 'K' + i, lastSeen: new Date().toISOString(), readerStatus: s, appVersion: '0.13.0', revoked: false })),
+    }),
+    money,
+    onlineWithinMs: 35_000,
+  });
+  const r = await runCommand(findCommand(list, 'kiosks')!, turn());
+  const text = r.ok ? r.text : '';
+  assert.match(text, /K0 — online, reader NOT CONNECTED,/, 'not "NO READER": the reader is there, just not talking');
+  assert.match(text, /K1 — online, looking for its reader,/);
+  assert.match(text, /K2 — online, reader updating — keep it charged,/);
+  assert.match(text, /K3 — online, READER PROBLEM — check it at the tablet,/);
+  assert.match(text, /K4 — online, reader ready,/);
+  assert.match(text, /K5 — online, no reader set up,/);
+  assert.match(text, /K6 — online, reader some new state,/, 'unknown → passed through, underscores out');
+  assert.ok(!text.includes('[object Object]'), 'a prototype key from the tablet is just an unknown status');
+  assert.ok(!/not_connected|_/.test(text.replace(/K\d/g, '')), 'no raw status ids');
+  assert.match(text, /^2 of 8 need attention\./, 'the not-connected and the faulty reader');
 });
 
 test('`recent` never reports a refunded gift as money the masjid still has', () => {

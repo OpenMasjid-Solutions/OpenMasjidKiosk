@@ -149,7 +149,7 @@ dependencies {
     // build if anyone adds previews later.)
     implementation(libs.androidx.material3)
 
-    // --- Slice 4: pairing, pinned-HTTPS networking, kiosk lockdown, heartbeats ---
+    // --- Slice 4: pairing, pinned-HTTPS networking, kiosk lockdown, heartbeats (+ keyed-entry WebView) ---
     implementation(libs.androidx.datastore.preferences)  // device token / config / pinned cert at rest
     implementation(libs.androidx.work.runtime.ktx)        // backstop heartbeat when backgrounded
     implementation(libs.okhttp)                           // pinned-HTTPS client (self-signed LAN cert)

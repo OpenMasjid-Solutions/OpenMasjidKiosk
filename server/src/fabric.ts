@@ -22,12 +22,10 @@
  * unreachable platform is "no Fabric this request", never a crash or a lock-out. The wire
  * identifiers (env vars, header, cookie, endpoints) are the shared contract — do not rename.
  */
-import { config, ssoConfigured } from './config';
+import { config } from './config';
 import { makeLog } from './logger';
 
 const log = makeLog('fabric');
-
-export { ssoConfigured };
 
 /** Is `host` a loopback / private / LAN address where sending our secret over plain HTTP is
  *  acceptable? Anything else is treated as PUBLIC (we err toward "public" if unsure). */
@@ -264,7 +262,7 @@ export async function fabricAlert(
 // That removes a delay we were relying on without having decided to. Ban risk still attaches to the
 // NUMBER, that number is shared by every app on the box, and a blocked number cannot be recovered —
 // the masjid simply loses the number their community reaches them on. So the pacing is OUR job now:
-// see `whatsappGate` in alerts.ts, which is what stops a Stripe outage turning forty failed
+// see `whatsappPermit` in alerts.ts, which is what stops a Stripe outage turning forty failed
 // donations into forty messages on one caretaker's phone.
 //
 // Two things that did NOT change: `202 { queued: true }` still means ACCEPTED, never delivered —
@@ -483,7 +481,10 @@ export async function fabricWhatsAppGroups(): Promise<WhatsAppGroupList> {
       .map((g) => ({
         id: String(g.id).slice(0, 64),
         // Fall back to the id rather than an empty row: a group with no nickname is still pickable.
-        label: typeof g.label === 'string' && g.label ? g.label.slice(0, 120) : String(g.id),
+        // Shown AS GIVEN — it is the admin's own name for the group, and the app spec's rule is to
+        // render names without truncating them. This used to cut it at 120 characters, which the
+        // admin had no way to see coming; the screen wraps a long one instead.
+        label: typeof g.label === 'string' && g.label ? g.label : String(g.id),
       }));
     return { ok: true, groups };
   } catch (err) {
@@ -724,6 +725,94 @@ export async function fetchAppearance(): Promise<Record<string, unknown>> {
     return (await res.json()) as Record<string, unknown>;
   } catch {
     return {};
+  }
+}
+
+/**
+ * The platform's appearance, as our relay hands it to the browser.
+ *
+ * Verbatim except for `logo`. The platform sends a PATH ("/api/public/logo") that the app spec says to
+ * resolve against the origin appearance was fetched from — and our browser fetched it from US, where
+ * that path used to fall to the not-found handler. So it becomes our own relay's path when the
+ * platform reports a logo, and '' when it has none (the spec's cue to show the masjid's name as a
+ * wordmark rather than a broken image). The platform's value itself is never passed on, so a path
+ * meant for its origin can never be resolved against ours.
+ *
+ * An empty answer (standalone, or the platform unreachable) stays `{}`, so "no platform" still reads
+ * as no platform.
+ */
+export function relayedAppearance(a: Record<string, unknown>): Record<string, unknown> {
+  if (Object.keys(a).length === 0) return a;
+  return { ...a, logo: typeof a.logo === 'string' && a.logo.trim() ? '/api/public/logo' : '' };
+}
+
+/** The image types the logo relay will pass on. No SVG: an SVG is a document that can carry
+ *  script, and the relay serves it from OUR origin — the same reason the campaign-image upload
+ *  refuses one. */
+const LOGO_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+/** A logo is a small header image; anything past this is not one, and we will not buffer it. */
+export const LOGO_MAX_BYTES = 1024 * 1024;
+
+/** Do these bytes actually START like the type the platform declared? Belt and braces beside
+ *  `nosniff`: a relay that trusts a header alone would pass on whatever sat behind it. */
+function looksLike(type: string, b: Buffer): boolean {
+  if (type === 'image/png') return b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (type === 'image/jpeg') return b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  if (type === 'image/gif') return b.length >= 6 && /^GIF8[79]a$/.test(b.subarray(0, 6).toString('latin1'));
+  if (type === 'image/webp') return b.length >= 12 && b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP';
+  return false;
+}
+
+/**
+ * The masjid's logo from the platform, fetched server→server for the same-origin relay
+ * (`GET /api/public/logo`).
+ *
+ * WHY A RELAY AT ALL. The platform's appearance answer carries `logo: "/api/public/logo"`, which the
+ * app spec says is a path to resolve against the origin appearance was fetched from. Our browser
+ * fetches appearance from US (the platform is plain HTTP and we are served over HTTPS, so a direct
+ * call would be mixed-content blocked), so that path has to exist on our origin — before this it
+ * fell through to the not-found handler, and anything following the spec drew a broken image.
+ *
+ * NO USER INPUT REACHES THE URL: it is the injected base URL plus a fixed path, so this is not a
+ * general image proxy and cannot be pointed anywhere else. `redirect: 'error'` keeps it that way.
+ * The platform treats the logo as intentionally public, so no secret is sent.
+ *
+ * Bounded every way it can be: 4 s, four raster types, and at most [LOGO_MAX_BYTES], read with a
+ * cap rather than trusting Content-Length. Never throws, never persists, and answers null for
+ * "no logo" and "couldn't get it" alike — the caller shows the masjid's name either way.
+ */
+export async function fetchPlatformLogo(): Promise<{ contentType: string; body: Buffer } | null> {
+  if (!config.omosBaseUrl) return null;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const res = await fetch(`${config.omosBaseUrl}/api/public/logo`, { signal: ctrl.signal, redirect: 'error' });
+    const type = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+    const declared = Number(res.headers.get('content-length') ?? '');
+    if (!res.ok || !res.body || !LOGO_TYPES.has(type) || (Number.isFinite(declared) && declared > LOGO_MAX_BYTES)) {
+      await res.body?.cancel().catch(() => {});
+      return null;
+    }
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > LOGO_MAX_BYTES) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
+    }
+    const body = Buffer.concat(chunks);
+    return looksLike(type, body) ? { contentType: type, body } : null;
+  } catch (err) {
+    log.debug(`platform logo fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  } finally {
+    clearTimeout(t);
   }
 }
 
